@@ -630,7 +630,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             await _record_audit_run_event(audit_run_id, "cancel_cleanup_failed", {"error": cleanup_error})
         final_status = "cancelling"
         removed_container_count = len((cleanup_result or {}).get("removed_containers") or [])
-        if removed_container_count == 0 or not _is_active_audit_status(audit_run["status"]):
+        if _should_finalize_cancel(audit_run, removed_container_count):
             final_status = "cancelled"
             await _mark_audit_run_status(audit_run_id, "cancelled")
             await _set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error="user_requested")
@@ -1111,6 +1111,10 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "retention_days": settings.platform_audit_event_retention_days,
                 "max_rows": settings.platform_audit_event_max_rows,
             },
+            "pipeline": {
+                "execution_backend": settings.pipeline_execution_backend,
+                "recovery_on_startup": settings.pipeline_recovery_on_startup,
+            },
             "sandbox": {
                 "default_runtime": settings.default_sandbox_runtime,
                 "enable_gvisor": settings.enable_gvisor,
@@ -1154,6 +1158,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 },
             },
         ]
+        checks.append(_pipeline_backend_readiness_check(settings))
         try:
             docker = await runtime.docker_health()
             checks.append(
@@ -1885,6 +1890,29 @@ def _template_readiness_checks(agent_templates: list[dict[str, Any]], mcp_templa
             }
         )
     return checks
+
+
+def _should_finalize_cancel(audit_run: dict[str, Any], removed_container_count: int) -> bool:
+    return removed_container_count == 0 or not is_active_pipeline(audit_run.get("status"), audit_run.get("config"))
+
+
+def _pipeline_backend_readiness_check(settings: Settings) -> dict[str, Any]:
+    backend = (settings.pipeline_execution_backend or "background-tasks").strip().lower()
+    durable_backends = {"temporal", "durable-worker"}
+    return {
+        "id": "pipeline_execution_backend",
+        "title": "Audit pipeline uses a durable execution backend",
+        "status": "pass" if backend in durable_backends else "fail",
+        "detail": {
+            "backend": backend,
+            "durable_backends": sorted(durable_backends),
+            "recovery_on_startup": settings.pipeline_recovery_on_startup,
+            "message": (
+                "FastAPI background task execution can lose in-flight work on restart. "
+                "Use a durable workflow backend before treating this deployment as production-ready."
+            ),
+        },
+    }
 
 
 async def _get_project(project_id: str) -> dict[str, Any] | None:
