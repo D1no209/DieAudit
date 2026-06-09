@@ -346,6 +346,20 @@ services:
     networks:
       - platform
 
+  opencode-agent-image:
+    build:
+      context: .
+      dockerfile: services/agents/opencode-agent/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    image: dieaudit/opencode-agent:local
+    profiles: ["demo", "tools"]
+    command: ["opencode", "--version"]
+    networks:
+      - platform
+
   prometheus:
     image: prom/prometheus:v2.54.1
     profiles: ["observability"]

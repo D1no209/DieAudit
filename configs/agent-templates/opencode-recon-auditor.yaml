@@ -1,0 +1,34 @@
+name: opencode-recon-auditor
+image: dieaudit/opencode-agent:local
+command: ["opencode", "acp"]
+env:
+  AGENT_ROLE: recon-auditor
+  OPENCODE_DISABLE_AUTOUPDATE: "1"
+model_profile: auditor-strong
+protocol:
+  kind: agent-client-protocol
+  transport: stdio
+  stdio_command: ["opencode", "acp"]
+  runtime: opencode
+workspace_mount:
+  target: /workspace
+  read_only: true
+artifact_mount:
+  target: /artifacts
+  read_only: false
+runtime_mount:
+  target: /dieaudit/runtime
+  read_only: true
+required_mcp:
+  - filesystem-mcp
+  - code-search-mcp
+  - joern-mcp
+network_policy:
+  allow_gateway: true
+  allow_mcp: true
+  allow_external_network: false
+read_only: false
+healthcheck: null
+instruction: recon-auditor.md
+output_schema:
+  type: object
