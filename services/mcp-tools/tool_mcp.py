@@ -276,9 +276,19 @@ def query_osv(max_packages: int = 200) -> dict[str, Any]:
     packages = _detect_dependencies()[: max(1, min(max_packages, 1000))]
     queries = [{"package": {"name": item["name"], "ecosystem": item["ecosystem"]}, "version": item["version"]} for item in packages if item.get("version")]
     if not queries:
-        return {"packages": packages, "vulnerabilities": [], "findings": []}
-    response = httpx.post("https://api.osv.dev/v1/querybatch", json={"queries": queries}, timeout=60)
-    response.raise_for_status()
+        return {"ok": True, "available": True, "packages": packages, "vulnerabilities": [], "findings": []}
+    try:
+        response = httpx.post("https://api.osv.dev/v1/querybatch", json={"queries": queries}, timeout=60)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "available": False,
+            "error": f"osv query failed: {exc}",
+            "packages": packages,
+            "vulnerabilities": [],
+            "findings": [],
+        }
     results = response.json().get("results", [])
     vulnerabilities = []
     findings = []
@@ -309,7 +319,7 @@ def query_osv(max_packages: int = 200) -> dict[str, Any]:
                     "raw": normalized,
                 }
             )
-    return {"packages": packages, "vulnerabilities": vulnerabilities, "findings": findings}
+    return {"ok": True, "available": True, "packages": packages, "vulnerabilities": vulnerabilities, "findings": findings}
 
 
 def _safe_path(path: str) -> Path:
