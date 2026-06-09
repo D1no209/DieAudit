@@ -31,6 +31,7 @@ from app.schemas import (
     CreateProjectRequest,
     RunPocRequest,
     StartAgentRunRequest,
+    StartSandboxServiceRequest,
     TemplateBody,
     ValidatorScaleRequest,
 )
@@ -604,6 +605,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
                 timeout_seconds=body.timeout_seconds,
                 mount_workspace=body.mount_workspace,
+                network_name=body.network_name,
+                target_url=body.target_url,
             )
             exit_code = _optional_int(poc_result.get("container", {}).get("exit_code"))
             expected_exit_code = _optional_int(body.expected_exit_code)
@@ -926,11 +929,48 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
                 timeout_seconds=body.timeout_seconds,
                 mount_workspace=body.mount_workspace,
+                network_name=body.network_name,
+                target_url=body.target_url,
             )
         except (DockerApiError, RuntimeError, ValueError) as exc:
             await _record_audit_run_event(audit_run_id, "poc_run_failed", {"error": str(exc), "request": body.model_dump()})
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await _record_audit_run_event(audit_run_id, "poc_run_completed", result)
+        return result
+
+    @router.post("/audit-runs/{audit_run_id}/sandbox/service")
+    async def start_sandbox_service(audit_run_id: str, body: StartSandboxServiceRequest) -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(
+                f"/audit-runs/{audit_run_id}/sandbox/service",
+                method="POST",
+                json=body.model_dump(),
+            )
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        try:
+            result = await runtime.start_sandbox_service(
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                image=body.image,
+                command=body.command,
+                env=body.env,
+                workspace_host_path=workspace_path,
+                service_name=body.service_name,
+                port=body.port,
+                allow_external_network=body.allow_external_network,
+                retain_runtime_on_failure=body.retain_runtime_on_failure,
+                startup_timeout_seconds=body.startup_timeout_seconds,
+                mount_workspace=body.mount_workspace,
+                healthcheck_path=body.healthcheck_path,
+            )
+        except (DockerApiError, RuntimeError, ValueError) as exc:
+            await _record_audit_run_event(audit_run_id, "sandbox_service_failed", {"error": str(exc), "request": body.model_dump()})
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _record_audit_run_event(audit_run_id, "sandbox_service_started", result)
         return result
 
     @router.post("/audit-runs/{audit_run_id}/validators/scale")

@@ -429,18 +429,24 @@ class RuntimeOrchestrator:
         retain_runtime_on_failure: bool = False,
         timeout_seconds: int = 120,
         mount_workspace: bool = True,
+        network_name: str | None = None,
+        target_url: str | None = None,
     ) -> dict[str, Any]:
         capabilities = await self.sandbox_capabilities()
         if not capabilities.get("sandbox_execution_available"):
             raise RuntimeError(capabilities.get("reason") or "sandbox execution is not available")
 
         poc_run_id = str(uuid.uuid4())
-        network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}-poc-{poc_run_id[:8]}"
+        dedicated_network = network_name is None
+        network_name = network_name or f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}-poc-{poc_run_id[:8]}"
         labels = self._labels(audit_run_id, project_id, role="poc", ttl=utc_ttl(hours=4))
         labels["dieaudit.poc_run_id"] = poc_run_id
         labels["dieaudit.sandbox_runtime"] = str(capabilities.get("requested_runtime") or self.settings.default_sandbox_runtime)
-        await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
-        await self._record_network(audit_run_id, network_name, "created")
+        if dedicated_network:
+            await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
+            await self._record_network(audit_run_id, network_name, "created")
+        elif not await self.docker.network_exists(network_name):
+            raise RuntimeError(f"sandbox network does not exist: {network_name}")
 
         mounts: list[dict[str, Any]] = []
         if mount_workspace and workspace_host_path:
@@ -460,6 +466,7 @@ class RuntimeOrchestrator:
                 "PROJECT_ID": project_id,
                 "POC_RUN_ID": poc_run_id,
                 "ARTIFACT_DIR": "/artifacts",
+                **({"TARGET_URL": target_url} if target_url else {}),
             },
             labels=labels,
             network_name=network_name,
@@ -519,6 +526,8 @@ class RuntimeOrchestrator:
                     "log_artifact": log_artifact,
                 },
                 "network": network_name,
+                "network_reused": not dedicated_network,
+                "target_url": target_url,
                 "wait_result": wait_result,
                 "artifact_dir": str(artifact_dir),
                 "sandbox": capabilities,
@@ -536,9 +545,131 @@ class RuntimeOrchestrator:
                         )
                     await self.docker.remove_container(created["Id"], force=True)
                     await self._mark_container_state(created["Id"], "removed", exit_code=exit_code, log_artifact=log_artifact)
+            if dedicated_network and not retain_runtime_on_failure:
+                await self.docker.remove_network(network_name)
+                await self._mark_network_cleaned(audit_run_id, network_name)
+
+    async def start_sandbox_service(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        image: str,
+        command: list[str],
+        env: dict[str, str] | None = None,
+        workspace_host_path: str | None = None,
+        service_name: str = "target",
+        port: int = 8080,
+        allow_external_network: bool = False,
+        retain_runtime_on_failure: bool = True,
+        startup_timeout_seconds: int = 30,
+        mount_workspace: bool = True,
+        healthcheck_path: str | None = None,
+    ) -> dict[str, Any]:
+        capabilities = await self.sandbox_capabilities()
+        if not capabilities.get("sandbox_execution_available"):
+            raise RuntimeError(capabilities.get("reason") or "sandbox execution is not available")
+
+        sandbox_id = str(uuid.uuid4())
+        network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}-sandbox"
+        labels = self._labels(audit_run_id, project_id, role="sandbox", ttl=utc_ttl(hours=8))
+        labels["dieaudit.sandbox_id"] = sandbox_id
+        labels["dieaudit.sandbox_service"] = service_name
+        labels["dieaudit.sandbox_runtime"] = str(capabilities.get("requested_runtime") or self.settings.default_sandbox_runtime)
+        await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
+        await self._record_network(audit_run_id, network_name, "created")
+
+        mounts: list[dict[str, Any]] = []
+        if mount_workspace and workspace_host_path:
+            mounts.append(self._bind_mount(await self._host_path_for(Path(workspace_host_path)), "/workspace", read_only=True))
+        artifact_dir = self.settings.artifact_root / "sandbox-services" / audit_run_id / sandbox_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        mounts.append(self._bind_mount(await self._host_path_for(artifact_dir), "/artifacts", read_only=False))
+
+        healthcheck = None
+        if healthcheck_path:
+            healthcheck = {
+                "Test": ["CMD-SHELL", f"python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:{port}{healthcheck_path}', timeout=2).read(1)\nPY"],
+                "Interval": 2_000_000_000,
+                "Timeout": 2_000_000_000,
+                "Retries": max(1, startup_timeout_seconds // 2),
+            }
+        runtime_name = str(capabilities.get("requested_runtime") or self.settings.default_sandbox_runtime)
+        payload = self._container_payload(
+            image=image,
+            command=command,
+            env={
+                **(env or {}),
+                "AUDIT_RUN_ID": audit_run_id,
+                "PROJECT_ID": project_id,
+                "SANDBOX_ID": sandbox_id,
+                "SERVICE_NAME": service_name,
+                "SERVICE_PORT": str(port),
+                "ARTIFACT_DIR": "/artifacts",
+            },
+            labels=labels,
+            network_name=network_name,
+            aliases=[service_name, f"sandbox-{sandbox_id[:8]}"],
+            mounts=mounts,
+            read_only=True,
+            healthcheck=healthcheck,
+            runtime=runtime_name if runtime_name != "runc" else None,
+        )
+        payload["HostConfig"].update(
+            {
+                "Memory": 768 * 1024 * 1024,
+                "NanoCpus": 1_000_000_000,
+                "PidsLimit": 512,
+                "Tmpfs": {"/tmp": "rw,nosuid,size=128m"},
+            }
+        )
+
+        await self.docker.pull_image(image)
+        name = f"{self.settings.dynamic_container_prefix}-{audit_run_id}-sandbox-{service_name}-{sandbox_id[:8]}"
+        created: dict[str, Any] | None = None
+        try:
+            created = await self.docker.create_container(name, payload)
+            await self._record_container(audit_run_id, project_id, None, created["Id"], name, image, "sandbox", labels, "created")
+            await self.docker.start_container(created["Id"])
+            await self._mark_container_state(created["Id"], "starting")
+            await self.docker.wait_for_healthy(created["Id"], timeout_seconds=startup_timeout_seconds)
+            await self._mark_container_state(created["Id"], "running")
+            return {
+                "ok": True,
+                "sandbox_id": sandbox_id,
+                "audit_run_id": audit_run_id,
+                "project_id": project_id,
+                "network": network_name,
+                "service_name": service_name,
+                "port": port,
+                "target_url": f"http://{service_name}:{port}",
+                "artifact_dir": str(artifact_dir),
+                "container": {
+                    "id": created["Id"],
+                    "name": name,
+                    "image": image,
+                    "role": "sandbox",
+                    "status": "running",
+                },
+                "sandbox": capabilities,
+            }
+        except Exception:
+            if created:
+                with contextlib.suppress(Exception):
+                    log_artifact = await self._capture_container_logs(
+                        audit_run_id=audit_run_id,
+                        container_id=created["Id"],
+                        container_name=name,
+                        tail="all",
+                    )
+                    await self._mark_container_state(created["Id"], "failed", log_artifact=log_artifact)
+                    if not retain_runtime_on_failure:
+                        await self.docker.remove_container(created["Id"], force=True)
+                        await self._mark_container_state(created["Id"], "removed", log_artifact=log_artifact)
             if not retain_runtime_on_failure:
                 await self.docker.remove_network(network_name)
                 await self._mark_network_cleaned(audit_run_id, network_name)
+            raise
 
     async def scale_validators(
         self,

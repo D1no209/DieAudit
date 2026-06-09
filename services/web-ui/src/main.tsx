@@ -192,6 +192,7 @@ function App() {
   const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
   const [agentEvents, setAgentEvents] = useState<Array<Record<string, unknown>>>();
   const [containerLogs, setContainerLogs] = useState<{ title: string; body: string }>();
+  const [sandboxTarget, setSandboxTarget] = useState<{ network: string; target_url: string }>();
   const [lastResponse, setLastResponse] = useState<any>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -365,6 +366,67 @@ function App() {
           ],
           allow_external_network: false,
           timeout_seconds: 120,
+        }),
+      });
+      setLastResponse(result);
+      await refreshAuditRun(auditRun.audit_run_id);
+      const managed = await readJson("/gateway/runtime/managed");
+      setManagedRuntime(managed);
+    });
+  }
+
+  async function startSandboxService() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/service`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: "python:3.12-slim",
+          command: ["python", "-m", "http.server", "8080", "--directory", "/workspace"],
+          service_name: "target",
+          port: 8080,
+          allow_external_network: false,
+          retain_runtime_on_failure: true,
+          startup_timeout_seconds: 30,
+        }),
+      });
+      setSandboxTarget({ network: result.network, target_url: result.target_url });
+      setLastResponse(result);
+      await refreshAuditRun(auditRun.audit_run_id);
+      const managed = await readJson("/gateway/runtime/managed");
+      setManagedRuntime(managed);
+    });
+  }
+
+  async function runSandboxTargetPoc() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    if (!sandboxTarget) {
+      message.error("请先启动 Sandbox Service");
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/poc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: "python:3.12-slim",
+          command: [
+            "python",
+            "-c",
+            "import os, urllib.request; url=os.environ['TARGET_URL']; r=urllib.request.urlopen(url, timeout=5); print(url); print(r.status); print(r.read(120).decode('utf-8', 'replace'))",
+          ],
+          network_name: sandboxTarget.network,
+          target_url: sandboxTarget.target_url,
+          allow_external_network: false,
+          timeout_seconds: 120,
+          expected_exit_code: 0,
         }),
       });
       setLastResponse(result);
@@ -572,6 +634,8 @@ function App() {
               <Button icon={<PlayCircleOutlined />} loading={loading} onClick={runPipeline}>一键闭环</Button>
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runSca}>SCA 扫描</Button>
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
+              <Button icon={<CloudServerOutlined />} loading={loading} onClick={startSandboxService}>Sandbox Service</Button>
+              <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!sandboxTarget} onClick={runSandboxTargetPoc}>Target PoC</Button>
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runPocSmoke}>PoC Smoke</Button>
               <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
               <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={cancelAuditRun}>取消</Button>

@@ -81,3 +81,21 @@ class RunPocRequest(BaseModel):
     mount_workspace: bool = True
     expected_exit_code: int = 0
     mark_confirmed_on_success: bool = False
+    network_name: str | None = None
+    target_url: str | None = None
+
+
+class StartSandboxServiceRequest(BaseModel):
+    image: str = "python:3.12-slim"
+    command: list[str] = Field(
+        default_factory=lambda: ["python", "-m", "http.server", "8080", "--directory", "/workspace"],
+        min_length=1,
+    )
+    env: dict[str, str] = Field(default_factory=dict)
+    service_name: str = Field(default="target", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    port: int = Field(default=8080, ge=1, le=65535)
+    allow_external_network: bool = False
+    retain_runtime_on_failure: bool = True
+    mount_workspace: bool = True
+    healthcheck_path: str | None = None
+    startup_timeout_seconds: int = Field(default=30, ge=1, le=300)
