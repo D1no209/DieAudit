@@ -1,7 +1,7 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY services/web-ui/package.json ./
-RUN npm install
+COPY services/web-ui/package.json services/web-ui/package-lock.json ./
+RUN npm ci
 COPY services/web-ui/ ./
 RUN npm run build
 
