@@ -45,6 +45,52 @@ class RuntimeOrchestrator:
         version = await self.docker.version()
         return {"ok": ping == "OK", "ping": ping, "version": version}
 
+    async def sandbox_capabilities(self) -> dict[str, Any]:
+        try:
+            ping = await self.docker.ping()
+            info = await self.docker.info()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "docker_available": False,
+                "default_runtime": self.settings.default_sandbox_runtime,
+                "configured_gvisor": self.settings.enable_gvisor,
+                "gvisor_available": False,
+                "sandbox_execution_available": False,
+                "reason": str(exc),
+            }
+        runtimes = info.get("Runtimes") or {}
+        runtime_names = sorted(runtimes.keys())
+        default_runtime = str(info.get("DefaultRuntime") or self.settings.default_sandbox_runtime)
+        requested_runtime = "runsc" if self.settings.enable_gvisor else self.settings.default_sandbox_runtime
+        gvisor_available = "runsc" in runtimes
+        requested_runtime_available = requested_runtime in runtimes or requested_runtime == default_runtime
+        sandbox_execution_available = bool(ping == "OK" and requested_runtime_available)
+        reason = None
+        if self.settings.enable_gvisor and not gvisor_available:
+            reason = "gVisor is enabled but Docker runtime 'runsc' is not installed."
+        elif not requested_runtime_available:
+            reason = f"Configured sandbox runtime '{requested_runtime}' is not available in Docker."
+        return {
+            "ok": sandbox_execution_available,
+            "docker_available": ping == "OK",
+            "docker_default_runtime": default_runtime,
+            "docker_runtimes": runtime_names,
+            "configured_runtime": self.settings.default_sandbox_runtime,
+            "configured_gvisor": self.settings.enable_gvisor,
+            "requested_runtime": requested_runtime,
+            "requested_runtime_available": requested_runtime_available,
+            "gvisor_available": gvisor_available,
+            "sandbox_execution_available": sandbox_execution_available,
+            "reason": reason,
+            "warnings": self._sandbox_warnings(
+                configured_gvisor=self.settings.enable_gvisor,
+                gvisor_available=gvisor_available,
+                requested_runtime=requested_runtime,
+                requested_runtime_available=requested_runtime_available,
+            ),
+        }
+
     async def managed_runtime(self) -> dict[str, Any]:
         containers = await self.docker.list_managed_containers()
         networks = await self.docker.list_managed_networks()
@@ -1024,6 +1070,23 @@ class RuntimeOrchestrator:
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _sandbox_warnings(
+        *,
+        configured_gvisor: bool,
+        gvisor_available: bool,
+        requested_runtime: str,
+        requested_runtime_available: bool,
+    ) -> list[str]:
+        warnings: list[str] = []
+        if configured_gvisor and not gvisor_available:
+            warnings.append("Dynamic PoC execution should be disabled until gVisor runsc is installed or ENABLE_GVISOR=false.")
+        if not requested_runtime_available:
+            warnings.append(f"Docker runtime '{requested_runtime}' is not available on this host.")
+        if requested_runtime == "runc":
+            warnings.append("Sandbox is using default runc isolation; use gVisor/Kata for stronger untrusted PoC isolation.")
+        return warnings
 
     @staticmethod
     def _safe_artifact_name(value: str) -> str:

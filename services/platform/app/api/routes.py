@@ -613,6 +613,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         except DockerApiError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @router.get("/runtime/sandbox/capabilities")
+    async def sandbox_capabilities() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/sandbox/capabilities")
+        return await runtime.sandbox_capabilities()
+
     @router.get("/runtime/managed")
     async def managed_runtime() -> dict[str, Any]:
         runtime = runtime_provider()

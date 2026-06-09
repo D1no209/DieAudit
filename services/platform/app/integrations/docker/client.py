@@ -36,6 +36,9 @@ class DockerClient:
     async def version(self) -> dict[str, Any]:
         return await self.request("GET", "/version")
 
+    async def info(self) -> dict[str, Any]:
+        return await self.request("GET", "/info")
+
     async def pull_image(self, image: str) -> None:
         if await self.image_exists(image):
             return

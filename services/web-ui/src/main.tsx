@@ -132,6 +132,17 @@ type ManagedRuntime = {
   };
 };
 
+type SandboxCapabilities = {
+  ok?: boolean;
+  docker_available?: boolean;
+  configured_gvisor?: boolean;
+  gvisor_available?: boolean;
+  sandbox_execution_available?: boolean;
+  requested_runtime?: string;
+  reason?: string;
+  warnings?: string[];
+};
+
 type ContainerRow = {
   Id: string;
   Image: string;
@@ -168,6 +179,7 @@ function App() {
   const [apiHealth, setApiHealth] = useState<any>();
   const [dockerHealth, setDockerHealth] = useState<any>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
+  const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
@@ -203,6 +215,7 @@ function App() {
       setApiHealth(api);
       setDockerHealth(docker);
       readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
+      readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
       setProjects(projectRows);
       if (!selectedProjectId && projectRows.length > 0) {
         setSelectedProjectId(projectRows[0].project_id);
@@ -518,6 +531,14 @@ function App() {
             <Card><Statistic title="Projects" value={projects.length} prefix={<FolderOpenOutlined />} /></Card>
             <Card><Statistic title="Findings" value={findings.length} prefix={<BugOutlined />} /></Card>
             <Card><Statistic title="Runtime Containers" value={managedRuntime?.summary?.container_count ?? 0} prefix={<CloudServerOutlined />} /></Card>
+            <Card>
+              <Statistic
+                title={`Sandbox ${sandboxCapabilities?.requested_runtime || ""}`}
+                value={sandboxCapabilities?.sandbox_execution_available ? "Ready" : "Unavailable"}
+                prefix={<SafetyCertificateOutlined />}
+              />
+              {sandboxCapabilities?.warnings?.[0] && <Text type="secondary">{sandboxCapabilities.warnings[0]}</Text>}
+            </Card>
           </div>
           <div className="workspace-grid section">
             <Card title="Projects">
