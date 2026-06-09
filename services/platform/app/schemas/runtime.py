@@ -19,3 +19,14 @@ class TemplateBody(BaseModel):
 
 class A2AAgentCardRequest(BaseModel):
     url: str
+
+
+class ValidatorScaleRequest(BaseModel):
+    project_id: str = "demo-project"
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    workspace_host_path: str | None = None
+    validator_rounds: int = Field(default=1, ge=1)
+    max_parallel_validators: int = Field(default=2, ge=1)
+    validator_agent_name: str = "opencode-validator"
+    allow_external_network: bool = False
+    retain_runtime_on_failure: bool = False

@@ -1,12 +1,13 @@
 import json
 import uuid
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 
-from app.domain.models import AgentRun, AgentRunEvent, ContainerRun, RuntimeNetwork
+from app.domain.models import AgentRun, AgentRunEvent, AuditRun, ContainerRun, RuntimeNetwork
 from app.integrations.docker import DockerClient
 from app.integrations.protocols import OpenCodeAcpClient
 from app.repositories import SessionLocal
@@ -194,6 +195,82 @@ class RuntimeOrchestrator:
     async def logs(self, container_id: str) -> str:
         return await self.docker.logs(container_id)
 
+    async def scale_validators(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        findings: list[dict[str, Any]],
+        workspace_host_path: str | None,
+        validator_rounds: int,
+        max_parallel_validators: int,
+        validator_agent_name: str,
+        allow_external_network: bool,
+        retain_runtime_on_failure: bool,
+    ) -> dict[str, Any]:
+        await self._record_audit_run(
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            validator_rounds=validator_rounds,
+            max_parallel_validators=max_parallel_validators,
+            allow_external_network=allow_external_network,
+            retain_runtime_on_failure=retain_runtime_on_failure,
+            config={
+                "validator_agent_name": validator_agent_name,
+                "finding_count": len(findings),
+            },
+        )
+        if not findings:
+            return {
+                "audit_run_id": audit_run_id,
+                "status": "accepted",
+                "scheduled": 0,
+                "note": "No findings were provided.",
+            }
+
+        semaphore = asyncio.Semaphore(max_parallel_validators)
+
+        async def run_validator(finding: dict[str, Any], round_index: int) -> dict[str, Any]:
+            async with semaphore:
+                payload = {
+                    "goal": "Validate the supplied finding and produce evidence, confidence, and next steps.",
+                    "finding": finding,
+                    "round": round_index,
+                    "validator_rounds": validator_rounds,
+                }
+                return await self.start_agent_run(
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    agent_name=validator_agent_name,
+                    workspace_host_path=workspace_host_path,
+                    allow_external_network=allow_external_network,
+                    retain_runtime_on_failure=retain_runtime_on_failure,
+                    input_payload=payload,
+                )
+
+        scheduled: list[asyncio.Task] = []
+        for finding in findings:
+            for round_index in range(1, validator_rounds + 1):
+                scheduled.append(asyncio.create_task(run_validator(finding, round_index)))
+
+        async def drain(tasks: list[asyncio.Task]) -> None:
+            for task in asyncio.as_completed(tasks):
+                try:
+                    await task
+                except Exception:
+                    pass
+
+        asyncio.create_task(drain(scheduled))
+        return {
+            "audit_run_id": audit_run_id,
+            "project_id": project_id,
+            "status": "accepted",
+            "scheduled": len(scheduled),
+            "validator_rounds": validator_rounds,
+            "max_parallel_validators": max_parallel_validators,
+            "validator_agent_name": validator_agent_name,
+        }
+
     async def _start_mcp(
         self,
         *,
@@ -353,6 +430,41 @@ class RuntimeOrchestrator:
     async def _record_agent_event(self, agent_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         async with SessionLocal() as session:
             session.add(AgentRunEvent(agent_run_id=agent_run_id, event_type=event_type, payload=payload))
+            await session.commit()
+
+    async def _record_audit_run(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        validator_rounds: int,
+        max_parallel_validators: int,
+        allow_external_network: bool,
+        retain_runtime_on_failure: bool,
+        config: dict[str, Any],
+    ) -> None:
+        async with SessionLocal() as session:
+            existing = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
+            if existing:
+                existing.project_id = project_id
+                existing.validator_rounds = validator_rounds
+                existing.max_parallel_validators = max_parallel_validators
+                existing.allow_external_network = allow_external_network
+                existing.retain_runtime_on_failure = retain_runtime_on_failure
+                existing.config = config
+            else:
+                session.add(
+                    AuditRun(
+                        audit_run_id=audit_run_id,
+                        project_id=project_id,
+                        status="running",
+                        validator_rounds=validator_rounds,
+                        max_parallel_validators=max_parallel_validators,
+                        allow_external_network=allow_external_network,
+                        retain_runtime_on_failure=retain_runtime_on_failure,
+                        config=config,
+                    )
+                )
             await session.commit()
 
     async def _record_agent_run(

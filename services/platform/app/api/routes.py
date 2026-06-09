@@ -9,7 +9,7 @@ from app.domain.models import AgentRun, AgentRunEvent
 from app.integrations.docker import DockerApiError
 from app.integrations.protocols import classify_agent_protocol, fetch_a2a_agent_card, serialize_capabilities
 from app.repositories import SessionLocal
-from app.schemas import A2AAgentCardRequest, StartAgentRunRequest, TemplateBody
+from app.schemas import A2AAgentCardRequest, StartAgentRunRequest, TemplateBody, ValidatorScaleRequest
 from app.services.templates import TemplateStore
 from app.settings import Settings
 
@@ -266,13 +266,25 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return await runtime.cleanup_run(audit_run_id)
 
     @router.post("/audit-runs/{audit_run_id}/validators/scale")
-    async def scale_validators(audit_run_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "audit_run_id": audit_run_id,
-            "requested": body,
-            "status": "accepted",
-            "note": "Validator scaling is represented in workflow state; dynamic container launch uses /agent-runs.",
-        }
+    async def scale_validators(audit_run_id: str, body: ValidatorScaleRequest) -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(
+                f"/audit-runs/{audit_run_id}/validators/scale",
+                method="POST",
+                json=body.model_dump(),
+            )
+        return await runtime.scale_validators(
+            audit_run_id=audit_run_id,
+            project_id=body.project_id,
+            findings=body.findings,
+            workspace_host_path=body.workspace_host_path,
+            validator_rounds=body.validator_rounds,
+            max_parallel_validators=body.max_parallel_validators,
+            validator_agent_name=body.validator_agent_name,
+            allow_external_network=body.allow_external_network,
+            retain_runtime_on_failure=body.retain_runtime_on_failure,
+        )
 
     return router
 
