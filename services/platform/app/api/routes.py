@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,10 @@ from app.settings import Settings
 
 
 router = APIRouter()
+
+
+class PipelineCancelled(RuntimeError):
+    pass
 
 
 def register_runtime_routes(settings: Settings, runtime_provider: callable) -> APIRouter:
@@ -305,11 +310,45 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         if not workspace_path:
             raise HTTPException(status_code=400, detail="audit run has no workspace path")
+        await _clear_pipeline_cancel(audit_run_id)
         await _mark_audit_run_status(audit_run_id, "queued")
         await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
         await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued"})
         background_tasks.add_task(_execute_pipeline, audit_run_id, settings, runtime)
         return {"audit_run_id": audit_run_id, "status": "accepted"}
+
+    @router.post("/audit-runs/{audit_run_id}/cancel")
+    async def cancel_audit_run(audit_run_id: str) -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/cancel", method="POST")
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        await _request_pipeline_cancel(audit_run_id, reason="user_requested")
+        await _mark_audit_run_status(audit_run_id, "cancelling")
+        await _set_pipeline_state(audit_run_id, stage="cancelling", status="cancelling")
+        await _record_audit_run_event(audit_run_id, "cancel_requested", {"reason": "user_requested"})
+        cleanup_result: dict[str, Any] | None = None
+        cleanup_error: str | None = None
+        try:
+            cleanup_result = await runtime.cleanup_run(audit_run_id)
+        except Exception as exc:
+            cleanup_error = str(exc)
+            await _record_audit_run_event(audit_run_id, "cancel_cleanup_failed", {"error": cleanup_error})
+        final_status = "cancelling"
+        removed_container_count = len((cleanup_result or {}).get("removed_containers") or [])
+        if removed_container_count == 0 or not _is_active_audit_status(audit_run["status"]):
+            final_status = "cancelled"
+            await _mark_audit_run_status(audit_run_id, "cancelled")
+            await _set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error="user_requested")
+            await _record_audit_run_event(audit_run_id, "pipeline_cancelled", {"reason": "user_requested"})
+        return {
+            "audit_run_id": audit_run_id,
+            "status": final_status,
+            "cleanup": cleanup_result,
+            "cleanup_error": cleanup_error,
+        }
 
     async def _execute_pipeline(audit_run_id: str, settings: Settings, runtime) -> None:
         audit_run = await _get_audit_run(audit_run_id)
@@ -326,6 +365,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         await _record_audit_run_event(audit_run_id, "pipeline_started", {"stage": "agent-audit"})
         steps: list[dict[str, Any]] = []
         try:
+            await _raise_if_cancelled(audit_run_id)
             await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "agent-audit"})
             agent_result = await runtime.start_agent_run(
                 audit_run_id=audit_run_id,
@@ -344,6 +384,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             )
             steps.append({"step": "agent-audit", "result": agent_result})
             await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "agent-audit", "result": _compact_event_payload(agent_result)})
+            await _raise_if_cancelled(audit_run_id)
 
             await _set_pipeline_state(audit_run_id, stage="sca", status="running")
             await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "sca"})
@@ -354,6 +395,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 await _record_pipeline_event(audit_run_id, "sca_failed", sca_result)
             steps.append({"step": "sca", "result": sca_result})
             await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "sca", "result": _compact_event_payload(sca_result)})
+            await _raise_if_cancelled(audit_run_id)
 
             await _set_pipeline_state(audit_run_id, stage="semgrep", status="running")
             await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "semgrep"})
@@ -364,6 +406,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 await _record_pipeline_event(audit_run_id, "semgrep_failed", semgrep_result)
             steps.append({"step": "semgrep", "result": semgrep_result})
             await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "semgrep", "result": _compact_event_payload(semgrep_result)})
+            await _raise_if_cancelled(audit_run_id)
 
             findings = await _list_findings(audit_run_id)
             await _set_pipeline_state(audit_run_id, stage="validators", status="running")
@@ -386,11 +429,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             )
             steps.append({"step": "validators", "result": validator_result})
             await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "validators", "result": _compact_event_payload(validator_result)})
+            await _raise_if_cancelled(audit_run_id)
 
             await _set_pipeline_state(audit_run_id, stage="judgement", status="running")
             await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "judgement"})
             judge_result = await _judge_audit_run_internal(audit_run_id, runtime)
             await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "judgement", "result": _compact_event_payload(judge_result)})
+            await _raise_if_cancelled(audit_run_id)
             await _set_pipeline_state(audit_run_id, stage="report", status="running")
             await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "report"})
             report_result = await _generate_report_internal(audit_run_id, settings)
@@ -399,7 +444,21 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             await _mark_audit_run_status(audit_run_id, "completed")
             await _set_pipeline_state(audit_run_id, stage="completed", status="completed")
             await _record_audit_run_event(audit_run_id, "pipeline_completed", {"report": _compact_event_payload(report_result)})
+        except PipelineCancelled as exc:
+            await _mark_audit_run_status(audit_run_id, "cancelled")
+            await _set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error=str(exc))
+            await _record_audit_run_event(audit_run_id, "pipeline_cancelled", {"reason": str(exc), "steps": [_compact_event_payload(step) for step in steps]})
         except Exception as exc:
+            if await _is_cancel_requested(audit_run_id):
+                reason = await _cancel_reason(audit_run_id)
+                await _mark_audit_run_status(audit_run_id, "cancelled")
+                await _set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error=reason or str(exc))
+                await _record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_cancelled",
+                    {"reason": reason or str(exc), "error": str(exc), "steps": [_compact_event_payload(step) for step in steps]},
+                )
+                return
             await _record_pipeline_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": steps})
             await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error=str(exc))
             await _record_audit_run_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": [_compact_event_payload(step) for step in steps]})
@@ -454,6 +513,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             "audit_run": audit_run,
             "pipeline": (audit_run.get("config") or {}).get("pipeline", {}),
             "current": (audit_run.get("config") or {}).get("pipeline_state", {}),
+            "runtime_control": (audit_run.get("config") or {}).get("runtime_control", {}),
             "counts": {
                 "findings": finding_counts,
                 "validation_attempts": attempt_counts,
@@ -893,6 +953,63 @@ async def _mark_audit_run_status(audit_run_id: str, status: str) -> None:
         if audit_run:
             audit_run.status = status
             await session.commit()
+
+
+async def _request_pipeline_cancel(audit_run_id: str, *, reason: str) -> None:
+    async with SessionLocal() as session:
+        audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
+        if not audit_run:
+            return
+        config = dict(audit_run.config or {})
+        control = dict(config.get("runtime_control") or {})
+        control.update(
+            {
+                "cancel_requested": True,
+                "cancel_reason": reason,
+                "cancel_requested_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        config["runtime_control"] = control
+        audit_run.config = config
+        await session.commit()
+
+
+async def _clear_pipeline_cancel(audit_run_id: str) -> None:
+    async with SessionLocal() as session:
+        audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
+        if not audit_run:
+            return
+        config = dict(audit_run.config or {})
+        control = dict(config.get("runtime_control") or {})
+        if control:
+            control["cancel_requested"] = False
+            control.pop("cancel_reason", None)
+            control.pop("cancel_requested_at", None)
+            config["runtime_control"] = control
+            audit_run.config = config
+            await session.commit()
+
+
+async def _is_cancel_requested(audit_run_id: str) -> bool:
+    audit_run = await _get_audit_run(audit_run_id)
+    control = ((audit_run or {}).get("config") or {}).get("runtime_control") or {}
+    return bool(control.get("cancel_requested"))
+
+
+async def _cancel_reason(audit_run_id: str) -> str | None:
+    audit_run = await _get_audit_run(audit_run_id)
+    control = ((audit_run or {}).get("config") or {}).get("runtime_control") or {}
+    reason = control.get("cancel_reason")
+    return str(reason) if reason else None
+
+
+async def _raise_if_cancelled(audit_run_id: str) -> None:
+    if await _is_cancel_requested(audit_run_id):
+        raise PipelineCancelled(await _cancel_reason(audit_run_id) or "cancel_requested")
+
+
+def _is_active_audit_status(status: str | None) -> bool:
+    return status in {"queued", "running", "validating", "cancelling"}
 
 
 async def _get_project(project_id: str) -> dict[str, Any] | None:

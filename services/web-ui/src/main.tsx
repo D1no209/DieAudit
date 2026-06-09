@@ -10,6 +10,7 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
@@ -106,6 +107,11 @@ type PipelineStatus = {
     stage?: string;
     status?: string;
     error?: string;
+  };
+  runtime_control?: {
+    cancel_requested?: boolean;
+    cancel_reason?: string;
+    cancel_requested_at?: string;
   };
   counts?: {
     findings?: Record<string, number>;
@@ -331,6 +337,17 @@ function App() {
     });
   }
 
+  async function cancelAuditRun() {
+    if (!auditRun) {
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/cancel`, { method: "POST" });
+      setLastResponse(result);
+      await refreshAuditRun(auditRun.audit_run_id);
+    });
+  }
+
   async function runAction(action: () => Promise<void>) {
     setLoading(true);
     setError(undefined);
@@ -409,6 +426,7 @@ function App() {
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runSca}>SCA 扫描</Button>
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
               <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
+              <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={cancelAuditRun}>取消</Button>
               <Button danger icon={<DeleteOutlined />} loading={loading} onClick={cleanup}>清理运行时</Button>
             </Space>
           </Flex>
@@ -486,6 +504,14 @@ function App() {
                 </Tag>
               </Paragraph>
               {pipelineStatus?.current?.error && <Alert type="error" showIcon message={pipelineStatus.current.error} />}
+              {pipelineStatus?.runtime_control?.cancel_requested && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="取消已请求"
+                  description={`${pipelineStatus.runtime_control.cancel_reason || "cancel_requested"} ${pipelineStatus.runtime_control.cancel_requested_at || ""}`}
+                />
+              )}
               <pre>{JSON.stringify(lastResponse || { hint: "Import a project, start an audit, then run SCA." }, null, 2)}</pre>
             </Card>
           </div>
