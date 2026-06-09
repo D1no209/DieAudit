@@ -126,7 +126,7 @@ class DockerClient:
     async def inspect_container(self, container_id: str) -> dict[str, Any]:
         return await self.request("GET", f"/containers/{container_id}/json")
 
-    async def logs(self, container_id: str, *, tail: int = 200) -> str:
+    async def logs(self, container_id: str, *, tail: int | str = 200) -> str:
         return await self.request(
             "GET",
             f"/containers/{container_id}/logs",

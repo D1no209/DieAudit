@@ -758,7 +758,10 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if runtime is None:
             data = await proxy_gateway(f"/audit-runs/{audit_run_id}/containers/{container_id}/logs")
             return Response(data if isinstance(data, str) else str(data), media_type="text/plain")
-        logs = await runtime.logs(container_id)
+        try:
+            logs = await runtime.logs(audit_run_id, container_id)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=f"container logs not found: {exc}") from exc
         return Response(logs, media_type="text/plain")
 
     @router.post("/audit-runs/{audit_run_id}/cleanup")

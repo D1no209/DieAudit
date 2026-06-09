@@ -128,6 +128,11 @@ type ContainerRow = {
   State: string;
   Status: string;
   Labels: Record<string, string>;
+  role?: string;
+  db_status?: string;
+  exit_code?: number;
+  log_artifact?: string;
+  container_name?: string;
 };
 
 async function readJson(path: string, options?: RequestInit) {
@@ -152,6 +157,7 @@ function App() {
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>();
   const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
   const [agentEvents, setAgentEvents] = useState<Array<Record<string, unknown>>>();
+  const [containerLogs, setContainerLogs] = useState<{ title: string; body: string }>();
   const [lastResponse, setLastResponse] = useState<any>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -326,6 +332,20 @@ function App() {
     });
   }
 
+  async function openContainerLogs(row: ContainerRow) {
+    if (!auditRun) {
+      return;
+    }
+    await runAction(async () => {
+      const response = await fetch(`/gateway/audit-runs/${auditRun.audit_run_id}/containers/${encodeURIComponent(row.Id)}/logs`);
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(text || response.statusText);
+      }
+      setContainerLogs({ title: row.container_name || row.Names?.[0]?.replace("/", "") || row.Id.slice(0, 12), body: text });
+    });
+  }
+
   async function cleanup() {
     if (!auditRun) {
       return;
@@ -401,10 +421,12 @@ function App() {
   ];
 
   const containerColumns: ColumnsType<ContainerRow> = [
-    { title: "Role", dataIndex: ["Labels", "dieaudit.role"], render: (value) => <Tag>{value || "unknown"}</Tag> },
-    { title: "Name", dataIndex: "Names", render: (names: string[]) => names?.[0]?.replace("/", "") || "-" },
+    { title: "Role", render: (_, row) => <Tag>{row.role || row.Labels?.["dieaudit.role"] || "unknown"}</Tag> },
+    { title: "Name", render: (_, row) => row.container_name || row.Names?.[0]?.replace("/", "") || "-" },
     { title: "Image", dataIndex: "Image" },
-    { title: "State", dataIndex: "State" },
+    { title: "State", render: (_, row) => <Tag color={row.State === "running" ? "green" : row.State === "removed" ? "default" : "blue"}>{row.db_status || row.State}</Tag> },
+    { title: "Exit", dataIndex: "exit_code", render: (value) => value ?? "-" },
+    { title: "Logs", render: (_, row) => <Button size="small" icon={<FileTextOutlined />} onClick={() => openContainerLogs(row)}>查看</Button> },
   ];
 
   return (
@@ -618,6 +640,14 @@ function App() {
             onClose={() => setAgentEvents(undefined)}
           >
             <pre>{JSON.stringify(agentEvents || [], null, 2)}</pre>
+          </Drawer>
+          <Drawer
+            title={`Container Logs - ${containerLogs?.title || ""}`}
+            open={Boolean(containerLogs)}
+            width={820}
+            onClose={() => setContainerLogs(undefined)}
+          >
+            <pre>{containerLogs?.body || ""}</pre>
           </Drawer>
         </Content>
       </Layout>

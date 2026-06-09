@@ -1,6 +1,7 @@
 import json
 import ntpath
 import posixpath
+import re
 import uuid
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -124,6 +125,7 @@ class RuntimeOrchestrator:
             structured_ingest: dict[str, Any] | None = None
             if runtime_package:
                 opencode_result = await self._wait_for_opencode_agent(
+                    audit_run_id=audit_run_id,
                     agent_run_id=run_id,
                     container_id=agent_container["id"],
                     artifact_dir=self._agent_artifact_dir(audit_run_id, run_id),
@@ -198,7 +200,14 @@ class RuntimeOrchestrator:
         for container in containers:
             cid = container["Id"]
             removed.append({"id": cid, "names": container.get("Names", [])})
+            log_artifact = await self._capture_container_logs(
+                audit_run_id=audit_run_id,
+                container_id=cid,
+                container_name=(container.get("Names") or [None])[0],
+                tail="all",
+            )
             await self.docker.remove_container(cid, force=True)
+            await self._mark_container_state(cid, "removed", log_artifact=log_artifact)
 
         removed_networks = []
         networks = await self.docker.list_networks_by_run(audit_run_id)
@@ -215,10 +224,45 @@ class RuntimeOrchestrator:
         return {"audit_run_id": audit_run_id, "removed_containers": removed, "removed_networks": removed_networks}
 
     async def containers(self, audit_run_id: str) -> list[dict[str, Any]]:
-        return await self.docker.list_containers_by_run(audit_run_id)
+        live_containers = await self.docker.list_containers_by_run(audit_run_id)
+        live_by_id = {container.get("Id"): container for container in live_containers if container.get("Id")}
+        rows: list[ContainerRun] = []
+        async with SessionLocal() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(ContainerRun).where(ContainerRun.audit_run_id == audit_run_id).order_by(ContainerRun.created_at.desc())
+                    )
+                ).scalars()
+            )
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            live = live_by_id.get(row.container_id)
+            merged.append(self._container_run_to_dict(row, live))
+            seen.add(row.container_id)
+        for container in live_containers:
+            cid = container.get("Id")
+            if cid and cid not in seen:
+                merged.append(container)
+        return merged
 
-    async def logs(self, container_id: str) -> str:
-        return await self.docker.logs(container_id)
+    async def logs(self, audit_run_id: str, container_id: str) -> str:
+        try:
+            return await self.docker.logs(container_id, tail=1000)
+        except Exception:
+            async with SessionLocal() as session:
+                row = await session.scalar(
+                    select(ContainerRun).where(
+                        ContainerRun.audit_run_id == audit_run_id,
+                        ContainerRun.container_id == container_id,
+                    )
+                )
+            if row and row.log_artifact:
+                path = Path(row.log_artifact)
+                if path.exists():
+                    return path.read_text(encoding="utf-8", errors="replace")
+            raise
 
     async def run_mcp_tool(
         self,
@@ -245,6 +289,7 @@ class RuntimeOrchestrator:
         await self._record_network(audit_run_id, network_name, "created")
         template = self.mcp_templates.get(mcp_name)
         container: dict[str, Any] | None = None
+        container_cleaned = False
         try:
             container = await self._start_mcp(
                 audit_run_id=audit_run_id,
@@ -262,12 +307,15 @@ class RuntimeOrchestrator:
             result = response.json()
             return {"ok": True, "mcp": container, "result": result}
         except Exception as exc:
-            if not retain_runtime_on_failure and container:
-                await self.docker.remove_container(container["id"], force=True)
             raise RuntimeError(str(exc)) from exc
         finally:
-            if not retain_runtime_on_failure and container:
-                await self.docker.remove_container(container["id"], force=True)
+            if not retain_runtime_on_failure and container and not container_cleaned:
+                await self._capture_and_remove_container(
+                    audit_run_id=audit_run_id,
+                    container_id=container["id"],
+                    container_name=container.get("name"),
+                )
+                container_cleaned = True
             if dedicated_network and not retain_runtime_on_failure:
                 await self.docker.disconnect_network(network_name, self.settings.agent_gateway_container_name)
                 await self.docker.remove_network(network_name)
@@ -441,6 +489,7 @@ class RuntimeOrchestrator:
         )
         created = await self.docker.create_container(name, payload)
         await self.docker.start_container(created["Id"])
+        await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "mcp", labels, "starting")
         await self.docker.wait_for_healthy(created["Id"], timeout_seconds=template.get("health_timeout_seconds", 45))
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "mcp", labels, "running")
         return {"id": created["Id"], "name": name, "image": image, "role": "mcp", "template": template["name"]}
@@ -509,16 +558,30 @@ class RuntimeOrchestrator:
     async def _wait_for_opencode_agent(
         self,
         *,
+        audit_run_id: str,
         agent_run_id: str,
         container_id: str,
         artifact_dir: Path,
     ) -> dict[str, Any]:
         wait_result = await self.docker.wait_container(container_id)
+        status_code = int(wait_result.get("StatusCode") or 0)
+        log_artifact = await self._capture_container_logs(
+            audit_run_id=audit_run_id,
+            container_id=container_id,
+            tail="all",
+        )
+        await self._mark_container_state(
+            container_id,
+            "completed" if status_code == 0 else "failed",
+            exit_code=status_code,
+            log_artifact=log_artifact,
+        )
         result_file = artifact_dir / "agent_result.json"
         payload: dict[str, Any] = {
             "status": "failed",
             "wait_result": wait_result,
             "artifact": str(result_file),
+            "log_artifact": log_artifact,
         }
         if result_file.exists():
             try:
@@ -532,6 +595,60 @@ class RuntimeOrchestrator:
             await self._record_agent_event(agent_run_id, event.get("event_type", "acp_event"), event)
         await self._record_agent_event(agent_run_id, "opencode_result", payload)
         return payload
+
+    async def _capture_and_remove_container(
+        self,
+        *,
+        audit_run_id: str,
+        container_id: str,
+        container_name: str | None = None,
+    ) -> str | None:
+        log_artifact = await self._capture_container_logs(
+            audit_run_id=audit_run_id,
+            container_id=container_id,
+            container_name=container_name,
+            tail="all",
+        )
+        await self.docker.remove_container(container_id, force=True)
+        await self._mark_container_state(container_id, "removed", log_artifact=log_artifact)
+        return log_artifact
+
+    async def _capture_container_logs(
+        self,
+        *,
+        audit_run_id: str,
+        container_id: str,
+        container_name: str | None = None,
+        tail: int | str = "all",
+    ) -> str | None:
+        log_dir = self.settings.artifact_root / "container-logs" / audit_run_id
+        log_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = self._safe_artifact_name(container_name or container_id[:12])
+        log_path = log_dir / f"{safe_name}-{container_id[:12]}.log"
+        try:
+            content = await self.docker.logs(container_id, tail=tail)
+        except Exception as exc:
+            content = f"Failed to read Docker logs before cleanup: {exc}\n"
+        log_path.write_text(content or "", encoding="utf-8", errors="replace")
+        return str(log_path)
+
+    async def _mark_container_state(
+        self,
+        container_id: str,
+        status: str,
+        *,
+        exit_code: int | None = None,
+        log_artifact: str | None = None,
+    ) -> None:
+        async with SessionLocal() as session:
+            row = await session.scalar(select(ContainerRun).where(ContainerRun.container_id == container_id))
+            if row:
+                row.status = status
+                if exit_code is not None:
+                    row.exit_code = exit_code
+                if log_artifact:
+                    row.log_artifact = log_artifact
+            await session.commit()
 
     async def _record_container(
         self,
@@ -785,6 +902,37 @@ class RuntimeOrchestrator:
 
     def _agent_artifact_dir(self, audit_run_id: str, agent_run_id: str) -> Path:
         return self.settings.artifact_root / "agent-runs" / audit_run_id / agent_run_id
+
+    @staticmethod
+    def _container_run_to_dict(row: ContainerRun, live: dict[str, Any] | None = None) -> dict[str, Any]:
+        labels = row.labels or {}
+        names = live.get("Names") if live else None
+        if not names and row.container_name:
+            names = [row.container_name if row.container_name.startswith("/") else f"/{row.container_name}"]
+        state = live.get("State") if live else row.status
+        status = live.get("Status") if live else row.status
+        return {
+            "Id": row.container_id,
+            "Image": live.get("Image") if live else row.image,
+            "Names": names or [],
+            "State": state,
+            "Status": status,
+            "Labels": live.get("Labels") if live else labels,
+            "container_id": row.container_id,
+            "container_name": row.container_name,
+            "agent_run_id": row.agent_run_id,
+            "role": row.role,
+            "db_status": row.status,
+            "exit_code": row.exit_code,
+            "log_artifact": row.log_artifact,
+            "created_at": row.created_at.isoformat(),
+            "updated_at": row.updated_at.isoformat(),
+        }
+
+    @staticmethod
+    def _safe_artifact_name(value: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip("/\\"))
+        return cleaned.strip("-")[:96] or "container"
 
     @staticmethod
     def _bind_mount(source: str, target: str, *, read_only: bool) -> dict[str, Any]:
