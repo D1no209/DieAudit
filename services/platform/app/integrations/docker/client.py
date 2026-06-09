@@ -14,7 +14,7 @@ class DockerApiError(RuntimeError):
 class DockerClient:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.replace("tcp://", "http://").rstrip("/")
-        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=60)
+        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=60, trust_env=False)
 
     async def close(self) -> None:
         await self.client.aclose()
