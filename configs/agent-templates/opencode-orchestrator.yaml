@@ -1,6 +1,6 @@
 name: opencode-orchestrator
 image: dieaudit/opencode-agent:local
-command: ["opencode", "acp"]
+command: ["python", "/app/opencode_acp_runner.py"]
 env:
   AGENT_ROLE: orchestrator
   OPENCODE_DISABLE_AUTOUPDATE: "1"
@@ -8,7 +8,7 @@ model_profile: orchestrator-long-context
 protocol:
   kind: agent-client-protocol
   transport: stdio
-  stdio_command: ["opencode", "acp"]
+  stdio_command: ["python", "/app/opencode_acp_runner.py"]
   runtime: opencode
 workspace_mount:
   target: /workspace

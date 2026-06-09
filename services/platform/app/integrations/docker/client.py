@@ -113,6 +113,12 @@ class DockerClient:
     async def start_container(self, container_id: str) -> None:
         await self.request("POST", f"/containers/{container_id}/start")
 
+    async def wait_container(self, container_id: str) -> dict[str, Any]:
+        response = await self.client.post(f"/containers/{container_id}/wait", timeout=None)
+        if response.status_code >= 400:
+            raise DockerApiError(f"wait container {container_id} failed: {response.status_code} {response.text}")
+        return response.json()
+
     async def inspect_container(self, container_id: str) -> dict[str, Any]:
         return await self.request("GET", f"/containers/{container_id}/json")
 

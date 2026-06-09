@@ -17,10 +17,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep tar \
     && rm -rf /var/lib/apt/lists/*
 
+RUN pip install --no-cache-dir agent-client-protocol==0.10.1
+
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path \
     && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode \
     && opencode --version
 
+COPY services/agents/opencode-agent/opencode_acp_runner.py /app/opencode_acp_runner.py
+
 WORKDIR /workspace
 
-CMD ["opencode", "acp"]
+CMD ["python", "/app/opencode_acp_runner.py"]

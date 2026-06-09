@@ -6,8 +6,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.domain.models import AgentRun, ContainerRun, RuntimeNetwork
+from app.domain.models import AgentRun, AgentRunEvent, ContainerRun, RuntimeNetwork
 from app.integrations.docker import DockerClient
+from app.integrations.protocols import OpenCodeAcpClient
 from app.repositories import SessionLocal
 from app.runtime.opencode_package import OpenCodeRuntimePackageBuilder
 from app.services.templates import TemplateStore
@@ -25,6 +26,7 @@ class RuntimeOrchestrator:
         self.agent_templates = TemplateStore(settings.config_root, "agent-templates")
         self.mcp_templates = TemplateStore(settings.config_root, "mcp-templates")
         self.opencode_packages = OpenCodeRuntimePackageBuilder(settings)
+        self.opencode_client = OpenCodeAcpClient()
 
     async def close(self) -> None:
         await self.docker.close()
@@ -109,6 +111,26 @@ class RuntimeOrchestrator:
                 mcp_servers=mcp_servers,
                 input_payload=input_payload or {},
             )
+            opencode_result: dict[str, Any] | None = None
+            if runtime_package:
+                opencode_result = await self._wait_for_opencode_agent(
+                    agent_run_id=run_id,
+                    container_id=agent_container["id"],
+                    artifact_dir=self._agent_artifact_dir(audit_run_id, run_id),
+                )
+            if runtime_package:
+                await self._record_agent_event(
+                    run_id,
+                    "runtime_package",
+                    {
+                        "path": runtime_package["host_path"],
+                        "content_hash": runtime_package["content_hash"],
+                        "manifest": runtime_package["manifest"],
+                    },
+                )
+            final_status = "running"
+            if opencode_result:
+                final_status = "completed" if opencode_result.get("status") == "completed" else "failed"
             await self._record_agent_run(
                 agent_run_id=run_id,
                 audit_run_id=audit_run_id,
@@ -116,13 +138,15 @@ class RuntimeOrchestrator:
                 agent_name=agent_name,
                 template_name=agent.get("name", agent_name),
                 protocol_kind=protocol_kind,
-                status="running",
+                status=final_status,
                 input_summary=input_payload or {},
                 output_summary={
                     "container_id": agent_container["id"],
                     "mcp_servers": mcp_servers,
                     "runtime_package": runtime_package,
+                    "opencode_result": opencode_result,
                 },
+                error=opencode_result.get("error") if opencode_result and opencode_result.get("status") == "failed" else None,
             )
             return {
                 "run_id": run_id,
@@ -238,7 +262,13 @@ class RuntimeOrchestrator:
         if runtime_config_path:
             env["OPENCODE_CONFIG"] = runtime_config_path
             env["DIEAUDIT_RUNTIME_DIR"] = str(Path(runtime_config_path).parent)
+            env.update(self.opencode_client.command_env())
         binds = self._binds(workspace_host_path, template)
+        artifact_host_path = self._agent_artifact_dir(audit_run_id, agent_run_id)
+        artifact_target = template.get("artifact_mount", {}).get("target", "/artifacts")
+        artifact_host_path.mkdir(parents=True, exist_ok=True)
+        binds.append(f"{artifact_host_path.resolve()}:{artifact_target}:rw")
+        env["ARTIFACT_DIR"] = artifact_target
         if runtime_host_path:
             target = template.get("runtime_mount", {}).get("target", "/dieaudit/runtime")
             binds.append(f"{Path(runtime_host_path).resolve()}:{target}:ro")
@@ -257,6 +287,33 @@ class RuntimeOrchestrator:
         await self.docker.start_container(created["Id"])
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "agent", labels, "running")
         return {"id": created["Id"], "name": name, "image": image, "role": "agent", "template": template["name"]}
+
+    async def _wait_for_opencode_agent(
+        self,
+        *,
+        agent_run_id: str,
+        container_id: str,
+        artifact_dir: Path,
+    ) -> dict[str, Any]:
+        wait_result = await self.docker.wait_container(container_id)
+        result_file = artifact_dir / "agent_result.json"
+        payload: dict[str, Any] = {
+            "status": "failed",
+            "wait_result": wait_result,
+            "artifact": str(result_file),
+        }
+        if result_file.exists():
+            try:
+                payload.update(json.loads(result_file.read_text(encoding="utf-8")))
+            except json.JSONDecodeError as exc:
+                payload["error"] = f"invalid agent_result.json: {exc}"
+        else:
+            payload["error"] = "agent_result.json not found"
+
+        for event in payload.get("events", []):
+            await self._record_agent_event(agent_run_id, event.get("event_type", "acp_event"), event)
+        await self._record_agent_event(agent_run_id, "opencode_result", payload)
+        return payload
 
     async def _record_container(
         self,
@@ -291,6 +348,11 @@ class RuntimeOrchestrator:
                         status=status,
                     )
                 )
+            await session.commit()
+
+    async def _record_agent_event(self, agent_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        async with SessionLocal() as session:
+            session.add(AgentRunEvent(agent_run_id=agent_run_id, event_type=event_type, payload=payload))
             await session.commit()
 
     async def _record_agent_run(
@@ -363,6 +425,9 @@ class RuntimeOrchestrator:
             mode = "ro" if mount.get("read_only", True) else "rw"
             binds.append(f"{source}:{target}:{mode}")
         return binds
+
+    def _agent_artifact_dir(self, audit_run_id: str, agent_run_id: str) -> Path:
+        return self.settings.artifact_root / "agent-runs" / audit_run_id / agent_run_id
 
     @staticmethod
     def _is_opencode_agent(template: dict[str, Any]) -> bool:
