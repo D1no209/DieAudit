@@ -1,6 +1,6 @@
 # DieAudit
 
-DieAudit is a local-first, multi-agent code audit platform skeleton. This first implementation focuses on a runnable Docker Compose environment and a working Docker runtime orchestration path for Agent containers and MCP sidecars.
+DieAudit is a local-first, multi-agent code audit platform. The current implementation focuses on a runnable Docker Compose environment, Docker runtime orchestration for Agent containers and MCP sidecars, OpenCode ACP agents, project import, SCA/static tooling, structured findings, validator attempts, sandbox-assisted PoC execution, and a Qdrant-backed knowledge base.
 
 ## Quick Start
 
@@ -53,7 +53,23 @@ Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/cleanu
 - Each AuditRun gets a dedicated Docker network named `dieaudit-run-{audit_run_id}`.
 - Agent templates live in `configs/agent-templates`.
 - MCP templates live in `configs/mcp-templates`.
-- Mock Agent and MCP images prove that the platform can inject `MCP_SERVERS_JSON` and connect Agent containers to sidecars.
+- Mock Agent images remain only as demo fixtures. Production OpenCode templates are in `configs/agent-templates/opencode-*.yaml`.
+- MCP templates in `configs/mcp-templates` use `dieaudit/tool-mcp:local`; heavy Joern/CodeQL CLIs return structured `available=false` until installed in that image or replaced by dedicated tool images.
+
+## Knowledge Base Embeddings
+
+The knowledge base defaults to deterministic local hash embeddings so Compose works without an external embedding service. For production semantic retrieval, configure an OpenAI-compatible embeddings endpoint and use a dedicated Qdrant collection:
+
+```env
+KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible
+KNOWLEDGE_EMBEDDING_BASE_URL=https://embedding-provider.example/v1
+KNOWLEDGE_EMBEDDING_API_KEY=...
+KNOWLEDGE_EMBEDDING_MODEL=text-embedding-3-small
+KNOWLEDGE_VECTOR_SIZE=1536
+KNOWLEDGE_COLLECTION_NAME=dieaudit_knowledge_embeddings_v1
+```
+
+Do not reuse an existing Qdrant collection when changing embedding dimension or provider. Reindex uploaded knowledge documents after changing these settings.
 
 ## Agent Protocols
 

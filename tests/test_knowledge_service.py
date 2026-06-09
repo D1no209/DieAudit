@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
+import pytest
+
 from app.api.routes import _delete_knowledge_artifact
-from app.services.knowledge import KnowledgeService, embed_text
+from app.services.knowledge import KnowledgeIndexError, KnowledgeService, embed_text
 
 
 def test_chunk_rows_keep_project_scope_and_metadata(tmp_path: Path) -> None:
@@ -34,6 +37,78 @@ def test_embedding_is_normalized_and_stable() -> None:
 
     assert first == second
     assert abs(sum(value * value for value in first) - 1.0) < 0.000001
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_embeddings_parse_response(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("authorization")
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": 1, "embedding": [0.0, 1.0, 0.0]},
+                    {"index": 0, "embedding": [1.0, 0.0, 0.0]},
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant:6333",
+            knowledge_collection_name="test_collection",
+            knowledge_vector_size=3,
+            knowledge_embedding_provider="openai-compatible",
+            knowledge_embedding_base_url="http://embedding.local/v1",
+            knowledge_embedding_api_key="secret",
+            knowledge_embedding_model="embedding-model",
+            knowledge_embedding_timeout_seconds=5,
+        )
+    )
+
+    vectors = await service.embed_texts(["first", "second"])
+
+    assert vectors == [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+    assert captured["url"] == "http://embedding.local/v1/embeddings"
+    assert captured["authorization"] == "Bearer secret"
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_embedding_dimension_mismatch_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 0.0]}]}))
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant:6333",
+            knowledge_collection_name="test_collection",
+            knowledge_vector_size=3,
+            knowledge_embedding_provider="openai-compatible",
+            knowledge_embedding_base_url="http://embedding.local/v1",
+            knowledge_embedding_api_key="",
+            knowledge_embedding_model="embedding-model",
+            knowledge_embedding_timeout_seconds=5,
+        )
+    )
+
+    with pytest.raises(KnowledgeIndexError, match="dimension"):
+        await service.embed_texts(["first"])
 
 
 def test_delete_knowledge_artifact_removes_only_knowledge_document_dir(tmp_path: Path) -> None:

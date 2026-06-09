@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     minio_endpoint: str = "http://minio:9000"
     minio_bucket_artifacts: str = "dieaudit-artifacts"
     qdrant_url: str = "http://qdrant:6333"
+    knowledge_collection_name: str = "dieaudit_knowledge_v1"
+    knowledge_vector_size: int = 1024
+    knowledge_embedding_provider: str = "hash"
+    knowledge_embedding_base_url: str = ""
+    knowledge_embedding_api_key: str = ""
+    knowledge_embedding_model: str = "text-embedding-3-small"
+    knowledge_embedding_timeout_seconds: float = 60.0
     agent_gateway_url: str = "http://agent-gateway:8000"
     dieaudit_api_key: str = ""
     api_key_header: str = "X-DieAudit-Api-Key"

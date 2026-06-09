@@ -28,8 +28,9 @@ class KnowledgeIndexError(RuntimeError):
 class KnowledgeService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.collection_name = COLLECTION_NAME
-        self.vector_size = VECTOR_SIZE
+        self.collection_name = getattr(settings, "knowledge_collection_name", COLLECTION_NAME) or COLLECTION_NAME
+        self.vector_size = int(getattr(settings, "knowledge_vector_size", VECTOR_SIZE) or VECTOR_SIZE)
+        self.embedding_provider = str(getattr(settings, "knowledge_embedding_provider", "hash") or "hash").strip().lower()
 
     def save_upload(
         self,
@@ -105,11 +106,12 @@ class KnowledgeService:
             return
         await self.ensure_collection()
         points = []
-        for chunk in chunks:
+        vectors = await self.embed_texts([chunk["text"] for chunk in chunks])
+        for chunk, vector in zip(chunks, vectors, strict=True):
             points.append(
                 {
                     "id": chunk["vector_id"],
-                    "vector": embed_text(chunk["text"], self.vector_size),
+                    "vector": vector,
                     "payload": {
                         "document_id": chunk["document_id"],
                         "chunk_id": chunk["chunk_id"],
@@ -159,12 +161,13 @@ class KnowledgeService:
             scopes.append(("global", None))
         per_scope = max(limit, 1)
         results: list[dict[str, Any]] = []
+        query_vector = (await self.embed_texts([query]))[0]
         async with httpx.AsyncClient(base_url=self.settings.qdrant_url, timeout=60) as client:
             for scope, scoped_project_id in scopes:
                 response = await client.post(
                     f"/collections/{self.collection_name}/points/search",
                     json={
-                        "vector": embed_text(query, self.vector_size),
+                        "vector": query_vector,
                         "limit": per_scope,
                         "with_payload": True,
                         "filter": _qdrant_filter(scope, scoped_project_id),
@@ -204,6 +207,45 @@ class KnowledgeService:
             )
             if create.status_code >= 400:
                 raise KnowledgeIndexError(create.text)
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if self.embedding_provider in {"hash", "local-hash", ""}:
+            return [embed_text(text, self.vector_size) for text in texts]
+        if self.embedding_provider in {"openai", "openai-compatible"}:
+            return await self._openai_compatible_embeddings(texts)
+        raise KnowledgeIndexError(f"unsupported knowledge embedding provider: {self.embedding_provider}")
+
+    async def _openai_compatible_embeddings(self, texts: list[str]) -> list[list[float]]:
+        base_url = str(getattr(self.settings, "knowledge_embedding_base_url", "") or "").rstrip("/")
+        api_key = str(getattr(self.settings, "knowledge_embedding_api_key", "") or "")
+        model = str(getattr(self.settings, "knowledge_embedding_model", "") or "")
+        timeout = float(getattr(self.settings, "knowledge_embedding_timeout_seconds", 60.0) or 60.0)
+        if not base_url:
+            raise KnowledgeIndexError("KNOWLEDGE_EMBEDDING_BASE_URL is required for openai-compatible embeddings")
+        if not model:
+            raise KnowledgeIndexError("KNOWLEDGE_EMBEDDING_MODEL is required for openai-compatible embeddings")
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        async with httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=headers) as client:
+            response = await client.post("/embeddings", json={"model": model, "input": texts})
+        if response.status_code >= 400:
+            raise KnowledgeIndexError(f"embedding provider failed: {response.status_code} {response.text[-1000:]}")
+        body = response.json()
+        data = body.get("data")
+        if not isinstance(data, list) or len(data) != len(texts):
+            raise KnowledgeIndexError("embedding provider returned unexpected data shape")
+        vectors = []
+        for item in sorted(data, key=lambda value: int(value.get("index", 0))):
+            vector = item.get("embedding")
+            if not isinstance(vector, list) or not vector:
+                raise KnowledgeIndexError("embedding provider returned an empty embedding")
+            if len(vector) != self.vector_size:
+                raise KnowledgeIndexError(
+                    f"embedding dimension {len(vector)} does not match KNOWLEDGE_VECTOR_SIZE={self.vector_size}"
+                )
+            vectors.append([float(value) for value in vector])
+        return vectors
 
 
 def embed_text(text: str, size: int = VECTOR_SIZE) -> list[float]:
