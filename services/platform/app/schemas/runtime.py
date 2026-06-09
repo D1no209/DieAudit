@@ -62,3 +62,20 @@ class ValidatorScaleRequest(BaseModel):
     allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
     wait_for_completion: bool = False
+
+
+class RunPocRequest(BaseModel):
+    image: str = "python:3.12-slim"
+    command: list[str] = Field(
+        default_factory=lambda: [
+            "python",
+            "-c",
+            "import os; print('dieaudit poc smoke'); print(os.listdir('/workspace')[:20] if os.path.exists('/workspace') else 'no workspace')",
+        ],
+        min_length=1,
+    )
+    env: dict[str, str] = Field(default_factory=dict)
+    allow_external_network: bool = False
+    retain_runtime_on_failure: bool = False
+    timeout_seconds: int = Field(default=120, ge=1, le=3600)
+    mount_workspace: bool = True

@@ -124,6 +124,12 @@ class DockerClient:
     async def start_container(self, container_id: str) -> None:
         await self.request("POST", f"/containers/{container_id}/start")
 
+    async def stop_container(self, container_id: str, *, timeout_seconds: int = 1) -> None:
+        try:
+            await self.request("POST", f"/containers/{container_id}/stop", params={"t": timeout_seconds})
+        except DockerApiError:
+            pass
+
     async def wait_container(self, container_id: str) -> dict[str, Any]:
         response = await self.client.post(f"/containers/{container_id}/wait", timeout=None)
         if response.status_code >= 400:

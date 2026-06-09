@@ -347,6 +347,33 @@ function App() {
     });
   }
 
+  async function runPocSmoke() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/poc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: "python:3.12-slim",
+          command: [
+            "python",
+            "-c",
+            "import os, json; print('dieaudit poc smoke'); print(json.dumps(os.listdir('/workspace')[:20] if os.path.exists('/workspace') else []))",
+          ],
+          allow_external_network: false,
+          timeout_seconds: 120,
+        }),
+      });
+      setLastResponse(result);
+      await refreshAuditRun(auditRun.audit_run_id);
+      const managed = await readJson("/gateway/runtime/managed");
+      setManagedRuntime(managed);
+    });
+  }
+
   function downloadReport(reportId: string) {
     window.open(`/gateway/reports/${reportId}/download`, "_blank", "noopener,noreferrer");
   }
@@ -516,6 +543,7 @@ function App() {
               <Button icon={<PlayCircleOutlined />} loading={loading} onClick={runPipeline}>一键闭环</Button>
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runSca}>SCA 扫描</Button>
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
+              <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runPocSmoke}>PoC Smoke</Button>
               <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
               <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={cancelAuditRun}>取消</Button>
               <Button icon={<DeleteOutlined />} loading={loading} onClick={cleanupExpiredRuntime}>清理过期</Button>
