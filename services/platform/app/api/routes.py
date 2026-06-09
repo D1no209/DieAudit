@@ -48,6 +48,7 @@ from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_
 from app.services.dependency_scanner import DependencyScanner
 from app.services.finding_dedupe import find_existing_finding, finding_identity
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService
+from app.services.pipeline_executor import PipelineCancelled, PipelineExecutor
 from app.services.pipeline_recovery import is_active_pipeline
 from app.services.templates import TemplateStore
 from app.services.workspace import WorkspaceImportError, WorkspaceService
@@ -77,10 +78,6 @@ PRODUCTION_MCP_TEMPLATES = {
 OPTIONAL_HEAVY_MCP_TEMPLATES = {"joern-mcp", "codeql-mcp"}
 
 
-class PipelineCancelled(RuntimeError):
-    pass
-
-
 def register_runtime_routes(settings: Settings, runtime_provider: callable) -> APIRouter:
     async def proxy_gateway(path: str, *, method: str = "GET", json: dict[str, Any] | None = None) -> Any:
         headers = {}
@@ -95,6 +92,27 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if "application/json" in content_type:
             return response.json()
         return response.text
+
+    def pipeline_executor(runtime: Any) -> PipelineExecutor:
+        return PipelineExecutor(
+            settings=settings,
+            runtime=runtime,
+            get_audit_run=_get_audit_run,
+            mark_audit_run_status=_mark_audit_run_status,
+            set_pipeline_state=_set_pipeline_state,
+            record_audit_run_event=_record_audit_run_event,
+            record_pipeline_event=_record_pipeline_event,
+            record_pipeline_summary=_record_pipeline_summary,
+            raise_if_cancelled=_raise_if_cancelled,
+            is_cancel_requested=_is_cancel_requested,
+            cancel_reason=_cancel_reason,
+            list_findings=_list_findings,
+            run_sca=_run_sca_mcp,
+            run_semgrep=_run_semgrep_mcp,
+            judge_audit_run=_judge_audit_run_internal,
+            generate_report=_generate_report_internal,
+            compact_event_payload=_compact_event_payload,
+        )
 
     @router.get("/health")
     async def health() -> dict[str, Any]:
@@ -606,7 +624,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         await _mark_audit_run_status(audit_run_id, "queued")
         await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
         await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued"})
-        background_tasks.add_task(_execute_pipeline, audit_run_id, settings, runtime)
+        background_tasks.add_task(pipeline_executor(runtime).execute, audit_run_id)
         return {"audit_run_id": audit_run_id, "status": "accepted"}
 
     @router.post("/audit-runs/{audit_run_id}/cancel")
@@ -641,120 +659,6 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             "cleanup": cleanup_result,
             "cleanup_error": cleanup_error,
         }
-
-    async def _execute_pipeline(audit_run_id: str, settings: Settings, runtime) -> None:
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
-            return
-        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
-        if not workspace_path:
-            await _mark_audit_run_status(audit_run_id, "failed")
-            await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error="audit run has no workspace path")
-            await _record_audit_run_event(audit_run_id, "pipeline_failed", {"error": "audit run has no workspace path"})
-            return
-        await _mark_audit_run_status(audit_run_id, "running")
-        await _set_pipeline_state(audit_run_id, stage="agent-audit", status="running")
-        await _record_audit_run_event(audit_run_id, "pipeline_started", {"stage": "agent-audit"})
-        steps: list[dict[str, Any]] = []
-        try:
-            await _raise_if_cancelled(audit_run_id)
-            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "agent-audit"})
-            agent_result = await runtime.start_agent_run(
-                audit_run_id=audit_run_id,
-                project_id=audit_run["project_id"],
-                agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
-                workspace_host_path=workspace_path,
-                allow_external_network=audit_run["allow_external_network"],
-                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                input_payload=audit_run.get("config", {}).get("input_payload")
-                or {
-                    "goal": (
-                        "Run a structured security audit pass. Return JSON with summary, findings, and evidence. "
-                        "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
-                    )
-                },
-            )
-            steps.append({"step": "agent-audit", "result": agent_result})
-            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "agent-audit", "result": _compact_event_payload(agent_result)})
-            await _raise_if_cancelled(audit_run_id)
-
-            await _set_pipeline_state(audit_run_id, stage="sca", status="running")
-            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "sca"})
-            try:
-                sca_result = await _run_sca_mcp(audit_run_id, audit_run["project_id"], workspace_path, runtime, audit_run)
-            except Exception as exc:
-                sca_result = {"ok": False, "error": str(exc)}
-                await _record_pipeline_event(audit_run_id, "sca_failed", sca_result)
-            steps.append({"step": "sca", "result": sca_result})
-            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "sca", "result": _compact_event_payload(sca_result)})
-            await _raise_if_cancelled(audit_run_id)
-
-            await _set_pipeline_state(audit_run_id, stage="semgrep", status="running")
-            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "semgrep"})
-            try:
-                semgrep_result = await _run_semgrep_mcp(audit_run_id, audit_run["project_id"], workspace_path, runtime, audit_run)
-            except Exception as exc:
-                semgrep_result = {"ok": False, "error": str(exc)}
-                await _record_pipeline_event(audit_run_id, "semgrep_failed", semgrep_result)
-            steps.append({"step": "semgrep", "result": semgrep_result})
-            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "semgrep", "result": _compact_event_payload(semgrep_result)})
-            await _raise_if_cancelled(audit_run_id)
-
-            findings = await _list_findings(audit_run_id)
-            await _set_pipeline_state(audit_run_id, stage="validators", status="running")
-            await _record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_started",
-                {"step": "validators", "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"]},
-            )
-            validator_result = await runtime.scale_validators(
-                audit_run_id=audit_run_id,
-                project_id=audit_run["project_id"],
-                findings=findings,
-                workspace_host_path=workspace_path,
-                validator_rounds=audit_run["validator_rounds"],
-                max_parallel_validators=audit_run["max_parallel_validators"],
-                validator_agent_name="opencode-validator",
-                allow_external_network=audit_run["allow_external_network"],
-                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                wait_for_completion=True,
-            )
-            steps.append({"step": "validators", "result": validator_result})
-            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "validators", "result": _compact_event_payload(validator_result)})
-            await _raise_if_cancelled(audit_run_id)
-
-            await _set_pipeline_state(audit_run_id, stage="judgement", status="running")
-            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "judgement"})
-            judge_result = await _judge_audit_run_internal(audit_run_id, runtime)
-            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "judgement", "result": _compact_event_payload(judge_result)})
-            await _raise_if_cancelled(audit_run_id)
-            await _set_pipeline_state(audit_run_id, stage="report", status="running")
-            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "report"})
-            report_result = await _generate_report_internal(audit_run_id, settings)
-            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "report", "result": _compact_event_payload(report_result)})
-            await _record_pipeline_summary(audit_run_id, {"steps": steps, "judge": judge_result, "report": report_result})
-            await _mark_audit_run_status(audit_run_id, "completed")
-            await _set_pipeline_state(audit_run_id, stage="completed", status="completed")
-            await _record_audit_run_event(audit_run_id, "pipeline_completed", {"report": _compact_event_payload(report_result)})
-        except PipelineCancelled as exc:
-            await _mark_audit_run_status(audit_run_id, "cancelled")
-            await _set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error=str(exc))
-            await _record_audit_run_event(audit_run_id, "pipeline_cancelled", {"reason": str(exc), "steps": [_compact_event_payload(step) for step in steps]})
-        except Exception as exc:
-            if await _is_cancel_requested(audit_run_id):
-                reason = await _cancel_reason(audit_run_id)
-                await _mark_audit_run_status(audit_run_id, "cancelled")
-                await _set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error=reason or str(exc))
-                await _record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_cancelled",
-                    {"reason": reason or str(exc), "error": str(exc), "steps": [_compact_event_payload(step) for step in steps]},
-                )
-                return
-            await _record_pipeline_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": steps})
-            await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error=str(exc))
-            await _record_audit_run_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": [_compact_event_payload(step) for step in steps]})
-            await _mark_audit_run_status(audit_run_id, "failed")
 
     @router.post("/audit-runs/{audit_run_id}/judge")
     async def judge_audit_run(audit_run_id: str) -> dict[str, Any]:
