@@ -82,14 +82,23 @@ async def main() -> int:
                 }
             )
     except Exception as exc:
-        result.update(
-            {
-                "status": "failed",
-                "error": repr(exc),
-                "traceback": traceback.format_exc(),
-                "events": client.events,
-            }
-        )
+        if result.get("status") == "completed" and result.get("response"):
+            result.update(
+                {
+                    "close_error": repr(exc),
+                    "close_traceback": traceback.format_exc(),
+                    "events": client.events,
+                }
+            )
+        else:
+            result.update(
+                {
+                    "status": "failed",
+                    "error": repr(exc),
+                    "traceback": traceback.format_exc(),
+                    "events": client.events,
+                }
+            )
     result_file.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps({"dieaudit_result": str(result_file), "status": result["status"]}), flush=True)
     return 0 if result["status"] == "completed" else 1

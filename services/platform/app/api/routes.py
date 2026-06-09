@@ -181,6 +181,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             project_id="opencode-demo-project",
             agent_name="opencode-orchestrator",
             workspace_host_path=str(workspace),
+            allow_external_network=True,
             input_payload={
                 "goal": (
                     "Run a minimal code-audit pass over the demo project. Confirm you can inspect "

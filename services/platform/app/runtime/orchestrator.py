@@ -1,9 +1,12 @@
 import json
+import ntpath
+import posixpath
 import uuid
 import asyncio
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 
@@ -28,6 +31,7 @@ class RuntimeOrchestrator:
         self.mcp_templates = TemplateStore(settings.config_root, "mcp-templates")
         self.opencode_packages = OpenCodeRuntimePackageBuilder(settings)
         self.opencode_client = OpenCodeAcpClient()
+        self._gateway_mounts: list[dict[str, Any]] | None = None
 
     async def close(self) -> None:
         await self.docker.close()
@@ -288,7 +292,7 @@ class RuntimeOrchestrator:
         labels["dieaudit.mcp"] = template["name"]
         labels["dieaudit.agent_run_id"] = agent_run_id
 
-        binds = self._binds(workspace_host_path, template)
+        mounts = await self._mounts(workspace_host_path, template)
         payload = self._container_payload(
             image=image,
             command=template.get("command"),
@@ -296,7 +300,7 @@ class RuntimeOrchestrator:
             labels=labels,
             network_name=network_name,
             aliases=[name, template["name"]],
-            binds=binds,
+            mounts=mounts,
             read_only=template.get("read_only", True),
             healthcheck=template.get("healthcheck"),
         )
@@ -336,19 +340,20 @@ class RuntimeOrchestrator:
             "MCP_SERVERS_JSON": json.dumps(mcp_servers),
             "AGENT_INPUT_JSON": json.dumps(input_payload),
         }
+        self._inject_no_proxy(env, mcp_servers)
         if runtime_config_path:
             env["OPENCODE_CONFIG"] = runtime_config_path
             env["DIEAUDIT_RUNTIME_DIR"] = str(Path(runtime_config_path).parent)
             env.update(self.opencode_client.command_env())
-        binds = self._binds(workspace_host_path, template)
+        mounts = await self._mounts(workspace_host_path, template)
         artifact_host_path = self._agent_artifact_dir(audit_run_id, agent_run_id)
         artifact_target = template.get("artifact_mount", {}).get("target", "/artifacts")
         artifact_host_path.mkdir(parents=True, exist_ok=True)
-        binds.append(f"{artifact_host_path.resolve()}:{artifact_target}:rw")
+        mounts.append(self._bind_mount(await self._host_path_for(artifact_host_path), artifact_target, read_only=False))
         env["ARTIFACT_DIR"] = artifact_target
         if runtime_host_path:
             target = template.get("runtime_mount", {}).get("target", "/dieaudit/runtime")
-            binds.append(f"{Path(runtime_host_path).resolve()}:{target}:ro")
+            mounts.append(self._bind_mount(await self._host_path_for(Path(runtime_host_path)), target, read_only=True))
         payload = self._container_payload(
             image=image,
             command=template.get("command"),
@@ -356,7 +361,7 @@ class RuntimeOrchestrator:
             labels=labels,
             network_name=network_name,
             aliases=[name, template["name"]],
-            binds=binds,
+            mounts=mounts,
             read_only=template.get("read_only", True),
             healthcheck=template.get("healthcheck"),
         )
@@ -525,21 +530,62 @@ class RuntimeOrchestrator:
                 network.status = "cleaned"
             await session.commit()
 
-    def _binds(self, workspace_host_path: str | None, template: dict[str, Any]) -> list[str]:
-        binds: list[str] = []
+    async def _mounts(self, workspace_host_path: str | None, template: dict[str, Any]) -> list[dict[str, Any]]:
+        mounts: list[dict[str, Any]] = []
         if workspace_host_path:
             target = template.get("workspace_mount", {}).get("target", "/workspace")
-            mode = "ro" if template.get("workspace_mount", {}).get("read_only", True) else "rw"
-            binds.append(f"{Path(workspace_host_path).resolve()}:{target}:{mode}")
+            read_only = template.get("workspace_mount", {}).get("read_only", True)
+            mounts.append(self._bind_mount(await self._host_path_for(Path(workspace_host_path)), target, read_only=read_only))
         for mount in template.get("mounts", []):
-            source = mount["source"]
+            source = await self._host_path_for(Path(mount["source"]))
             target = mount["target"]
-            mode = "ro" if mount.get("read_only", True) else "rw"
-            binds.append(f"{source}:{target}:{mode}")
-        return binds
+            mounts.append(self._bind_mount(source, target, read_only=mount.get("read_only", True)))
+        return mounts
+
+    async def _host_path_for(self, path: Path) -> str:
+        requested = PurePosixPath(str(path).replace("\\", "/"))
+        for mount in await self._current_gateway_mounts():
+            if mount.get("Type") != "bind":
+                continue
+            destination = PurePosixPath(str(mount.get("Destination", "")).replace("\\", "/"))
+            try:
+                relative = requested.relative_to(destination)
+            except ValueError:
+                continue
+
+            source = str(mount["Source"])
+            if "\\" in source or (len(source) > 1 and source[1] == ":"):
+                return ntpath.join(source, *relative.parts)
+            return posixpath.join(source, *relative.parts)
+        return str(path.resolve())
+
+    async def _current_gateway_mounts(self) -> list[dict[str, Any]]:
+        if self._gateway_mounts is None:
+            info = await self.docker.inspect_container(self.settings.agent_gateway_container_name)
+            self._gateway_mounts = info.get("Mounts", [])
+        return self._gateway_mounts
 
     def _agent_artifact_dir(self, audit_run_id: str, agent_run_id: str) -> Path:
         return self.settings.artifact_root / "agent-runs" / audit_run_id / agent_run_id
+
+    @staticmethod
+    def _bind_mount(source: str, target: str, *, read_only: bool) -> dict[str, Any]:
+        return {"Type": "bind", "Source": source, "Target": target, "ReadOnly": read_only}
+
+    @staticmethod
+    def _inject_no_proxy(env: dict[str, Any], mcp_servers: dict[str, dict[str, str]]) -> None:
+        internal_hosts = ["localhost", "127.0.0.1", "agent-gateway", "host.docker.internal"]
+        for server in mcp_servers.values():
+            hostname = urlparse(server["url"]).hostname
+            if hostname:
+                internal_hosts.append(hostname)
+        existing = str(env.get("NO_PROXY") or env.get("no_proxy") or "")
+        merged = [item for item in existing.split(",") if item]
+        for host in internal_hosts:
+            if host not in merged:
+                merged.append(host)
+        env["NO_PROXY"] = ",".join(merged)
+        env["no_proxy"] = env["NO_PROXY"]
 
     @staticmethod
     def _is_opencode_agent(template: dict[str, Any]) -> bool:
@@ -555,7 +601,7 @@ class RuntimeOrchestrator:
         labels: dict[str, str],
         network_name: str,
         aliases: list[str],
-        binds: list[str],
+        mounts: list[dict[str, Any]],
         read_only: bool,
         healthcheck: dict[str, Any] | None,
     ) -> dict[str, Any]:
@@ -566,7 +612,8 @@ class RuntimeOrchestrator:
             "Labels": labels,
             "HostConfig": {
                 "NetworkMode": network_name,
-                "Binds": binds,
+                "Mounts": mounts,
+                "ExtraHosts": ["host.docker.internal:host-gateway"],
                 "ReadonlyRootfs": read_only,
                 "AutoRemove": False,
                 "CapDrop": ["ALL"],
