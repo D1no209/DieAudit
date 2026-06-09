@@ -1,8 +1,11 @@
 import os
+import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
@@ -104,6 +107,55 @@ def read_snippet(path: str, line: int, context: int = 5) -> dict[str, Any]:
     return {"path": target.relative_to(WORKSPACE_ROOT).as_posix(), "start": start, "end": end, "snippet": snippet}
 
 
+@mcp.tool()
+def detect_dependencies() -> dict[str, Any]:
+    """Detect dependencies from common project manifest and lock files."""
+    packages = _detect_dependencies()
+    return {"packages": packages, "count": len(packages)}
+
+
+@mcp.tool()
+def query_osv(max_packages: int = 200) -> dict[str, Any]:
+    """Query OSV for detected dependency vulnerabilities."""
+    packages = _detect_dependencies()[: max(1, min(max_packages, 1000))]
+    queries = [{"package": {"name": item["name"], "ecosystem": item["ecosystem"]}, "version": item["version"]} for item in packages if item.get("version")]
+    if not queries:
+        return {"packages": packages, "vulnerabilities": [], "findings": []}
+    response = httpx.post("https://api.osv.dev/v1/querybatch", json={"queries": queries}, timeout=60)
+    response.raise_for_status()
+    results = response.json().get("results", [])
+    vulnerabilities = []
+    findings = []
+    for package, result in zip(packages, results, strict=False):
+        for vuln in result.get("vulns", []) or []:
+            normalized = {
+                "package": package,
+                "id": vuln.get("id"),
+                "aliases": vuln.get("aliases", []),
+                "summary": vuln.get("summary"),
+                "details": vuln.get("details"),
+                "modified": vuln.get("modified"),
+                "published": vuln.get("published"),
+                "database_specific": vuln.get("database_specific", {}),
+            }
+            vulnerabilities.append(normalized)
+            findings.append(
+                {
+                    "title": f"Vulnerable dependency {package['name']} {package.get('version')}",
+                    "severity": _osv_severity(vuln),
+                    "status": "candidate",
+                    "file_path": package.get("manifest"),
+                    "line_start": None,
+                    "line_end": None,
+                    "rule_id": vuln.get("id"),
+                    "description": vuln.get("summary") or vuln.get("details"),
+                    "source": "sca-mcp",
+                    "raw": normalized,
+                }
+            )
+    return {"packages": packages, "vulnerabilities": vulnerabilities, "findings": findings}
+
+
 def _safe_path(path: str) -> Path:
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -119,6 +171,87 @@ def _split_rg_line(line: str) -> tuple[str, str, str, str]:
     if len(parts) != 4:
         raise ValueError(f"unexpected ripgrep output: {line}")
     return parts[0], parts[1], parts[2], parts[3]
+
+
+def _detect_dependencies() -> list[dict[str, Any]]:
+    packages: list[dict[str, Any]] = []
+    packages.extend(_npm_package_lock())
+    packages.extend(_python_requirements())
+    seen = set()
+    deduped = []
+    for item in packages:
+        key = (item["ecosystem"], item["name"].lower(), item.get("version"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _npm_package_lock() -> list[dict[str, Any]]:
+    result = []
+    for lockfile in WORKSPACE_ROOT.rglob("package-lock.json"):
+        if not _is_safe_file(lockfile):
+            continue
+        data = json.loads(lockfile.read_text(encoding="utf-8", errors="replace"))
+        packages = data.get("packages") or {}
+        for path, body in packages.items():
+            if not path.startswith("node_modules/"):
+                continue
+            name = body.get("name") or path.removeprefix("node_modules/")
+            version = body.get("version")
+            if name and version:
+                result.append(
+                    {
+                        "ecosystem": "npm",
+                        "name": name,
+                        "version": version,
+                        "manifest": lockfile.relative_to(WORKSPACE_ROOT).as_posix(),
+                    }
+                )
+    return result
+
+
+def _python_requirements() -> list[dict[str, Any]]:
+    result = []
+    pattern = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*==\s*([A-Za-z0-9_.!+-]+)")
+    for requirements in WORKSPACE_ROOT.rglob("requirements*.txt"):
+        if not _is_safe_file(requirements):
+            continue
+        for line in requirements.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = pattern.match(line)
+            if not match:
+                continue
+            result.append(
+                {
+                    "ecosystem": "PyPI",
+                    "name": match.group(1),
+                    "version": match.group(2),
+                    "manifest": requirements.relative_to(WORKSPACE_ROOT).as_posix(),
+                }
+            )
+    return result
+
+
+def _is_safe_file(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return resolved.is_file() and (resolved == WORKSPACE_ROOT or WORKSPACE_ROOT in resolved.parents)
+
+
+def _osv_severity(vuln: dict[str, Any]) -> str:
+    severities = vuln.get("severity") or []
+    for item in severities:
+        score = item.get("score", "")
+        if score.startswith("CVSS:"):
+            if any(token in score for token in ("/C:H", "/C:C")):
+                return "high"
+    aliases = " ".join(vuln.get("aliases", []))
+    if "GHSA" in aliases or "CVE" in aliases:
+        return "medium"
+    return "unknown"
 
 
 if __name__ == "__main__":

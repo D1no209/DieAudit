@@ -18,6 +18,7 @@ from app.schemas import (
     TemplateBody,
     ValidatorScaleRequest,
 )
+from app.services.dependency_scanner import DependencyScanner
 from app.services.templates import TemplateStore
 from app.services.workspace import WorkspaceImportError, WorkspaceService
 from app.settings import Settings
@@ -238,6 +239,46 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             session.add(finding)
             await session.commit()
             return _finding_to_dict(finding)
+
+    @router.post("/audit-runs/{audit_run_id}/sca")
+    async def run_sca(audit_run_id: str) -> dict[str, Any]:
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        if not workspace_path:
+            raise HTTPException(status_code=400, detail="audit run has no workspace path")
+        try:
+            result = await DependencyScanner(workspace_path).scan_osv()
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        created = []
+        async with SessionLocal() as session:
+            for item in result["findings"]:
+                finding = Finding(
+                    finding_id=str(uuid.uuid4()),
+                    audit_run_id=audit_run_id,
+                    project_id=audit_run["project_id"],
+                    title=item["title"],
+                    severity=item["severity"],
+                    status=item["status"],
+                    file_path=item.get("file_path"),
+                    line_start=item.get("line_start"),
+                    line_end=item.get("line_end"),
+                    rule_id=item.get("rule_id"),
+                    description=item.get("description"),
+                    source=item.get("source", "sca-osv"),
+                    raw=item.get("raw", {}),
+                )
+                session.add(finding)
+                created.append(finding)
+            await session.commit()
+            return {
+                "audit_run_id": audit_run_id,
+                "packages": result["packages"],
+                "vulnerabilities": result["vulnerabilities"],
+                "findings": [_finding_to_dict(row) for row in created],
+            }
 
     @router.get("/runtime/protocols")
     async def runtime_protocols() -> dict[str, Any]:
