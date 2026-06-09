@@ -200,6 +200,7 @@ class RuntimeOrchestrator:
         for container in containers:
             cid = container["Id"]
             removed.append({"id": cid, "names": container.get("Names", [])})
+            exit_code = await self._container_exit_code(cid)
             log_artifact = await self._capture_container_logs(
                 audit_run_id=audit_run_id,
                 container_id=cid,
@@ -207,7 +208,7 @@ class RuntimeOrchestrator:
                 tail="all",
             )
             await self.docker.remove_container(cid, force=True)
-            await self._mark_container_state(cid, "removed", log_artifact=log_artifact)
+            await self._mark_container_state(cid, "removed", exit_code=exit_code, log_artifact=log_artifact)
 
         removed_networks = []
         networks = await self.docker.list_networks_by_run(audit_run_id)
@@ -603,6 +604,7 @@ class RuntimeOrchestrator:
         container_id: str,
         container_name: str | None = None,
     ) -> str | None:
+        exit_code = await self._container_exit_code(container_id)
         log_artifact = await self._capture_container_logs(
             audit_run_id=audit_run_id,
             container_id=container_id,
@@ -610,8 +612,17 @@ class RuntimeOrchestrator:
             tail="all",
         )
         await self.docker.remove_container(container_id, force=True)
-        await self._mark_container_state(container_id, "removed", log_artifact=log_artifact)
+        await self._mark_container_state(container_id, "removed", exit_code=exit_code, log_artifact=log_artifact)
         return log_artifact
+
+    async def _container_exit_code(self, container_id: str) -> int | None:
+        try:
+            info = await self.docker.inspect_container(container_id)
+        except Exception:
+            return None
+        state = info.get("State") or {}
+        exit_code = state.get("ExitCode")
+        return int(exit_code) if exit_code is not None else None
 
     async def _capture_container_logs(
         self,
