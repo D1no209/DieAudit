@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     default_container_tmpfs: str = "/tmp:rw,nosuid,size=128m"
     platform_audit_event_retention_days: int = 30
     platform_audit_event_max_rows: int = 10000
+    pipeline_recovery_on_startup: bool = True
 
 
 @lru_cache

@@ -18,6 +18,7 @@ from app.services.auth import (
     reset_current_api_key,
     set_current_api_key,
 )
+from app.services.pipeline_recovery import recover_interrupted_pipelines
 from app.settings import get_settings
 
 
@@ -32,6 +33,8 @@ async def lifespan(app: FastAPI):
         await init_db()
     if settings.service_name in {"agent-gateway", "sandbox-runner"}:
         runtime = RuntimeOrchestrator(settings)
+    if settings.service_name == "agent-gateway" and settings.pipeline_recovery_on_startup:
+        await recover_interrupted_pipelines(service_name=settings.service_name)
     yield
     if runtime:
         await runtime.close()
