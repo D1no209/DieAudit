@@ -15,6 +15,7 @@ from app.integrations.docker import DockerClient
 from app.integrations.protocols import OpenCodeAcpClient
 from app.repositories import SessionLocal
 from app.runtime.opencode_package import OpenCodeRuntimePackageBuilder
+from app.services.agent_output import AgentOutputIngestor
 from app.services.templates import TemplateStore
 from app.settings import Settings
 
@@ -31,6 +32,7 @@ class RuntimeOrchestrator:
         self.mcp_templates = TemplateStore(settings.config_root, "mcp-templates")
         self.opencode_packages = OpenCodeRuntimePackageBuilder(settings)
         self.opencode_client = OpenCodeAcpClient()
+        self.agent_output_ingestor = AgentOutputIngestor()
         self._gateway_mounts: list[dict[str, Any]] | None = None
 
     async def close(self) -> None:
@@ -118,11 +120,18 @@ class RuntimeOrchestrator:
                 input_payload=input_payload or {},
             )
             opencode_result: dict[str, Any] | None = None
+            structured_ingest: dict[str, Any] | None = None
             if runtime_package:
                 opencode_result = await self._wait_for_opencode_agent(
                     agent_run_id=run_id,
                     container_id=agent_container["id"],
                     artifact_dir=self._agent_artifact_dir(audit_run_id, run_id),
+                )
+                structured_ingest = await self.agent_output_ingestor.ingest(
+                    agent_run_id=run_id,
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    payload=opencode_result,
                 )
             if runtime_package:
                 await self._record_agent_event(
@@ -151,7 +160,9 @@ class RuntimeOrchestrator:
                     "mcp_servers": mcp_servers,
                     "runtime_package": runtime_package,
                     "opencode_result": opencode_result,
+                    "structured_ingest": structured_ingest,
                 },
+                artifact_path=opencode_result.get("artifact") if opencode_result else None,
                 error=opencode_result.get("error") if opencode_result and opencode_result.get("status") == "failed" else None,
             )
             return {
@@ -489,6 +500,7 @@ class RuntimeOrchestrator:
         input_summary: dict[str, Any] | None = None,
         output_summary: dict[str, Any] | None = None,
         error: str | None = None,
+        artifact_path: str | None = None,
     ) -> None:
         async with SessionLocal() as session:
             existing = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
@@ -496,6 +508,8 @@ class RuntimeOrchestrator:
                 existing.status = status
                 existing.output_summary = output_summary or existing.output_summary
                 existing.error = error
+                if artifact_path:
+                    existing.artifact_path = artifact_path
             else:
                 session.add(
                     AgentRun(
@@ -508,6 +522,7 @@ class RuntimeOrchestrator:
                         status=status,
                         input_summary=input_summary or {},
                         output_summary=output_summary or {},
+                        artifact_path=artifact_path,
                         error=error,
                     )
                 )
