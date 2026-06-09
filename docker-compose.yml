@@ -1,0 +1,356 @@
+name: ${COMPOSE_PROJECT_NAME:-dieaudit}
+
+x-platform-env: &platform-env
+  PYTHONUNBUFFERED: "1"
+  POSTGRES_DSN: postgresql://${POSTGRES_USER:-dieaudit}:${POSTGRES_PASSWORD:-dieaudit}@postgres:5432/${POSTGRES_DB:-dieaudit}
+  POSTGRES_ASYNC_DSN: postgresql+psycopg://${POSTGRES_USER:-dieaudit}:${POSTGRES_PASSWORD:-dieaudit}@postgres:5432/${POSTGRES_DB:-dieaudit}
+  REDIS_URL: redis://redis:6379/0
+  NATS_URL: nats://${NATS_USER:-dieaudit}:${NATS_PASSWORD:-dieaudit}@nats:4222
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-dieaudit}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-dieaudit-secret}
+  MINIO_BUCKET_ARTIFACTS: ${MINIO_BUCKET_ARTIFACTS:-dieaudit-artifacts}
+  QDRANT_URL: http://qdrant:6333
+  TEMPORAL_ADDRESS: temporal:7233
+  DOCKER_HOST: ${DOCKER_HOST:-tcp://docker-socket-proxy:2375}
+  CONFIG_ROOT: /app/configs
+  WORKSPACE_ROOT: /dieaudit/workspaces
+  ARTIFACT_ROOT: /dieaudit/artifacts
+  DYNAMIC_CONTAINER_PREFIX: dieaudit
+  AGENT_GATEWAY_CONTAINER_NAME: dieaudit-agent-gateway
+
+x-platform-service: &platform-service
+  build:
+    context: .
+    dockerfile: services/platform/Dockerfile
+  restart: unless-stopped
+  networks:
+    - platform
+  volumes:
+    - ./configs:/app/configs
+    - ./data/workspaces:/dieaudit/workspaces
+    - ./data/artifacts:/dieaudit/artifacts
+  environment:
+    <<: *platform-env
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:80"
+    volumes:
+      - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      web-ui:
+        condition: service_started
+      web-api:
+        condition: service_healthy
+      agent-gateway:
+        condition: service_healthy
+    networks:
+      - platform
+
+  web-ui:
+    build:
+      context: .
+      dockerfile: services/web-ui/Dockerfile
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    networks:
+      - platform
+
+  web-api:
+    <<: *platform-service
+    profiles: ["core", "demo"]
+    container_name: dieaudit-web-api
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: web-api
+      AGENT_GATEWAY_URL: http://agent-gateway:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    ports:
+      - "${WEB_API_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  workflow-worker:
+    <<: *platform-service
+    profiles: ["core", "demo"]
+    container_name: dieaudit-workflow-worker
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: workflow-worker
+    depends_on:
+      temporal:
+        condition: service_started
+      web-api:
+        condition: service_healthy
+
+  agent-gateway:
+    <<: *platform-service
+    profiles: ["core", "demo"]
+    container_name: dieaudit-agent-gateway
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: agent-gateway
+    depends_on:
+      docker-socket-proxy:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    ports:
+      - "${AGENT_GATEWAY_PORT:-18001}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  workspace-engine:
+    <<: *platform-service
+    profiles: ["core", "demo"]
+    container_name: dieaudit-workspace-engine
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: workspace-engine
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  sandbox-runner:
+    <<: *platform-service
+    profiles: ["core", "demo"]
+    container_name: dieaudit-sandbox-runner
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: sandbox-runner
+    depends_on:
+      docker-socket-proxy:
+        condition: service_started
+
+  kb-indexer:
+    <<: *platform-service
+    profiles: ["core", "demo"]
+    container_name: dieaudit-kb-indexer
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: kb-indexer
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dieaudit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dieaudit}
+      POSTGRES_DB: ${POSTGRES_DB:-dieaudit}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dieaudit} -d ${POSTGRES_DB:-dieaudit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - platform
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    networks:
+      - platform
+
+  nats:
+    image: nats:2.10-alpine
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    command: ["-js", "-m", "8222", "--user", "${NATS_USER:-dieaudit}", "--pass", "${NATS_PASSWORD:-dieaudit}"]
+    ports:
+      - "${NATS_MONITOR_PORT:-18222}:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    networks:
+      - platform
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dieaudit}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dieaudit-secret}
+    ports:
+      - "${MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - platform
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: ["core", "demo"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-dieaudit} ${MINIO_ROOT_PASSWORD:-dieaudit-secret} &&
+      mc mb --ignore-existing local/${MINIO_BUCKET_ARTIFACTS:-dieaudit-artifacts} &&
+      mc anonymous set none local/${MINIO_BUCKET_ARTIFACTS:-dieaudit-artifacts}"
+    networks:
+      - platform
+
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-16333}:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    networks:
+      - platform
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-dieaudit}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-dieaudit}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - platform
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:${API_PORT:-8080}
+    ports:
+      - "${TEMPORAL_UI_PORT:-18088}:8080"
+    depends_on:
+      temporal:
+        condition: service_started
+    networks:
+      - platform
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    profiles: ["core", "demo"]
+    restart: unless-stopped
+    environment:
+      POST: "1"
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      VOLUMES: "1"
+      EVENTS: "1"
+      INFO: "1"
+      SYSTEM: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - platform
+
+  mock-agent-image:
+    build:
+      context: .
+      dockerfile: services/mock-agent/Dockerfile
+    image: dieaudit/mock-agent:local
+    profiles: ["demo", "tools"]
+    command: ["python", "/app/mock_agent.py", "--idle"]
+    networks:
+      - platform
+
+  mock-mcp-image:
+    build:
+      context: .
+      dockerfile: services/mock-mcp/Dockerfile
+    image: dieaudit/mock-mcp:local
+    profiles: ["demo", "tools"]
+    command: ["python", "/app/mock_mcp.py"]
+    networks:
+      - platform
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    profiles: ["observability"]
+    volumes:
+      - ./configs/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "19090:9090"
+    networks:
+      - platform
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    profiles: ["observability"]
+    ports:
+      - "13000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - platform
+
+networks:
+  platform:
+    name: dieaudit-platform
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  qdrant-data:
+  grafana-data:

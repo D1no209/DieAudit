@@ -1,0 +1,25 @@
+name: codeql-mcp
+image: dieaudit/mock-mcp:local
+transport: http
+port: 8001
+env:
+  MCP_NAME: codeql-mcp
+workspace_mount:
+  target: /workspace
+  read_only: true
+mounts: []
+resources:
+  memory: 6g
+healthcheck:
+  Test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health').read()"]
+  Interval: 10000000000
+  Timeout: 3000000000
+  Retries: 10
+tools:
+  - codeql.database.create
+  - codeql.analyze
+  - codeql.query
+permissions:
+  workspace: read-only
+  docker_api: false
+read_only: false

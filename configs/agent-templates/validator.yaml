@@ -1,0 +1,23 @@
+name: validator
+image: dieaudit/mock-agent:local
+command: ["python", "/app/mock_agent.py"]
+env:
+  AGENT_ROLE: validator
+model_profile: auditor-strong
+acp_endpoint:
+  transport: http
+  port: 8000
+workspace_mount:
+  target: /workspace
+  read_only: true
+artifact_mount:
+  target: /artifacts
+  read_only: false
+required_mcp:
+  - filesystem-mcp
+  - http-test-mcp
+  - sandbox-mcp
+read_only: false
+healthcheck: null
+output_schema:
+  type: object

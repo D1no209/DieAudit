@@ -1,0 +1,19 @@
+providers:
+  local-openai-compatible:
+    type: openai-compatible
+    base_url: http://host.docker.internal:8000/v1
+    api_key_env: LOCAL_LLM_API_KEY
+    default_model: qwen2.5-coder
+  openai:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+    default_model: gpt-4.1
+profiles:
+  orchestrator-long-context:
+    provider: local-openai-compatible
+    model: qwen2.5-coder
+    temperature: 0.1
+  auditor-strong:
+    provider: openai
+    model: gpt-4.1
+    temperature: 0.1

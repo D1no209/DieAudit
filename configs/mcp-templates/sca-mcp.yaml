@@ -1,0 +1,27 @@
+name: sca-mcp
+image: dieaudit/mock-mcp:local
+transport: http
+port: 8001
+env:
+  MCP_NAME: sca-mcp
+workspace_mount:
+  target: /workspace
+  read_only: true
+mounts: []
+resources:
+  memory: 2g
+healthcheck:
+  Test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health').read()"]
+  Interval: 10000000000
+  Timeout: 3000000000
+  Retries: 10
+tools:
+  - syft.sbom
+  - trivy.scan
+  - osv.query
+  - nvd.query
+  - ghsa.query
+permissions:
+  workspace: read-only
+  docker_api: false
+read_only: false

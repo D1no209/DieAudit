@@ -1,0 +1,56 @@
+body {
+  margin: 0;
+  background: #f3f5f8;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: #f3f5f8;
+}
+
+.app-header {
+  height: auto;
+  padding: 18px 28px;
+  background: #ffffff;
+  border-bottom: 1px solid #e6eaf0;
+}
+
+.brand-icon {
+  color: #1677ff;
+  font-size: 30px;
+}
+
+.brand-title {
+  margin: 0 !important;
+  line-height: 1.1 !important;
+}
+
+.brand-subtitle {
+  color: #667085;
+}
+
+.app-content {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 40px;
+}
+
+.section {
+  margin-bottom: 16px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+pre {
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  min-height: 120px;
+  color: #d1fadf;
+  background: #111827;
+  border-radius: 6px;
+}

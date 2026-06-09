@@ -1,0 +1,21 @@
+name: http-test-mcp
+image: dieaudit/mock-mcp:local
+transport: http
+port: 8001
+env:
+  MCP_NAME: http-test-mcp
+mounts: []
+resources:
+  memory: 512m
+healthcheck:
+  Test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health').read()"]
+  Interval: 10000000000
+  Timeout: 3000000000
+  Retries: 10
+tools:
+  - http.request
+  - http.session
+permissions:
+  external_network: controlled-by-audit-run
+  docker_api: false
+read_only: false
