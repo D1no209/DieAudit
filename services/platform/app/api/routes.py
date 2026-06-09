@@ -55,6 +55,26 @@ from app.settings import Settings
 router = APIRouter()
 
 
+PRODUCTION_AGENT_TEMPLATES = {
+    "opencode-orchestrator",
+    "opencode-recon-auditor",
+    "opencode-sca-analyst",
+    "opencode-validator",
+    "opencode-judger",
+    "opencode-poc-writer",
+}
+PRODUCTION_MCP_TEMPLATES = {
+    "filesystem-mcp",
+    "code-search-mcp",
+    "semgrep-mcp",
+    "sca-mcp",
+    "kb-mcp",
+    "http-test-mcp",
+    "sandbox-mcp",
+}
+OPTIONAL_HEAVY_MCP_TEMPLATES = {"joern-mcp", "codeql-mcp"}
+
+
 class PipelineCancelled(RuntimeError):
     pass
 
@@ -1148,6 +1168,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "detail": embedding,
             }
         )
+        checks.extend(
+            _template_readiness_checks(
+                TemplateStore(settings.config_root, "agent-templates").list(),
+                TemplateStore(settings.config_root, "mcp-templates").list(),
+            )
+        )
         fail_count = sum(1 for check in checks if check["status"] == "fail")
         warn_count = sum(1 for check in checks if check["status"] == "warn")
         return {
@@ -1748,6 +1774,80 @@ async def _cancel_reason(audit_run_id: str) -> str | None:
 async def _raise_if_cancelled(audit_run_id: str) -> None:
     if await _is_cancel_requested(audit_run_id):
         raise PipelineCancelled(await _cancel_reason(audit_run_id) or "cancel_requested")
+
+
+def _template_readiness_checks(agent_templates: list[dict[str, Any]], mcp_templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    agents = {str(item.get("name") or ""): item for item in agent_templates}
+    mcps = {str(item.get("name") or ""): item for item in mcp_templates}
+
+    missing_agents = sorted(PRODUCTION_AGENT_TEMPLATES - set(agents))
+    invalid_agents = sorted(
+        name
+        for name in PRODUCTION_AGENT_TEMPLATES & set(agents)
+        if (agents[name].get("protocol") or {}).get("kind") != "agent-client-protocol"
+        or (agents[name].get("protocol") or {}).get("runtime") != "opencode"
+        or "mock-agent" in str(agents[name].get("image") or "")
+    )
+    missing_mcps = sorted(PRODUCTION_MCP_TEMPLATES - set(mcps))
+    mock_mcps = sorted(
+        name
+        for name in PRODUCTION_MCP_TEMPLATES & set(mcps)
+        if "mock-mcp" in str(mcps[name].get("image") or "")
+    )
+    optional_heavy = sorted(OPTIONAL_HEAVY_MCP_TEMPLATES & set(mcps))
+    legacy_mock_agents = sorted(
+        name
+        for name, template in agents.items()
+        if name and name not in PRODUCTION_AGENT_TEMPLATES and "mock-agent" in str(template.get("image") or "")
+    )
+
+    checks = [
+        {
+            "id": "opencode_agent_templates",
+            "title": "OpenCode ACP agent templates are configured",
+            "status": "fail" if missing_agents or invalid_agents else "pass",
+            "detail": {
+                "required": sorted(PRODUCTION_AGENT_TEMPLATES),
+                "missing": missing_agents,
+                "invalid": invalid_agents,
+            },
+        },
+        {
+            "id": "production_mcp_templates",
+            "title": "Production MCP templates are configured",
+            "status": "fail" if missing_mcps or mock_mcps else "pass",
+            "detail": {
+                "required": sorted(PRODUCTION_MCP_TEMPLATES),
+                "missing": missing_mcps,
+                "mock_images": mock_mcps,
+            },
+        },
+    ]
+    if optional_heavy:
+        checks.append(
+            {
+                "id": "heavy_analyzers",
+                "title": "Heavy analyzers require dedicated tool images",
+                "status": "warn",
+                "detail": {
+                    "templates": optional_heavy,
+                    "message": "Joern and CodeQL templates are present; ensure the deployed tool image includes their CLIs before relying on them.",
+                },
+            }
+        )
+    if legacy_mock_agents:
+        checks.append(
+            {
+                "id": "legacy_mock_templates",
+                "title": "Legacy mock templates are still available",
+                "status": "warn",
+                "detail": {
+                    "templates": legacy_mock_agents,
+                    "message": "Keep mock templates for demo only; production audit runs should use opencode-* templates.",
+                },
+            }
+        )
+    return checks
 
 
 async def _get_project(project_id: str) -> dict[str, Any] | None:

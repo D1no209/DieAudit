@@ -1064,6 +1064,25 @@ function App() {
                   </Card>
                 ),
               },
+              {
+                key: "readiness",
+                label: "Readiness",
+                children: (
+                  <Card>
+                    <List
+                      dataSource={runtimeReadiness?.checks || []}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <List.Item.Meta
+                            title={<Space><Tag color={readinessColor(item.status)}>{item.status}</Tag><Text>{item.title}</Text></Space>}
+                            description={<pre>{JSON.stringify(item.detail || {}, null, 2)}</pre>}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  </Card>
+                ),
+              },
               { key: "findings", label: "Findings", children: <Card><Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 8 }} /></Card> },
               { key: "containers", label: "Containers", children: <Card><Table rowKey="Id" columns={containerColumns} dataSource={containers} pagination={false} /></Card> },
               {
@@ -1267,8 +1286,15 @@ function severityColor(value: string) {
   return "default";
 }
 
+function readinessColor(value: string) {
+  if (value === "fail") return "red";
+  if (value === "warn") return "orange";
+  return "green";
+}
+
 function isActiveRun(auditStatus?: string, pipelineStatus?: string) {
-  return ["queued", "running", "validating"].includes(auditStatus || "") || ["queued", "running"].includes(pipelineStatus || "");
+  const activeStatuses = ["queued", "running", "validating", "cancelling"];
+  return activeStatuses.includes(auditStatus || "") || activeStatuses.includes(pipelineStatus || "");
 }
 
 function parseScopes(value?: string) {
