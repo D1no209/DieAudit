@@ -271,12 +271,14 @@ services:
     profiles: ["core", "demo"]
     restart: unless-stopped
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER:-dieaudit}
       POSTGRES_PWD: ${POSTGRES_PASSWORD:-dieaudit}
       POSTGRES_SEEDS: postgres
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ./configs/temporal/development-sql.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
