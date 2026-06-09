@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     platform_audit_event_max_rows: int = 10000
     pipeline_recovery_on_startup: bool = True
     pipeline_execution_backend: str = "background-tasks"
+    pipeline_worker_poll_interval_seconds: float = 2.0
 
 
 @lru_cache

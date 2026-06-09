@@ -14,9 +14,19 @@ def test_pipeline_readiness_fails_background_tasks_backend() -> None:
     assert check["detail"]["backend"] == "background-tasks"
 
 
-def test_pipeline_readiness_passes_durable_backend() -> None:
-    settings = SimpleNamespace(pipeline_execution_backend="temporal", pipeline_recovery_on_startup=True)
+def test_pipeline_readiness_passes_workflow_worker_backend() -> None:
+    settings = SimpleNamespace(pipeline_execution_backend="workflow-worker", pipeline_recovery_on_startup=True)
 
     check = _pipeline_backend_readiness_check(settings)
 
     assert check["status"] == "pass"
+    assert check["detail"]["backend"] == "workflow-worker"
+
+
+def test_pipeline_readiness_fails_unsupported_backend() -> None:
+    settings = SimpleNamespace(pipeline_execution_backend="temporal", pipeline_recovery_on_startup=True)
+
+    check = _pipeline_backend_readiness_check(settings)
+
+    assert check["status"] == "fail"
+    assert check["detail"]["backend"] == "temporal"

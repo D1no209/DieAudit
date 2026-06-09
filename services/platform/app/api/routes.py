@@ -623,9 +623,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         await _clear_pipeline_cancel(audit_run_id)
         await _mark_audit_run_status(audit_run_id, "queued")
         await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
-        await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued"})
-        background_tasks.add_task(pipeline_executor(runtime).execute, audit_run_id)
-        return {"audit_run_id": audit_run_id, "status": "accepted"}
+        backend = _normalized_pipeline_backend(settings)
+        await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": backend})
+        if backend == "background-tasks":
+            background_tasks.add_task(pipeline_executor(runtime).execute, audit_run_id)
+        return {"audit_run_id": audit_run_id, "status": "accepted", "backend": backend}
 
     @router.post("/audit-runs/{audit_run_id}/cancel")
     async def cancel_audit_run(audit_run_id: str) -> dict[str, Any]:
@@ -1801,22 +1803,37 @@ def _should_finalize_cancel(audit_run: dict[str, Any], removed_container_count: 
 
 
 def _pipeline_backend_readiness_check(settings: Settings) -> dict[str, Any]:
-    backend = (settings.pipeline_execution_backend or "background-tasks").strip().lower()
-    durable_backends = {"temporal", "durable-worker"}
+    backend = _normalized_pipeline_backend(settings)
+    supported_backends = {"background-tasks", "workflow-worker"}
+    production_backends = {"workflow-worker"}
+    if backend not in supported_backends:
+        status = "fail"
+        message = f"Unsupported pipeline execution backend '{backend}'. Supported backends: {sorted(supported_backends)}."
+    elif backend in production_backends:
+        status = "pass"
+        message = "Audit pipelines are claimed and executed by workflow-worker instead of FastAPI request-local background tasks."
+    else:
+        status = "fail"
+        message = (
+            "FastAPI background task execution can lose in-flight work on restart. "
+            "Use workflow-worker before treating this deployment as production-ready."
+        )
     return {
         "id": "pipeline_execution_backend",
-        "title": "Audit pipeline uses a durable execution backend",
-        "status": "pass" if backend in durable_backends else "fail",
+        "title": "Audit pipeline execution is not tied to FastAPI background tasks",
+        "status": status,
         "detail": {
             "backend": backend,
-            "durable_backends": sorted(durable_backends),
+            "production_backends": sorted(production_backends),
+            "supported_backends": sorted(supported_backends),
             "recovery_on_startup": settings.pipeline_recovery_on_startup,
-            "message": (
-                "FastAPI background task execution can lose in-flight work on restart. "
-                "Use a durable workflow backend before treating this deployment as production-ready."
-            ),
+            "message": message,
         },
     }
+
+
+def _normalized_pipeline_backend(settings: Settings) -> str:
+    return (settings.pipeline_execution_backend or "background-tasks").strip().lower()
 
 
 async def _get_project(project_id: str) -> dict[str, Any] | None:
