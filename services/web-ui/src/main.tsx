@@ -132,6 +132,19 @@ type ManagedRuntime = {
   };
 };
 
+type RuntimePolicy = {
+  default_container?: {
+    memory?: string;
+    cpus?: number;
+    pids_limit?: number;
+    tmpfs?: string;
+  };
+  platform_audit_events?: {
+    retention_days?: number;
+    max_rows?: number;
+  };
+};
+
 type SandboxCapabilities = {
   ok?: boolean;
   docker_available?: boolean;
@@ -204,6 +217,7 @@ function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>();
   const [dockerHealth, setDockerHealth] = useState<any>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
+  const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy>();
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
   const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
@@ -246,6 +260,7 @@ function App() {
       ]);
       setDockerHealth(docker);
       readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
+      readJson("/gateway/runtime/policy").then(setRuntimePolicy).catch(() => setRuntimePolicy(undefined));
       readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
       readJson("/gateway/platform/audit-events?limit=100").then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
       setProjects(projectRows);
@@ -572,6 +587,15 @@ function App() {
     });
   }
 
+  async function cleanupPlatformAuditEvents() {
+    await runAction(async () => {
+      const result = await readJson("/gateway/platform/audit-events", { method: "DELETE" });
+      setLastResponse(result);
+      const rows = await readJson("/gateway/platform/audit-events?limit=100");
+      setPlatformAuditEvents(rows);
+    });
+  }
+
   function saveApiKey() {
     const normalized = apiKey.trim();
     if (normalized) {
@@ -848,6 +872,15 @@ function App() {
                 label: "Platform Audit",
                 children: (
                   <Card>
+                    <Space wrap className="table-toolbar">
+                      <Tag>retention: {runtimePolicy?.platform_audit_events?.retention_days ?? "-"}d</Tag>
+                      <Tag>max rows: {runtimePolicy?.platform_audit_events?.max_rows ?? "-"}</Tag>
+                      <Tag>container memory: {runtimePolicy?.default_container?.memory ?? "-"}</Tag>
+                      <Tag>cpus: {runtimePolicy?.default_container?.cpus ?? "-"}</Tag>
+                      <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={cleanupPlatformAuditEvents}>
+                        清理审计事件
+                      </Button>
+                    </Space>
                     <Table
                       rowKey="id"
                       columns={platformAuditColumns}

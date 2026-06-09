@@ -63,6 +63,10 @@ body {
   width: 100%;
 }
 
+.table-toolbar {
+  margin-bottom: 12px;
+}
+
 pre {
   margin: 0;
   padding: 14px;

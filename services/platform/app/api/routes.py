@@ -1,13 +1,13 @@
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.domain.models import (
     AgentRun,
@@ -699,16 +699,57 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         auth_result: str | None = None,
         status_code: int | None = None,
     ) -> list[dict[str, Any]]:
-        query = select(PlatformAuditEvent).order_by(PlatformAuditEvent.created_at.desc()).limit(limit)
+        query = select(PlatformAuditEvent)
         if service:
             query = query.where(PlatformAuditEvent.service == service)
         if auth_result:
             query = query.where(PlatformAuditEvent.auth_result == auth_result)
         if status_code:
             query = query.where(PlatformAuditEvent.status_code == status_code)
+        query = query.order_by(PlatformAuditEvent.created_at.desc()).limit(limit)
         async with SessionLocal() as session:
             rows = (await session.execute(query)).scalars()
             return [_platform_audit_event_to_dict(row) for row in rows]
+
+    @router.delete("/platform/audit-events")
+    async def cleanup_platform_audit_events(
+        older_than_days: int | None = Query(default=None, ge=1, le=3650),
+        keep_latest: int | None = Query(default=None, ge=0, le=1_000_000),
+    ) -> dict[str, Any]:
+        days = older_than_days if older_than_days is not None else settings.platform_audit_event_retention_days
+        keep = keep_latest if keep_latest is not None else settings.platform_audit_event_max_rows
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        async with SessionLocal() as session:
+            older_result = await session.execute(delete(PlatformAuditEvent).where(PlatformAuditEvent.created_at < cutoff))
+            older_deleted = int(older_result.rowcount or 0)
+            overflow_deleted = 0
+            if keep == 0:
+                overflow_result = await session.execute(delete(PlatformAuditEvent))
+                overflow_deleted = int(overflow_result.rowcount or 0)
+            else:
+                retained_ids = list(
+                    (
+                        await session.execute(
+                            select(PlatformAuditEvent.id)
+                            .order_by(PlatformAuditEvent.created_at.desc(), PlatformAuditEvent.id.desc())
+                            .limit(keep)
+                        )
+                    ).scalars()
+                )
+                if retained_ids:
+                    overflow_result = await session.execute(
+                        delete(PlatformAuditEvent).where(PlatformAuditEvent.id.not_in(retained_ids))
+                    )
+                    overflow_deleted = int(overflow_result.rowcount or 0)
+            await session.commit()
+        return {
+            "older_than_days": days,
+            "cutoff": cutoff.isoformat(),
+            "keep_latest": keep,
+            "deleted": older_deleted + overflow_deleted,
+            "deleted_by_age": older_deleted,
+            "deleted_by_overflow": overflow_deleted,
+        }
 
     @router.get("/runtime/templates/agents")
     async def list_agent_templates() -> list[dict[str, Any]]:
@@ -748,6 +789,26 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if runtime is None:
             return await proxy_gateway("/runtime/sandbox/capabilities")
         return await runtime.sandbox_capabilities()
+
+    @router.get("/runtime/policy")
+    async def runtime_policy() -> dict[str, Any]:
+        return {
+            "default_container": {
+                "memory": settings.default_container_memory,
+                "cpus": settings.default_container_cpus,
+                "pids_limit": settings.default_container_pids_limit,
+                "tmpfs": settings.default_container_tmpfs,
+            },
+            "platform_audit_events": {
+                "retention_days": settings.platform_audit_event_retention_days,
+                "max_rows": settings.platform_audit_event_max_rows,
+            },
+            "sandbox": {
+                "default_runtime": settings.default_sandbox_runtime,
+                "enable_gvisor": settings.enable_gvisor,
+                "allow_runc_sandbox": settings.allow_runc_sandbox,
+            },
+        }
 
     @router.get("/runtime/managed")
     async def managed_runtime() -> dict[str, Any]:

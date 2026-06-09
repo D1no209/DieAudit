@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     default_sandbox_runtime: str = "runc"
     enable_gvisor: bool = False
     allow_runc_sandbox: bool = False
+    default_container_memory: str = "1024m"
+    default_container_cpus: float = 1.0
+    default_container_pids_limit: int = 512
+    default_container_tmpfs: str = "/tmp:rw,nosuid,size=128m"
+    platform_audit_event_retention_days: int = 30
+    platform_audit_event_max_rows: int = 10000
 
     class Config:
         env_file = ".env"

@@ -485,14 +485,12 @@ class RuntimeOrchestrator:
             read_only=True,
             healthcheck=None,
             runtime=runtime_name if runtime_name != "runc" else None,
-        )
-        payload["HostConfig"].update(
-            {
-                "Memory": 512 * 1024 * 1024,
-                "NanoCpus": 1_000_000_000,
-                "PidsLimit": 256,
-                "Tmpfs": {"/tmp": "rw,noexec,nosuid,size=64m"},
-            }
+            resources={
+                "memory": "512m",
+                "cpus": 1.0,
+                "pids_limit": 256,
+                "tmpfs": {"/tmp": "rw,noexec,nosuid,size=64m"},
+            },
         )
 
         await self.docker.pull_image(image)
@@ -623,14 +621,12 @@ class RuntimeOrchestrator:
             read_only=True,
             healthcheck=healthcheck,
             runtime=runtime_name if runtime_name != "runc" else None,
-        )
-        payload["HostConfig"].update(
-            {
-                "Memory": 768 * 1024 * 1024,
-                "NanoCpus": 1_000_000_000,
-                "PidsLimit": 512,
-                "Tmpfs": {"/tmp": "rw,nosuid,size=128m"},
-            }
+            resources={
+                "memory": "768m",
+                "cpus": 1.0,
+                "pids_limit": 512,
+                "tmpfs": {"/tmp": "rw,nosuid,size=128m"},
+            },
         )
 
         await self.docker.pull_image(image)
@@ -845,6 +841,7 @@ class RuntimeOrchestrator:
             mounts=mounts,
             read_only=template.get("read_only", True),
             healthcheck=template.get("healthcheck"),
+            resources=template.get("resources"),
         )
         created = await self.docker.create_container(name, payload)
         await self.docker.start_container(created["Id"])
@@ -908,6 +905,7 @@ class RuntimeOrchestrator:
             mounts=mounts,
             read_only=template.get("read_only", True),
             healthcheck=template.get("healthcheck"),
+            resources=template.get("resources"),
         )
         created = await self.docker.create_container(name, payload)
         await self.docker.start_container(created["Id"])
@@ -1403,6 +1401,79 @@ class RuntimeOrchestrator:
         protocol = template.get("protocol", {})
         return protocol.get("kind") == "agent-client-protocol" and protocol.get("runtime") == "opencode"
 
+    def _resource_host_config(self, resources: dict[str, Any] | None) -> dict[str, Any]:
+        resources = resources or {}
+        host_config: dict[str, Any] = {}
+        memory = self._parse_memory_bytes(resources.get("memory", self.settings.default_container_memory))
+        if memory:
+            host_config["Memory"] = memory
+        nano_cpus = resources.get("nano_cpus")
+        if nano_cpus is None:
+            cpus = resources.get("cpus", self.settings.default_container_cpus)
+            try:
+                nano_cpus = int(float(cpus) * 1_000_000_000)
+            except (TypeError, ValueError):
+                nano_cpus = None
+        if nano_cpus:
+            host_config["NanoCpus"] = int(nano_cpus)
+        pids_limit = resources.get("pids_limit", self.settings.default_container_pids_limit)
+        if pids_limit:
+            host_config["PidsLimit"] = int(pids_limit)
+        tmpfs = self._parse_tmpfs(resources.get("tmpfs", self.settings.default_container_tmpfs))
+        if tmpfs:
+            host_config["Tmpfs"] = tmpfs
+        return host_config
+
+    @staticmethod
+    def _parse_memory_bytes(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        text = str(value).strip().lower()
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)([kmgt]?i?b?|)", text)
+        if not match:
+            return None
+        number = float(match.group(1))
+        suffix = match.group(2)
+        multipliers = {
+            "": 1,
+            "b": 1,
+            "k": 1024,
+            "kb": 1024,
+            "ki": 1024,
+            "kib": 1024,
+            "m": 1024**2,
+            "mb": 1024**2,
+            "mi": 1024**2,
+            "mib": 1024**2,
+            "g": 1024**3,
+            "gb": 1024**3,
+            "gi": 1024**3,
+            "gib": 1024**3,
+            "t": 1024**4,
+            "tb": 1024**4,
+            "ti": 1024**4,
+            "tib": 1024**4,
+        }
+        return int(number * multipliers.get(suffix, 1))
+
+    @staticmethod
+    def _parse_tmpfs(value: Any) -> dict[str, str] | None:
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return {str(target): str(options) for target, options in value.items() if target}
+        entries = value if isinstance(value, list) else [value]
+        tmpfs: dict[str, str] = {}
+        for entry in entries:
+            text = str(entry).strip()
+            if not text:
+                continue
+            target, _, options = text.partition(":")
+            tmpfs[target] = options or "rw,nosuid,size=64m"
+        return tmpfs or None
+
     def _container_payload(
         self,
         *,
@@ -1416,21 +1487,24 @@ class RuntimeOrchestrator:
         read_only: bool,
         healthcheck: dict[str, Any] | None,
         runtime: str | None = None,
+        resources: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         env_list = [f"{key}={value}" for key, value in env.items()]
+        host_config = {
+            "NetworkMode": network_name,
+            "Mounts": mounts,
+            "ExtraHosts": ["host.docker.internal:host-gateway"],
+            "ReadonlyRootfs": read_only,
+            "AutoRemove": False,
+            "CapDrop": ["ALL"],
+            "SecurityOpt": ["no-new-privileges:true"],
+        }
+        host_config.update(self._resource_host_config(resources))
         payload: dict[str, Any] = {
             "Image": image,
             "Env": env_list,
             "Labels": labels,
-            "HostConfig": {
-                "NetworkMode": network_name,
-                "Mounts": mounts,
-                "ExtraHosts": ["host.docker.internal:host-gateway"],
-                "ReadonlyRootfs": read_only,
-                "AutoRemove": False,
-                "CapDrop": ["ALL"],
-                "SecurityOpt": ["no-new-privileges:true"],
-            },
+            "HostConfig": host_config,
             "NetworkingConfig": {"EndpointsConfig": {network_name: {"Aliases": aliases}}},
         }
         if command:
