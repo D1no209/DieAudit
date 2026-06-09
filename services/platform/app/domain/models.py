@@ -33,6 +33,15 @@ class AuditRun(TimestampMixin, Base):
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class AuditRunEvent(TimestampMixin, Base):
+    __tablename__ = "audit_run_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class Project(TimestampMixin, Base):
     __tablename__ = "projects"
 

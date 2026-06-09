@@ -12,6 +12,7 @@ from app.domain.models import (
     AgentRun,
     AgentRunEvent,
     AuditRun,
+    AuditRunEvent,
     Evidence,
     Finding,
     Project,
@@ -305,6 +306,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if not workspace_path:
             raise HTTPException(status_code=400, detail="audit run has no workspace path")
         await _mark_audit_run_status(audit_run_id, "queued")
+        await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
+        await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued"})
         background_tasks.add_task(_execute_pipeline, audit_run_id, settings, runtime)
         return {"audit_run_id": audit_run_id, "status": "accepted"}
 
@@ -315,10 +318,15 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         if not workspace_path:
             await _mark_audit_run_status(audit_run_id, "failed")
+            await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error="audit run has no workspace path")
+            await _record_audit_run_event(audit_run_id, "pipeline_failed", {"error": "audit run has no workspace path"})
             return
         await _mark_audit_run_status(audit_run_id, "running")
+        await _set_pipeline_state(audit_run_id, stage="agent-audit", status="running")
+        await _record_audit_run_event(audit_run_id, "pipeline_started", {"stage": "agent-audit"})
         steps: list[dict[str, Any]] = []
         try:
+            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "agent-audit"})
             agent_result = await runtime.start_agent_run(
                 audit_run_id=audit_run_id,
                 project_id=audit_run["project_id"],
@@ -335,22 +343,35 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 },
             )
             steps.append({"step": "agent-audit", "result": agent_result})
+            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "agent-audit", "result": _compact_event_payload(agent_result)})
 
+            await _set_pipeline_state(audit_run_id, stage="sca", status="running")
+            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "sca"})
             try:
                 sca_result = await _run_sca_mcp(audit_run_id, audit_run["project_id"], workspace_path, runtime, audit_run)
             except Exception as exc:
                 sca_result = {"ok": False, "error": str(exc)}
                 await _record_pipeline_event(audit_run_id, "sca_failed", sca_result)
             steps.append({"step": "sca", "result": sca_result})
+            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "sca", "result": _compact_event_payload(sca_result)})
 
+            await _set_pipeline_state(audit_run_id, stage="semgrep", status="running")
+            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "semgrep"})
             try:
                 semgrep_result = await _run_semgrep_mcp(audit_run_id, audit_run["project_id"], workspace_path, runtime, audit_run)
             except Exception as exc:
                 semgrep_result = {"ok": False, "error": str(exc)}
                 await _record_pipeline_event(audit_run_id, "semgrep_failed", semgrep_result)
             steps.append({"step": "semgrep", "result": semgrep_result})
+            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "semgrep", "result": _compact_event_payload(semgrep_result)})
 
             findings = await _list_findings(audit_run_id)
+            await _set_pipeline_state(audit_run_id, stage="validators", status="running")
+            await _record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_started",
+                {"step": "validators", "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"]},
+            )
             validator_result = await runtime.scale_validators(
                 audit_run_id=audit_run_id,
                 project_id=audit_run["project_id"],
@@ -364,13 +385,24 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 wait_for_completion=True,
             )
             steps.append({"step": "validators", "result": validator_result})
+            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "validators", "result": _compact_event_payload(validator_result)})
 
+            await _set_pipeline_state(audit_run_id, stage="judgement", status="running")
+            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "judgement"})
             judge_result = await _judge_audit_run_internal(audit_run_id, runtime)
+            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "judgement", "result": _compact_event_payload(judge_result)})
+            await _set_pipeline_state(audit_run_id, stage="report", status="running")
+            await _record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "report"})
             report_result = await _generate_report_internal(audit_run_id, settings)
+            await _record_audit_run_event(audit_run_id, "pipeline_step_completed", {"step": "report", "result": _compact_event_payload(report_result)})
             await _record_pipeline_summary(audit_run_id, {"steps": steps, "judge": judge_result, "report": report_result})
             await _mark_audit_run_status(audit_run_id, "completed")
+            await _set_pipeline_state(audit_run_id, stage="completed", status="completed")
+            await _record_audit_run_event(audit_run_id, "pipeline_completed", {"report": _compact_event_payload(report_result)})
         except Exception as exc:
             await _record_pipeline_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": steps})
+            await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error=str(exc))
+            await _record_audit_run_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": [_compact_event_payload(step) for step in steps]})
             await _mark_audit_run_status(audit_run_id, "failed")
 
     @router.post("/audit-runs/{audit_run_id}/judge")
@@ -397,21 +429,46 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     async def audit_run_evidence(audit_run_id: str) -> list[dict[str, Any]]:
         return await _list_evidence(audit_run_id)
 
+    @router.get("/audit-runs/{audit_run_id}/events")
+    async def audit_run_events(audit_run_id: str) -> list[dict[str, Any]]:
+        return await _list_audit_run_events(audit_run_id)
+
+    @router.get("/audit-runs/{audit_run_id}/pipeline-status")
+    async def audit_run_pipeline_status(audit_run_id: str) -> dict[str, Any]:
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        findings = await _list_findings(audit_run_id)
+        attempts = await _list_validation_attempts(audit_run_id)
+        reports = await _list_reports(audit_run_id)
+        events = await _list_audit_run_events(audit_run_id, limit=100)
+        attempt_counts: dict[str, int] = {}
+        for attempt in attempts:
+            status = str(attempt.get("status") or "unknown")
+            attempt_counts[status] = attempt_counts.get(status, 0) + 1
+        finding_counts: dict[str, int] = {}
+        for finding in findings:
+            status = str(finding.get("status") or "unknown")
+            finding_counts[status] = finding_counts.get(status, 0) + 1
+        return {
+            "audit_run": audit_run,
+            "pipeline": (audit_run.get("config") or {}).get("pipeline", {}),
+            "current": (audit_run.get("config") or {}).get("pipeline_state", {}),
+            "counts": {
+                "findings": finding_counts,
+                "validation_attempts": attempt_counts,
+                "reports": len(reports),
+            },
+            "events": events,
+        }
+
     @router.get("/audit-runs/{audit_run_id}/validation-attempts")
     async def audit_run_validation_attempts(audit_run_id: str) -> list[dict[str, Any]]:
         return await _list_validation_attempts(audit_run_id)
 
     @router.get("/audit-runs/{audit_run_id}/reports")
     async def audit_run_reports(audit_run_id: str) -> list[dict[str, Any]]:
-        async with SessionLocal() as session:
-            rows = (
-                await session.execute(
-                    select(ReportArtifact)
-                    .where(ReportArtifact.audit_run_id == audit_run_id)
-                    .order_by(ReportArtifact.created_at.desc())
-                )
-            ).scalars()
-            return [_report_to_dict(row) for row in rows]
+        return await _list_reports(audit_run_id)
 
     @router.get("/reports/{report_id}/download")
     async def download_report(report_id: str) -> FileResponse:
@@ -878,6 +935,40 @@ async def _list_validation_attempts(audit_run_id: str) -> list[dict[str, Any]]:
         return [_attempt_to_dict(row) for row in rows]
 
 
+async def _list_reports(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(ReportArtifact)
+                .where(ReportArtifact.audit_run_id == audit_run_id)
+                .order_by(ReportArtifact.created_at.desc())
+            )
+        ).scalars()
+        return [_report_to_dict(row) for row in rows]
+
+
+async def _list_audit_run_events(audit_run_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(AuditRunEvent)
+                .where(AuditRunEvent.audit_run_id == audit_run_id)
+                .order_by(AuditRunEvent.created_at.desc())
+                .limit(limit)
+            )
+        ).scalars()
+        return [
+            {
+                "id": row.id,
+                "audit_run_id": row.audit_run_id,
+                "event_type": row.event_type,
+                "payload": row.payload,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
+
+
 async def _list_agent_runs(audit_run_id: str) -> list[dict[str, Any]]:
     async with SessionLocal() as session:
         rows = (
@@ -887,6 +978,7 @@ async def _list_agent_runs(audit_run_id: str) -> list[dict[str, Any]]:
 
 
 async def _record_pipeline_event(audit_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    await _record_audit_run_event(audit_run_id, event_type, payload)
     async with SessionLocal() as session:
         agent_run = await session.scalar(
             select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
@@ -894,6 +986,41 @@ async def _record_pipeline_event(audit_run_id: str, event_type: str, payload: di
         if agent_run:
             session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload=payload))
             await session.commit()
+
+
+async def _record_audit_run_event(audit_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    async with SessionLocal() as session:
+        session.add(
+            AuditRunEvent(
+                audit_run_id=audit_run_id,
+                event_type=event_type,
+                payload=_compact_event_payload(payload),
+            )
+        )
+        await session.commit()
+
+
+async def _set_pipeline_state(
+    audit_run_id: str,
+    *,
+    stage: str,
+    status: str,
+    error: str | None = None,
+) -> None:
+    async with SessionLocal() as session:
+        audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
+        if not audit_run:
+            return
+        config = dict(audit_run.config or {})
+        state = {
+            "stage": stage,
+            "status": status,
+        }
+        if error:
+            state["error"] = error
+        config["pipeline_state"] = state
+        audit_run.config = config
+        await session.commit()
 
 
 async def _record_pipeline_summary(audit_run_id: str, summary: dict[str, Any]) -> None:
@@ -1316,6 +1443,29 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _compact_event_payload(value: Any, *, max_string: int = 1200, max_items: int = 20, depth: int = 0) -> Any:
+    if depth > 4:
+        return "<truncated-depth>"
+    if isinstance(value, str):
+        return value if len(value) <= max_string else f"{value[:max_string]}...<truncated {len(value) - max_string} chars>"
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        compacted = [_compact_event_payload(item, max_string=max_string, max_items=max_items, depth=depth + 1) for item in value[:max_items]]
+        if len(value) > max_items:
+            compacted.append(f"<truncated {len(value) - max_items} items>")
+        return compacted
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                result["<truncated>"] = f"{len(value) - max_items} keys"
+                break
+            result[str(key)] = _compact_event_payload(item, max_string=max_string, max_items=max_items, depth=depth + 1)
+        return result
+    return repr(value)
 
 
 def _report_markdown(payload: dict[str, Any]) -> str:
