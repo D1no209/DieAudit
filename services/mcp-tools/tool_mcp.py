@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ MCP_NAME = os.environ.get("MCP_NAME", "dieaudit-tool-mcp")
 WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_ROOT", "/workspace")).resolve()
 MAX_READ_BYTES = int(os.environ.get("MAX_READ_BYTES", "200000"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "100"))
+ARTIFACT_ROOT = Path(os.environ.get("ARTIFACT_ROOT", "/artifacts")).resolve()
 
 mcp = FastMCP(MCP_NAME, host="0.0.0.0", port=8001, stateless_http=True)
 
@@ -108,10 +110,107 @@ def read_snippet(path: str, line: int, context: int = 5) -> dict[str, Any]:
 
 
 @mcp.tool()
+def semgrep_scan(
+    config: str = "auto",
+    output_format: str = "json",
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    """Run Semgrep against the authorized workspace and persist the raw result as an artifact."""
+    semgrep = shutil.which("semgrep")
+    if not semgrep:
+        return {
+            "ok": False,
+            "available": False,
+            "error": "semgrep executable is not installed in this MCP image",
+            "findings": [],
+        }
+    if output_format not in {"json", "sarif"}:
+        raise ValueError("output_format must be json or sarif")
+    timeout_seconds = min(max(timeout_seconds, 5), 900)
+    artifact_dir = _artifact_dir("semgrep")
+    output_path = artifact_dir / f"semgrep-results.{output_format}"
+    command = [
+        semgrep,
+        "scan",
+        "--config",
+        config,
+        f"--{output_format}",
+        "--output",
+        str(output_path),
+        str(WORKSPACE_ROOT),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    if result.returncode not in {0, 1}:
+        return {
+            "ok": False,
+            "available": True,
+            "exit_code": result.returncode,
+            "stdout": result.stdout[-4000:],
+            "stderr": result.stderr[-4000:],
+            "artifact_path": str(output_path) if output_path.exists() else None,
+            "findings": [],
+        }
+    parsed = _load_json_artifact(output_path) if output_format == "json" else None
+    findings = _semgrep_findings(parsed) if parsed else []
+    return {
+        "ok": True,
+        "available": True,
+        "exit_code": result.returncode,
+        "artifact_path": str(output_path),
+        "findings": findings,
+        "stdout": result.stdout[-4000:],
+        "stderr": result.stderr[-4000:],
+    }
+
+
+@mcp.tool()
+def semgrep_results(artifact_path: str) -> dict[str, Any]:
+    """Read a previously generated Semgrep JSON artifact."""
+    target = _safe_artifact_path(artifact_path)
+    data = _load_json_artifact(target)
+    return {"artifact_path": str(target), "findings": _semgrep_findings(data), "raw": data}
+
+
+@mcp.tool()
 def detect_dependencies() -> dict[str, Any]:
     """Detect dependencies from common project manifest and lock files."""
     packages = _detect_dependencies()
     return {"packages": packages, "count": len(packages)}
+
+
+@mcp.tool()
+def generate_sbom(output_format: str = "spdx-json", timeout_seconds: int = 120) -> dict[str, Any]:
+    """Generate an SBOM with Syft when the executable is available."""
+    syft = shutil.which("syft")
+    if not syft:
+        return {
+            "ok": False,
+            "available": False,
+            "error": "syft executable is not installed in this MCP image",
+            "artifact_path": None,
+        }
+    timeout_seconds = min(max(timeout_seconds, 5), 900)
+    safe_format = re.sub(r"[^A-Za-z0-9_.-]+", "-", output_format)
+    artifact_dir = _artifact_dir("sbom")
+    output_path = artifact_dir / f"sbom.{safe_format}.json"
+    command = [syft, str(WORKSPACE_ROOT), "-o", output_format]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "available": True,
+            "exit_code": result.returncode,
+            "stderr": result.stderr[-4000:],
+            "artifact_path": None,
+        }
+    output_path.write_text(result.stdout, encoding="utf-8")
+    return {
+        "ok": True,
+        "available": True,
+        "exit_code": result.returncode,
+        "artifact_path": str(output_path),
+        "bytes": output_path.stat().st_size,
+    }
 
 
 @mcp.tool()
@@ -163,6 +262,25 @@ def _safe_path(path: str) -> Path:
     resolved = candidate.resolve()
     if resolved != WORKSPACE_ROOT and WORKSPACE_ROOT not in resolved.parents:
         raise ValueError(f"path escapes workspace: {path}")
+    return resolved
+
+
+def _artifact_dir(kind: str) -> Path:
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", MCP_NAME).strip("-") or "tool-mcp"
+    target = ARTIFACT_ROOT / safe_name / kind
+    target.mkdir(parents=True, exist_ok=True)
+    return target.resolve()
+
+
+def _safe_artifact_path(path: str) -> Path:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = ARTIFACT_ROOT / candidate
+    resolved = candidate.resolve()
+    if resolved != ARTIFACT_ROOT and ARTIFACT_ROOT not in resolved.parents:
+        raise ValueError(f"path escapes artifact root: {path}")
+    if not resolved.is_file():
+        raise ValueError(f"artifact not found: {path}")
     return resolved
 
 
@@ -252,6 +370,35 @@ def _osv_severity(vuln: dict[str, Any]) -> str:
     if "GHSA" in aliases or "CVE" in aliases:
         return "medium"
     return "unknown"
+
+
+def _load_json_artifact(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def _semgrep_findings(data: dict[str, Any]) -> list[dict[str, Any]]:
+    findings = []
+    for item in data.get("results", []) or []:
+        extra = item.get("extra", {}) or {}
+        path = item.get("path")
+        start = item.get("start", {}) or {}
+        end = item.get("end", {}) or {}
+        check_id = item.get("check_id")
+        findings.append(
+            {
+                "title": extra.get("message") or check_id or "Semgrep finding",
+                "severity": str(extra.get("severity") or "unknown").lower(),
+                "status": "candidate",
+                "file_path": path,
+                "line_start": start.get("line"),
+                "line_end": end.get("line"),
+                "rule_id": check_id,
+                "description": extra.get("message"),
+                "source": "semgrep-mcp",
+                "raw": item,
+            }
+        )
+    return findings
 
 
 if __name__ == "__main__":

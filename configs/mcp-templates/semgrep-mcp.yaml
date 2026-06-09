@@ -1,12 +1,18 @@
 name: semgrep-mcp
-image: dieaudit/mock-mcp:local
+image: dieaudit/tool-mcp:local
 transport: http
 port: 8001
+mcp_endpoint: /mcp
 env:
   MCP_NAME: semgrep-mcp
+  WORKSPACE_ROOT: /workspace
+  ARTIFACT_ROOT: /artifacts
 workspace_mount:
   target: /workspace
   read_only: true
+artifact_mount:
+  target: /artifacts
+  read_only: false
 mounts: []
 resources:
   memory: 2g
@@ -16,8 +22,8 @@ healthcheck:
   Timeout: 3000000000
   Retries: 10
 tools:
-  - semgrep.scan
-  - semgrep.results
+  - semgrep_scan
+  - semgrep_results
 permissions:
   workspace: read-only
   docker_api: false

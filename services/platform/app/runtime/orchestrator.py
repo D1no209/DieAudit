@@ -293,7 +293,9 @@ class RuntimeOrchestrator:
         labels["dieaudit.mcp"] = template["name"]
         labels["dieaudit.agent_run_id"] = agent_run_id
 
-        mounts = await self._mounts(workspace_host_path, template)
+        mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / agent_run_id / template["name"]
+        mcp_artifact_path.mkdir(parents=True, exist_ok=True)
+        mounts = await self._mounts(workspace_host_path, template, artifact_host_path=mcp_artifact_path)
         payload = self._container_payload(
             image=image,
             command=template.get("command"),
@@ -532,12 +534,28 @@ class RuntimeOrchestrator:
                 network.status = "cleaned"
             await session.commit()
 
-    async def _mounts(self, workspace_host_path: str | None, template: dict[str, Any]) -> list[dict[str, Any]]:
+    async def _mounts(
+        self,
+        workspace_host_path: str | None,
+        template: dict[str, Any],
+        *,
+        artifact_host_path: Path | None = None,
+    ) -> list[dict[str, Any]]:
         mounts: list[dict[str, Any]] = []
         if workspace_host_path:
             target = template.get("workspace_mount", {}).get("target", "/workspace")
             read_only = template.get("workspace_mount", {}).get("read_only", True)
             mounts.append(self._bind_mount(await self._host_path_for(Path(workspace_host_path)), target, read_only=read_only))
+        artifact_mount = template.get("artifact_mount")
+        if artifact_mount and artifact_host_path:
+            target = artifact_mount.get("target", "/artifacts")
+            mounts.append(
+                self._bind_mount(
+                    await self._host_path_for(artifact_host_path),
+                    target,
+                    read_only=artifact_mount.get("read_only", False),
+                )
+            )
         for mount in template.get("mounts", []):
             source = await self._host_path_for(Path(mount["source"]))
             target = mount["target"]

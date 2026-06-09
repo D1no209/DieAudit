@@ -6,9 +6,13 @@ mcp_endpoint: /mcp
 env:
   MCP_NAME: sca-mcp
   WORKSPACE_ROOT: /workspace
+  ARTIFACT_ROOT: /artifacts
 workspace_mount:
   target: /workspace
   read_only: true
+artifact_mount:
+  target: /artifacts
+  read_only: false
 mounts: []
 resources:
   memory: 2g
@@ -19,6 +23,7 @@ healthcheck:
   Retries: 10
 tools:
   - detect_dependencies
+  - generate_sbom
   - query_osv
 permissions:
   workspace: read-only
