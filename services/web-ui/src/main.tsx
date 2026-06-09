@@ -145,6 +145,22 @@ type RuntimePolicy = {
   };
 };
 
+type RuntimeReadiness = {
+  ok?: boolean;
+  status?: string;
+  summary?: {
+    fail?: number;
+    warn?: number;
+    pass?: number;
+  };
+  checks?: Array<{
+    id: string;
+    title: string;
+    status: "pass" | "warn" | "fail";
+    detail?: unknown;
+  }>;
+};
+
 type SandboxCapabilities = {
   ok?: boolean;
   docker_available?: boolean;
@@ -218,6 +234,7 @@ function App() {
   const [dockerHealth, setDockerHealth] = useState<any>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
   const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy>();
+  const [runtimeReadiness, setRuntimeReadiness] = useState<RuntimeReadiness>();
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
   const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
@@ -261,6 +278,7 @@ function App() {
       setDockerHealth(docker);
       readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
       readJson("/gateway/runtime/policy").then(setRuntimePolicy).catch(() => setRuntimePolicy(undefined));
+      readJson("/gateway/runtime/readiness").then(setRuntimeReadiness).catch(() => setRuntimeReadiness(undefined));
       readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
       readJson("/gateway/platform/audit-events?limit=100").then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
       setProjects(projectRows);
@@ -736,6 +754,19 @@ function App() {
             <Card>
               <Statistic title="API Auth" value={authStatus?.enabled ? "Enabled" : "Disabled"} prefix={<SafetyCertificateOutlined />} />
               {!authStatus?.enabled && <Text type="danger">Set DIEAUDIT_API_KEY before production use.</Text>}
+            </Card>
+            <Card>
+              <Statistic
+                title="Production Readiness"
+                value={runtimeReadiness?.ok ? "Ready" : "Not Ready"}
+                prefix={<SafetyCertificateOutlined />}
+              />
+              <Text type={runtimeReadiness?.ok ? "success" : "danger"}>
+                fail {runtimeReadiness?.summary?.fail ?? "-"} / warn {runtimeReadiness?.summary?.warn ?? "-"} / pass {runtimeReadiness?.summary?.pass ?? "-"}
+              </Text>
+              {!runtimeReadiness?.ok && runtimeReadiness?.checks?.find((item) => item.status === "fail") && (
+                <Text type="secondary">{runtimeReadiness.checks.find((item) => item.status === "fail")?.title}</Text>
+              )}
             </Card>
             <Card><Statistic title="Docker Runtime" value={dockerHealth?.ok ? "Ready" : "Unknown"} prefix={<CloudServerOutlined />} /></Card>
             <Card><Statistic title="Projects" value={projects.length} prefix={<FolderOpenOutlined />} /></Card>

@@ -810,6 +810,76 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             },
         }
 
+    @router.get("/runtime/readiness")
+    async def runtime_readiness() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/readiness")
+        checks: list[dict[str, Any]] = [
+            {
+                "id": "api_key",
+                "title": "API key is configured",
+                "status": "pass" if settings.dieaudit_api_key else "fail",
+                "detail": "DIEAUDIT_API_KEY is required before exposing the platform beyond local development.",
+            },
+            {
+                "id": "metrics_private",
+                "title": "Metrics are protected",
+                "status": "pass" if not settings.public_metrics else "fail",
+                "detail": "PUBLIC_METRICS=false keeps /metrics behind the API key gate.",
+            },
+            {
+                "id": "resource_limits",
+                "title": "Dynamic containers have default resource limits",
+                "status": "pass"
+                if settings.default_container_memory and settings.default_container_cpus and settings.default_container_pids_limit
+                else "fail",
+                "detail": {
+                    "memory": settings.default_container_memory,
+                    "cpus": settings.default_container_cpus,
+                    "pids_limit": settings.default_container_pids_limit,
+                    "tmpfs": settings.default_container_tmpfs,
+                },
+            },
+        ]
+        try:
+            docker = await runtime.docker_health()
+            checks.append(
+                {
+                    "id": "docker",
+                    "title": "Docker runtime is reachable",
+                    "status": "pass" if docker.get("ok") else "fail",
+                    "detail": {"ping": docker.get("ping"), "version": (docker.get("version") or {}).get("Version")},
+                }
+            )
+        except Exception as exc:
+            checks.append({"id": "docker", "title": "Docker runtime is reachable", "status": "fail", "detail": str(exc)})
+        try:
+            sandbox = await runtime.sandbox_capabilities()
+            checks.append(
+                {
+                    "id": "sandbox_isolation",
+                    "title": "Sandbox has strong isolation",
+                    "status": "pass" if sandbox.get("strong_isolation_available") else "fail",
+                    "detail": {
+                        "requested_runtime": sandbox.get("requested_runtime"),
+                        "sandbox_execution_available": sandbox.get("sandbox_execution_available"),
+                        "reason": sandbox.get("reason"),
+                        "warnings": sandbox.get("warnings"),
+                    },
+                }
+            )
+        except Exception as exc:
+            checks.append({"id": "sandbox_isolation", "title": "Sandbox has strong isolation", "status": "fail", "detail": str(exc)})
+        fail_count = sum(1 for check in checks if check["status"] == "fail")
+        warn_count = sum(1 for check in checks if check["status"] == "warn")
+        return {
+            "ok": fail_count == 0,
+            "status": "ready" if fail_count == 0 else "not_ready",
+            "summary": {"fail": fail_count, "warn": warn_count, "pass": sum(1 for check in checks if check["status"] == "pass")},
+            "checks": checks,
+        }
+
     @router.get("/runtime/managed")
     async def managed_runtime() -> dict[str, Any]:
         runtime = runtime_provider()
