@@ -1,10 +1,13 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic_settings import SettingsConfigDict
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     service_name: str = "web-api"
     postgres_async_dsn: str = "postgresql+psycopg://dieaudit:dieaudit@postgres:5432/dieaudit"
     config_root: Path = Path("/app/configs")
@@ -29,10 +32,6 @@ class Settings(BaseSettings):
     default_container_tmpfs: str = "/tmp:rw,nosuid,size=128m"
     platform_audit_event_retention_days: int = 30
     platform_audit_event_max_rows: int = 10000
-
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
 
 
 @lru_cache
