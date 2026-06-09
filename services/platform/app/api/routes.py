@@ -43,6 +43,7 @@ from app.schemas import (
     TemplateBody,
     ValidatorScaleRequest,
 )
+from app.services.artifacts import ArtifactAccessError, artifact_metadata, resolve_artifact_path
 from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, get_current_api_key, hash_api_key, has_scope
 from app.services.dependency_scanner import DependencyScanner
 from app.services.finding_dedupe import find_existing_finding, finding_identity
@@ -50,7 +51,7 @@ from app.services.knowledge import KnowledgeIndexError, KnowledgeService
 from app.services.pipeline_recovery import is_active_pipeline
 from app.services.templates import TemplateStore
 from app.services.workspace import WorkspaceImportError, WorkspaceService
-from app.settings import Settings
+from app.settings import Settings, get_settings
 
 
 router = APIRouter()
@@ -821,15 +822,37 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     async def audit_run_reports(audit_run_id: str) -> list[dict[str, Any]]:
         return await _list_reports(audit_run_id)
 
+    @router.get("/artifacts/metadata")
+    async def artifact_metadata_endpoint(path: str = Query(...)) -> dict[str, Any]:
+        try:
+            return artifact_metadata(settings, path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ArtifactAccessError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/artifacts/download")
+    async def download_artifact(path: str = Query(...)) -> FileResponse:
+        try:
+            artifact_path = resolve_artifact_path(settings, path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ArtifactAccessError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return FileResponse(artifact_path, filename=artifact_path.name)
+
     @router.get("/reports/{report_id}/download")
     async def download_report(report_id: str) -> FileResponse:
         async with SessionLocal() as session:
             report = await session.scalar(select(ReportArtifact).where(ReportArtifact.report_id == report_id))
             if not report:
                 raise HTTPException(status_code=404, detail="report not found")
-            path = Path(report.path)
-            if not path.exists():
+            try:
+                path = resolve_artifact_path(settings, report.path)
+            except FileNotFoundError as exc:
                 raise HTTPException(status_code=404, detail="report artifact not found")
+            except ArtifactAccessError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             return FileResponse(path, filename=path.name, media_type="text/markdown")
 
     @router.get("/findings/{finding_id}")
@@ -1513,6 +1536,7 @@ def _snapshot_to_dict(row: ProjectSnapshot) -> dict[str, Any]:
         "source_ref": row.source_ref,
         "workspace_path": row.workspace_path,
         "artifact_path": row.artifact_path,
+        "artifact": _artifact_metadata_or_none(row.artifact_path),
         "content_hash": row.content_hash,
         "status": row.status,
         "metadata": row.metadata_json,
@@ -1565,6 +1589,7 @@ def _evidence_to_dict(row: Evidence) -> dict[str, Any]:
         "kind": row.kind,
         "summary": row.summary,
         "artifact_path": row.artifact_path,
+        "artifact": _artifact_metadata_or_none(row.artifact_path),
         "payload": row.payload,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
@@ -1582,6 +1607,7 @@ def _knowledge_document_to_dict(row: KnowledgeDocument) -> dict[str, Any]:
         "status": row.status,
         "chunk_count": row.chunk_count,
         "artifact_path": row.artifact_path,
+        "artifact": _artifact_metadata_or_none(row.artifact_path),
         "metadata": row.metadata_json or {},
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
@@ -1681,10 +1707,20 @@ def _report_to_dict(row: ReportArtifact) -> dict[str, Any]:
         "project_id": row.project_id,
         "kind": row.kind,
         "path": row.path,
+        "artifact": _artifact_metadata_or_none(row.path),
         "summary": row.summary,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
+
+
+def _artifact_metadata_or_none(path: str | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    try:
+        return artifact_metadata(get_settings(), path)
+    except (ArtifactAccessError, FileNotFoundError, OSError):
+        return None
 
 
 async def _record_snapshot(snapshot: dict[str, Any]) -> None:

@@ -71,6 +71,17 @@ KNOWLEDGE_COLLECTION_NAME=dieaudit_knowledge_embeddings_v1
 
 Do not reuse an existing Qdrant collection when changing embedding dimension or provider. Reindex uploaded knowledge documents after changing these settings.
 
+## Artifact Access
+
+Reports, evidence files, snapshots, container logs, tool output, and knowledge uploads are stored under `ARTIFACT_ROOT`. Use the platform API instead of exposing the host directory:
+
+```powershell
+Invoke-RestMethod "http://localhost:18001/artifacts/metadata?path=reports/run-id/report.md"
+Invoke-WebRequest "http://localhost:18001/artifacts/download?path=reports/run-id/report.md" -OutFile report.md
+```
+
+Artifact download endpoints reject missing files, directories, and paths outside `ARTIFACT_ROOT`.
+
 ## Agent Protocols
 
 The gateway includes both selected protocol SDKs:

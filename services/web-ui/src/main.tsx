@@ -84,9 +84,27 @@ type Finding = {
   raw?: Record<string, unknown>;
 };
 
+type ArtifactRef = {
+  path: string;
+  relative_path: string;
+  name: string;
+  size: number;
+  download_url: string;
+};
+
+type EvidenceRow = {
+  evidence_id: string;
+  kind: string;
+  summary?: string;
+  artifact_path?: string;
+  artifact?: ArtifactRef;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+};
+
 type FindingDetail = {
   finding: Finding;
-  evidence: Array<Record<string, unknown>>;
+  evidence: EvidenceRow[];
   validation_attempts: Array<Record<string, unknown>>;
 };
 
@@ -94,6 +112,7 @@ type ReportArtifact = {
   report_id: string;
   kind: string;
   path: string;
+  artifact?: ArtifactRef;
   summary: Record<string, unknown>;
   created_at: string;
 };
@@ -217,6 +236,7 @@ type KnowledgeDocument = {
   status: string;
   chunk_count: number;
   created_at: string;
+  artifact?: ArtifactRef;
   metadata?: Record<string, unknown>;
 };
 
@@ -548,8 +568,13 @@ function App() {
     });
   }
 
-  function downloadReport(reportId: string) {
-    window.open(`/gateway/reports/${reportId}/download`, "_blank", "noopener,noreferrer");
+  function openArtifact(artifact?: ArtifactRef, fallbackPath?: string) {
+    const url = artifactUrl(artifact, fallbackPath);
+    if (!url) {
+      message.warning("Artifact is not available");
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function openFinding(findingId: string) {
@@ -870,6 +895,9 @@ function App() {
         <Space>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => reindexKnowledgeDocument(row.document_id)}>
             重建
+          </Button>
+          <Button size="small" icon={<FileTextOutlined />} disabled={!row.artifact} onClick={() => openArtifact(row.artifact)}>
+            下载
           </Button>
           <Popconfirm title="删除知识库文档？" okText="删除" cancelText="取消" onConfirm={() => deleteKnowledgeDocument(row.document_id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
@@ -1203,10 +1231,10 @@ function App() {
                       dataSource={reports}
                       renderItem={(item) => (
                         <List.Item>
-                          <List.Item.Meta title={item.kind} description={item.path} />
+                          <List.Item.Meta title={item.kind} description={item.artifact?.relative_path || item.path} />
                           <Space>
                             <Tag>{String(item.summary?.finding_count ?? 0)} findings</Tag>
-                            <Button size="small" icon={<FileTextOutlined />} onClick={() => downloadReport(item.report_id)}>下载</Button>
+                            <Button size="small" icon={<FileTextOutlined />} onClick={() => openArtifact(item.artifact, item.path)}>下载</Button>
                           </Space>
                         </List.Item>
                       )}
@@ -1240,7 +1268,31 @@ function App() {
                     {
                       key: "evidence",
                       label: `Evidence (${selectedFinding.evidence.length})`,
-                      children: <pre>{JSON.stringify(selectedFinding.evidence, null, 2)}</pre>,
+                      children: (
+                        <List
+                          dataSource={selectedFinding.evidence}
+                          renderItem={(item) => (
+                            <List.Item
+                              actions={[
+                                <Button
+                                  key="artifact"
+                                  size="small"
+                                  icon={<FileTextOutlined />}
+                                  disabled={!item.artifact && !item.artifact_path}
+                                  onClick={() => openArtifact(item.artifact, item.artifact_path)}
+                                >
+                                  下载
+                                </Button>,
+                              ]}
+                            >
+                              <List.Item.Meta
+                                title={<Space><Tag>{item.kind}</Tag><Text>{item.summary || item.artifact?.name || item.evidence_id}</Text></Space>}
+                                description={<pre>{JSON.stringify(item, null, 2)}</pre>}
+                              />
+                            </List.Item>
+                          )}
+                        />
+                      ),
                     },
                     {
                       key: "attempts",
@@ -1290,6 +1342,20 @@ function readinessColor(value: string) {
   if (value === "fail") return "red";
   if (value === "warn") return "orange";
   return "green";
+}
+
+function artifactUrl(artifact?: ArtifactRef, fallbackPath?: string) {
+  const path = artifact?.download_url || (fallbackPath ? `/artifacts/download?path=${encodeURIComponent(fallbackPath)}` : "");
+  if (!path) {
+    return "";
+  }
+  if (path.startsWith("/gateway/")) {
+    return path;
+  }
+  if (path.startsWith("/")) {
+    return `/gateway${path}`;
+  }
+  return `/gateway/artifacts/download?path=${encodeURIComponent(path)}`;
 }
 
 function isActiveRun(auditStatus?: string, pipelineStatus?: string) {
