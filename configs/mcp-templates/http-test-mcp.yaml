@@ -1,9 +1,11 @@
 name: http-test-mcp
-image: dieaudit/mock-mcp:local
+image: dieaudit/tool-mcp:local
 transport: http
 port: 8001
+mcp_endpoint: /mcp
 env:
   MCP_NAME: http-test-mcp
+  HTTP_TEST_ALLOW_HOST_GATEWAY: "false"
 mounts: []
 resources:
   memory: 512m
@@ -13,8 +15,7 @@ healthcheck:
   Timeout: 3000000000
   Retries: 10
 tools:
-  - http.request
-  - http.session
+  - http_request
 permissions:
   external_network: controlled-by-audit-run
   docker_api: false

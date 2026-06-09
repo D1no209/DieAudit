@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -21,6 +22,15 @@ API_KEY_HEADER = os.environ.get("API_KEY_HEADER", "X-DieAudit-Api-Key")
 PLATFORM_API_KEY = os.environ.get("DIEAUDIT_API_KEY") or os.environ.get("KNOWLEDGE_API_KEY")
 PROJECT_ID = os.environ.get("PROJECT_ID")
 ENFORCE_PROJECT_FILTER = os.environ.get("ENFORCE_PROJECT_FILTER", "false").lower() in {"1", "true", "yes"}
+HTTP_TEST_ALLOWED_HOSTS = {
+    item.strip().lower()
+    for item in os.environ.get("HTTP_TEST_ALLOWED_HOSTS", "").split(",")
+    if item.strip()
+}
+HTTP_TEST_ALLOW_HOST_GATEWAY = os.environ.get("HTTP_TEST_ALLOW_HOST_GATEWAY", "false").lower() in {"1", "true", "yes"}
+HTTP_TEST_BLOCKED_HOSTS = {"169.254.169.254", "metadata.google.internal", "docker-socket-proxy"}
+if not HTTP_TEST_ALLOW_HOST_GATEWAY:
+    HTTP_TEST_BLOCKED_HOSTS.update({"host.docker.internal", "host.containers.internal"})
 
 mcp = FastMCP(MCP_NAME, host="0.0.0.0", port=8001, stateless_http=True)
 
@@ -81,6 +91,22 @@ async def search_knowledge_route(request):
 async def get_knowledge_document_route(request):
     body = await request.json()
     return JSONResponse(await get_knowledge_document(document_id=body.get("document_id", "")))
+
+
+@mcp.custom_route("/tools/http_request", methods=["POST"])
+async def http_request_route(request):
+    body = await request.json()
+    return JSONResponse(
+        await http_request(
+            method=body.get("method", "GET"),
+            url=body.get("url", ""),
+            headers=body.get("headers"),
+            body=body.get("body"),
+            json_body=body.get("json_body"),
+            timeout_seconds=float(body.get("timeout_seconds", 15)),
+            allow_redirects=bool(body.get("allow_redirects", False)),
+        )
+    )
 
 
 @mcp.tool()
@@ -378,6 +404,57 @@ async def get_knowledge_document(document_id: str) -> dict[str, Any]:
     return {"document": document, "chunks": chunks}
 
 
+@mcp.tool()
+async def http_request(
+    method: str,
+    url: str,
+    headers: dict[str, str] | None = None,
+    body: str | None = None,
+    json_body: dict[str, Any] | list[Any] | None = None,
+    timeout_seconds: float = 15,
+    allow_redirects: bool = False,
+) -> dict[str, Any]:
+    """Send a controlled HTTP request from the audit run network."""
+    parsed = _validate_http_target(url)
+    method = method.upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+        raise ValueError("unsupported HTTP method")
+    timeout_seconds = min(max(float(timeout_seconds), 1.0), 60.0)
+    safe_headers = {str(key): str(value) for key, value in (headers or {}).items()}
+    request_kwargs: dict[str, Any] = {
+        "method": method,
+        "url": url,
+        "headers": safe_headers,
+        "follow_redirects": allow_redirects,
+    }
+    if json_body is not None:
+        request_kwargs["json"] = json_body
+    elif body is not None:
+        request_kwargs["content"] = body
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
+            response = await client.request(**request_kwargs)
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "url": url,
+            "method": method,
+            "host": parsed.hostname,
+            "error": str(exc),
+        }
+    return {
+        "ok": True,
+        "url": str(response.url),
+        "method": method,
+        "status_code": response.status_code,
+        "reason_phrase": response.reason_phrase,
+        "headers": _safe_response_headers(response.headers),
+        "content_type": response.headers.get("content-type", ""),
+        "body_truncated": len(response.content) > MAX_READ_BYTES,
+        "body": response.text[:MAX_READ_BYTES],
+    }
+
+
 def _safe_path(path: str) -> Path:
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -571,6 +648,23 @@ async def _platform_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if response.status_code >= 400:
             raise RuntimeError(f"platform API {path} failed: {response.status_code} {response.text[-1000:]}")
         return response.json()
+
+
+def _validate_http_target(url: str):
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("url must be an absolute http(s) URL")
+    host = parsed.hostname.lower()
+    if HTTP_TEST_ALLOWED_HOSTS and host not in HTTP_TEST_ALLOWED_HOSTS:
+        raise ValueError("host is not allowed by HTTP_TEST_ALLOWED_HOSTS")
+    if host in HTTP_TEST_BLOCKED_HOSTS:
+        raise ValueError("host is blocked by http-test-mcp policy")
+    return parsed
+
+
+def _safe_response_headers(headers: httpx.Headers) -> dict[str, str]:
+    blocked = {"set-cookie", "authorization", "proxy-authorization"}
+    return {key: value for key, value in headers.items() if key.lower() not in blocked}
 
 
 if __name__ == "__main__":
