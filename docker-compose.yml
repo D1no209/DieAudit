@@ -23,6 +23,10 @@ x-platform-service: &platform-service
   build:
     context: .
     dockerfile: services/platform/Dockerfile
+    args:
+      HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+      HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
   restart: unless-stopped
   networks:
     - platform
@@ -56,6 +60,10 @@ services:
     build:
       context: .
       dockerfile: services/web-ui/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     restart: unless-stopped
     networks:
@@ -312,6 +320,10 @@ services:
     build:
       context: .
       dockerfile: services/mock-agent/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: dieaudit/mock-agent:local
     profiles: ["demo", "tools"]
     command: ["python", "/app/mock_agent.py", "--idle"]
@@ -322,6 +334,10 @@ services:
     build:
       context: .
       dockerfile: services/mock-mcp/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: dieaudit/mock-mcp:local
     profiles: ["demo", "tools"]
     command: ["python", "/app/mock_mcp.py"]

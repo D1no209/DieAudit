@@ -4,7 +4,7 @@ DieAudit is a local-first, multi-agent code audit platform skeleton. This first 
 
 ## Quick Start
 
-The first build needs access to Docker Hub for base images such as Python, Node, Nginx, Postgres, Redis, NATS, Qdrant, and Temporal. If your network blocks Docker Hub, pre-pull or mirror those images first.
+The default proxy is `http://127.0.0.1:7897` for Docker CLI pulls and `http://host.docker.internal:7897` for Docker build steps. Override `HOST_HTTP_PROXY`, `HOST_HTTPS_PROXY`, `BUILD_HTTP_PROXY`, and `BUILD_HTTPS_PROXY` in `.env` if needed.
 
 ```powershell
 copy .env.example .env
