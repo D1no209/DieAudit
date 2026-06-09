@@ -223,6 +223,7 @@ class RuntimeOrchestrator:
         validator_agent_name: str,
         allow_external_network: bool,
         retain_runtime_on_failure: bool,
+        wait_for_completion: bool = False,
     ) -> dict[str, Any]:
         await self._record_audit_run(
             audit_run_id=audit_run_id,
@@ -331,7 +332,10 @@ class RuntimeOrchestrator:
                 except Exception:
                     pass
 
-        asyncio.create_task(drain(scheduled))
+        if wait_for_completion:
+            await drain(scheduled)
+        else:
+            asyncio.create_task(drain(scheduled))
         return {
             "audit_run_id": audit_run_id,
             "project_id": project_id,

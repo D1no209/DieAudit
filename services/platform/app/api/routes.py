@@ -1,11 +1,23 @@
+import json
 import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import select
 
-from app.domain.models import AgentRun, AgentRunEvent, AuditRun, Finding, Project, ProjectSnapshot
+from app.domain.models import (
+    AgentRun,
+    AgentRunEvent,
+    AuditRun,
+    Evidence,
+    Finding,
+    Project,
+    ProjectSnapshot,
+    ReportArtifact,
+    ValidationAttempt,
+)
 from app.integrations.docker import DockerApiError
 from app.integrations.protocols import classify_agent_protocol, fetch_a2a_agent_card, serialize_capabilities
 from app.repositories import SessionLocal
@@ -280,6 +292,202 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "findings": [_finding_to_dict(row) for row in created],
             }
 
+    @router.post("/audit-runs/{audit_run_id}/run-pipeline")
+    async def run_pipeline(audit_run_id: str) -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/run-pipeline", method="POST")
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        if not workspace_path:
+            raise HTTPException(status_code=400, detail="audit run has no workspace path")
+
+        await _mark_audit_run_status(audit_run_id, "running")
+        steps: list[dict[str, Any]] = []
+        agent_result = await start_agent_run(
+            audit_run_id,
+            StartAgentRunRequest(
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
+                workspace_host_path=workspace_path,
+                allow_external_network=audit_run["allow_external_network"],
+                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+                input_payload=audit_run.get("config", {}).get("input_payload")
+                or {
+                    "goal": (
+                        "Run a structured security audit pass. Return JSON with summary, findings, and evidence. "
+                        "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
+                    )
+                },
+            ),
+        )
+        steps.append({"step": "agent-audit", "result": agent_result})
+
+        try:
+            sca_result = await run_sca(audit_run_id)
+        except Exception as exc:
+            sca_result = {"ok": False, "error": str(exc)}
+            await _record_pipeline_event(audit_run_id, "sca_failed", sca_result)
+        steps.append({"step": "sca", "result": sca_result})
+
+        semgrep_result = await _run_semgrep_best_effort(audit_run_id, audit_run["project_id"], workspace_path, settings)
+        steps.append({"step": "semgrep", "result": semgrep_result})
+
+        findings = await _list_findings(audit_run_id)
+        validator_result = await scale_validators(
+            audit_run_id,
+            ValidatorScaleRequest(
+                project_id=audit_run["project_id"],
+                findings=findings,
+                workspace_host_path=workspace_path,
+                validator_rounds=audit_run["validator_rounds"],
+                max_parallel_validators=audit_run["max_parallel_validators"],
+                validator_agent_name="opencode-validator",
+                allow_external_network=audit_run["allow_external_network"],
+                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+                wait_for_completion=True,
+            ),
+        )
+        steps.append({"step": "validators", "result": validator_result})
+
+        judge_result = await judge_audit_run(audit_run_id)
+        report_result = await generate_report(audit_run_id)
+        await _mark_audit_run_status(audit_run_id, "completed")
+        return {
+            "audit_run_id": audit_run_id,
+            "status": "completed",
+            "steps": steps,
+            "judge": judge_result,
+            "report": report_result,
+        }
+
+    @router.post("/audit-runs/{audit_run_id}/judge")
+    async def judge_audit_run(audit_run_id: str) -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/judge", method="POST")
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        findings = await _list_findings(audit_run_id)
+        attempts = await _list_validation_attempts(audit_run_id)
+        evidence = await _list_evidence(audit_run_id)
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        judger_result = None
+        if findings and workspace_path:
+            try:
+                judger_result = await start_agent_run(
+                    audit_run_id,
+                    StartAgentRunRequest(
+                        audit_run_id=audit_run_id,
+                        project_id=audit_run["project_id"],
+                        agent_name="opencode-judger",
+                        workspace_host_path=workspace_path,
+                        allow_external_network=audit_run["allow_external_network"],
+                        retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+                        input_payload={
+                            "goal": "Judge the supplied findings and validation evidence. Return concise JSON decisions.",
+                            "findings": findings,
+                            "validation_attempts": attempts,
+                            "evidence": evidence,
+                        },
+                    ),
+                )
+            except Exception as exc:
+                judger_result = {"ok": False, "error": str(exc)}
+                await _record_pipeline_event(audit_run_id, "judger_failed", judger_result)
+
+        decisions = await _apply_judgement(audit_run_id)
+        return {"audit_run_id": audit_run_id, "judger_agent": judger_result, "decisions": decisions}
+
+    @router.post("/audit-runs/{audit_run_id}/report")
+    async def generate_report(audit_run_id: str) -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/report", method="POST")
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        findings = await _list_findings(audit_run_id)
+        evidence = await _list_evidence(audit_run_id)
+        attempts = await _list_validation_attempts(audit_run_id)
+        agent_runs = await _list_agent_runs(audit_run_id)
+        report_dir = settings.artifact_root / "reports" / audit_run_id
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_json = report_dir / "report.json"
+        report_md = report_dir / "report.md"
+        payload = {
+            "audit_run": audit_run,
+            "findings": findings,
+            "evidence": evidence,
+            "validation_attempts": attempts,
+            "agent_runs": agent_runs,
+        }
+        report_json.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        report_md.write_text(_report_markdown(payload), encoding="utf-8")
+        report_id = str(uuid.uuid4())
+        async with SessionLocal() as session:
+            record = ReportArtifact(
+                report_id=report_id,
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                kind="audit-report",
+                path=str(report_md),
+                summary={
+                    "json_path": str(report_json),
+                    "finding_count": len(findings),
+                    "confirmed_count": len([item for item in findings if item.get("status") == "confirmed"]),
+                },
+            )
+            session.add(record)
+            await session.commit()
+        return {"report_id": report_id, "markdown_path": str(report_md), "json_path": str(report_json)}
+
+    @router.get("/audit-runs/{audit_run_id}/evidence")
+    async def audit_run_evidence(audit_run_id: str) -> list[dict[str, Any]]:
+        return await _list_evidence(audit_run_id)
+
+    @router.get("/audit-runs/{audit_run_id}/validation-attempts")
+    async def audit_run_validation_attempts(audit_run_id: str) -> list[dict[str, Any]]:
+        return await _list_validation_attempts(audit_run_id)
+
+    @router.get("/audit-runs/{audit_run_id}/reports")
+    async def audit_run_reports(audit_run_id: str) -> list[dict[str, Any]]:
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(ReportArtifact)
+                    .where(ReportArtifact.audit_run_id == audit_run_id)
+                    .order_by(ReportArtifact.created_at.desc())
+                )
+            ).scalars()
+            return [_report_to_dict(row) for row in rows]
+
+    @router.get("/findings/{finding_id}")
+    async def get_finding(finding_id: str) -> dict[str, Any]:
+        async with SessionLocal() as session:
+            finding = await session.scalar(select(Finding).where(Finding.finding_id == finding_id))
+            if not finding:
+                raise HTTPException(status_code=404, detail="finding not found")
+            evidence_rows = (
+                await session.execute(select(Evidence).where(Evidence.finding_id == finding_id).order_by(Evidence.created_at.asc()))
+            ).scalars()
+            attempt_rows = (
+                await session.execute(
+                    select(ValidationAttempt)
+                    .where(ValidationAttempt.finding_id == finding_id)
+                    .order_by(ValidationAttempt.round_index.asc())
+                )
+            ).scalars()
+            return {
+                "finding": _finding_to_dict(finding),
+                "evidence": [_evidence_to_dict(row) for row in evidence_rows],
+                "validation_attempts": [_attempt_to_dict(row) for row in attempt_rows],
+            }
+
     @router.get("/runtime/protocols")
     async def runtime_protocols() -> dict[str, Any]:
         templates = TemplateStore(settings.config_root, "agent-templates").list()
@@ -504,6 +712,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             validator_agent_name=body.validator_agent_name,
             allow_external_network=body.allow_external_network,
             retain_runtime_on_failure=body.retain_runtime_on_failure,
+            wait_for_completion=body.wait_for_completion,
         )
 
     return router
@@ -593,6 +802,47 @@ def _finding_to_dict(row: Finding) -> dict[str, Any]:
     }
 
 
+def _evidence_to_dict(row: Evidence) -> dict[str, Any]:
+    return {
+        "evidence_id": row.evidence_id,
+        "finding_id": row.finding_id,
+        "audit_run_id": row.audit_run_id,
+        "kind": row.kind,
+        "summary": row.summary,
+        "artifact_path": row.artifact_path,
+        "payload": row.payload,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _attempt_to_dict(row: ValidationAttempt) -> dict[str, Any]:
+    return {
+        "attempt_id": row.attempt_id,
+        "finding_id": row.finding_id,
+        "audit_run_id": row.audit_run_id,
+        "agent_run_id": row.agent_run_id,
+        "round_index": row.round_index,
+        "status": row.status,
+        "result": row.result,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _report_to_dict(row: ReportArtifact) -> dict[str, Any]:
+    return {
+        "report_id": row.report_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "kind": row.kind,
+        "path": row.path,
+        "summary": row.summary,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
 async def _record_snapshot(snapshot: dict[str, Any]) -> None:
     async with SessionLocal() as session:
         session.add(
@@ -640,6 +890,193 @@ async def _get_audit_run(audit_run_id: str) -> dict[str, Any] | None:
     async with SessionLocal() as session:
         audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
         return _audit_run_to_dict(audit_run) if audit_run else None
+
+
+async def _list_findings(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(select(Finding).where(Finding.audit_run_id == audit_run_id).order_by(Finding.created_at.asc()))
+        ).scalars()
+        return [_finding_to_dict(row) for row in rows]
+
+
+async def _list_evidence(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(select(Evidence).where(Evidence.audit_run_id == audit_run_id).order_by(Evidence.created_at.asc()))
+        ).scalars()
+        return [_evidence_to_dict(row) for row in rows]
+
+
+async def _list_validation_attempts(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(ValidationAttempt)
+                .where(ValidationAttempt.audit_run_id == audit_run_id)
+                .order_by(ValidationAttempt.created_at.asc())
+            )
+        ).scalars()
+        return [_attempt_to_dict(row) for row in rows]
+
+
+async def _list_agent_runs(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.asc()))
+        ).scalars()
+        return [_agent_run_to_dict(row) for row in rows]
+
+
+async def _record_pipeline_event(audit_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    async with SessionLocal() as session:
+        agent_run = await session.scalar(
+            select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
+        )
+        if agent_run:
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload=payload))
+            await session.commit()
+
+
+async def _run_semgrep_best_effort(
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    import shutil
+    import subprocess
+
+    semgrep = shutil.which("semgrep")
+    if not semgrep:
+        result = {"ok": False, "available": False, "error": "semgrep executable is not installed in web-api container"}
+        await _record_pipeline_event(audit_run_id, "semgrep_skipped", result)
+        return result
+    artifact_dir = settings.artifact_root / "semgrep" / audit_run_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    output_path = artifact_dir / "semgrep-results.json"
+    command = [semgrep, "scan", "--config", "auto", "--json", "--output", str(output_path), workspace_path]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    if completed.returncode not in {0, 1}:
+        result = {
+            "ok": False,
+            "available": True,
+            "exit_code": completed.returncode,
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+        }
+        await _record_pipeline_event(audit_run_id, "semgrep_failed", result)
+        return result
+    data = json.loads(output_path.read_text(encoding="utf-8", errors="replace")) if output_path.exists() else {}
+    created = []
+    async with SessionLocal() as session:
+        for item in data.get("results", []) or []:
+            extra = item.get("extra", {}) or {}
+            finding = Finding(
+                finding_id=str(uuid.uuid4()),
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                title=str(extra.get("message") or item.get("check_id") or "Semgrep finding")[:255],
+                severity=str(extra.get("severity") or "unknown").lower(),
+                status="candidate",
+                file_path=item.get("path"),
+                line_start=(item.get("start") or {}).get("line"),
+                line_end=(item.get("end") or {}).get("line"),
+                rule_id=item.get("check_id"),
+                description=extra.get("message"),
+                source="semgrep",
+                raw=item,
+            )
+            session.add(finding)
+            created.append(finding)
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding.finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="semgrep-result",
+                    summary=extra.get("message"),
+                    artifact_path=str(output_path),
+                    payload=item,
+                )
+            )
+        await session.commit()
+    return {"ok": True, "available": True, "artifact_path": str(output_path), "findings_created": len(created)}
+
+
+async def _apply_judgement(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        findings = (
+            await session.execute(select(Finding).where(Finding.audit_run_id == audit_run_id).order_by(Finding.created_at.asc()))
+        ).scalars()
+        decisions = []
+        for finding in findings:
+            attempts = (
+                await session.execute(
+                    select(ValidationAttempt).where(
+                        ValidationAttempt.audit_run_id == audit_run_id,
+                        ValidationAttempt.finding_id == finding.finding_id,
+                    )
+                )
+            ).scalars()
+            attempt_rows = list(attempts)
+            completed = [item for item in attempt_rows if item.status == "completed"]
+            failed = [item for item in attempt_rows if item.status == "failed"]
+            if completed:
+                status = "confirmed"
+            elif failed:
+                status = "needs_review"
+            else:
+                status = "needs_review" if finding.status in {"candidate", "validating"} else finding.status
+            finding.status = status
+            decisions.append(
+                {
+                    "finding_id": finding.finding_id,
+                    "status": status,
+                    "completed_attempts": len(completed),
+                    "failed_attempts": len(failed),
+                }
+            )
+        await session.commit()
+        return decisions
+
+
+def _report_markdown(payload: dict[str, Any]) -> str:
+    audit_run = payload["audit_run"]
+    findings = payload["findings"]
+    attempts = payload["validation_attempts"]
+    evidence = payload["evidence"]
+    lines = [
+        f"# DieAudit Report {audit_run['audit_run_id']}",
+        "",
+        f"- Project: `{audit_run['project_id']}`",
+        f"- Snapshot: `{audit_run.get('snapshot_id') or '-'}`",
+        f"- Status: `{audit_run['status']}`",
+        f"- Findings: `{len(findings)}`",
+        f"- Evidence: `{len(evidence)}`",
+        f"- Validation attempts: `{len(attempts)}`",
+        "",
+        "## Findings",
+        "",
+    ]
+    if not findings:
+        lines.append("No findings were recorded.")
+    for finding in findings:
+        lines.extend(
+            [
+                f"### {finding['title']}",
+                "",
+                f"- ID: `{finding['finding_id']}`",
+                f"- Severity: `{finding['severity']}`",
+                f"- Status: `{finding['status']}`",
+                f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
+                f"- Source: `{finding['source']}`",
+                "",
+                finding.get("description") or "",
+                "",
+            ]
+        )
+    return "\n".join(lines)
 
 
 async def _resolve_snapshot(session, project_id: str, snapshot_id: str | None) -> ProjectSnapshot:

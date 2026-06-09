@@ -134,7 +134,12 @@ def _prompt(input_payload: dict[str, Any]) -> str:
         goal = json.dumps(payload, indent=2, sort_keys=True)
     return (
         "You are running inside DieAudit. Analyze only the mounted /workspace source tree. "
-        "Use authorized MCP servers when useful. Write concise structured output.\n\n"
+        "Use authorized MCP servers when useful. Write concise structured output. "
+        "When reporting vulnerabilities, include a JSON object with this shape: "
+        '{"summary": "...", "findings": [{"title": "...", "severity": "high|medium|low|unknown", '
+        '"file_path": "relative/path", "line_start": 1, "line_end": 1, "description": "...", '
+        '"confidence": 0.0, "source": "agent", "evidence": [{"kind": "code", "summary": "...", "payload": {}}]}], '
+        '"evidence": []}. Do not omit required finding fields.\n\n'
         f"Task:\n{goal}"
     )
 

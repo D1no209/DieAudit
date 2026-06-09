@@ -61,3 +61,4 @@ class ValidatorScaleRequest(BaseModel):
     validator_agent_name: str = "opencode-validator"
     allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
+    wait_for_completion: bool = False
