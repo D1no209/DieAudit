@@ -1,4 +1,4 @@
-from app.integrations.protocols.capabilities import (
+from .capabilities import (
     ProtocolCapability,
     classify_agent_protocol,
     fetch_a2a_agent_card,
