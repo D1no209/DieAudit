@@ -3,9 +3,12 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Response
+from sqlalchemy import select
 
+from app.domain.models import AgentRun, AgentRunEvent
 from app.integrations.docker import DockerApiError
 from app.integrations.protocols import classify_agent_protocol, fetch_a2a_agent_card, serialize_capabilities
+from app.repositories import SessionLocal
 from app.schemas import A2AAgentCardRequest, StartAgentRunRequest, TemplateBody
 from app.services.templates import TemplateStore
 from app.settings import Settings
@@ -160,6 +163,85 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         )
         return await start_agent_run(audit_run_id, body)
 
+    @router.post("/audit-runs/{audit_run_id}/opencode-demo")
+    async def start_opencode_demo(audit_run_id: str = "opencode-demo-run") -> dict[str, Any]:
+        workspace = settings.workspace_root / "opencode-demo-project"
+        workspace.mkdir(parents=True, exist_ok=True)
+        demo_file = workspace / "app.py"
+        if not demo_file.exists():
+            demo_file.write_text(
+                "import os\n\n"
+                "def read_profile(user_supplied_path):\n"
+                "    base = '/app/profiles'\n"
+                "    return open(os.path.join(base, user_supplied_path)).read()\n",
+                encoding="utf-8",
+            )
+        body = StartAgentRunRequest(
+            audit_run_id=audit_run_id,
+            project_id="opencode-demo-project",
+            agent_name="opencode-orchestrator",
+            workspace_host_path=str(workspace),
+            input_payload={
+                "goal": (
+                    "Run a minimal code-audit pass over the demo project. Confirm you can inspect "
+                    "the mounted source and report any suspicious vulnerability candidates with file paths."
+                )
+            },
+        )
+        return await start_agent_run(audit_run_id, body)
+
+    @router.get("/audit-runs/{audit_run_id}/agent-runs")
+    async def audit_run_agent_runs(audit_run_id: str) -> list[dict[str, Any]]:
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
+                )
+            ).scalars()
+            return [_agent_run_to_dict(row) for row in rows]
+
+    @router.get("/audit-runs/{audit_run_id}/agent-runs/{agent_run_id}")
+    async def audit_run_agent_run(audit_run_id: str, agent_run_id: str) -> dict[str, Any]:
+        async with SessionLocal() as session:
+            row = await session.scalar(
+                select(AgentRun).where(
+                    AgentRun.audit_run_id == audit_run_id,
+                    AgentRun.agent_run_id == agent_run_id,
+                )
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="agent run not found")
+            return _agent_run_to_dict(row)
+
+    @router.get("/audit-runs/{audit_run_id}/agent-runs/{agent_run_id}/events")
+    async def audit_run_agent_run_events(audit_run_id: str, agent_run_id: str) -> list[dict[str, Any]]:
+        async with SessionLocal() as session:
+            agent_run = await session.scalar(
+                select(AgentRun).where(
+                    AgentRun.audit_run_id == audit_run_id,
+                    AgentRun.agent_run_id == agent_run_id,
+                )
+            )
+            if not agent_run:
+                raise HTTPException(status_code=404, detail="agent run not found")
+            rows = (
+                await session.execute(
+                    select(AgentRunEvent)
+                    .where(AgentRunEvent.agent_run_id == agent_run_id)
+                    .order_by(AgentRunEvent.created_at.asc())
+                )
+            ).scalars()
+            return [
+                {
+                    "id": row.id,
+                    "agent_run_id": row.agent_run_id,
+                    "event_type": row.event_type,
+                    "payload": row.payload,
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in rows
+            ]
+
     @router.get("/audit-runs/{audit_run_id}/containers")
     async def audit_run_containers(audit_run_id: str) -> list[dict[str, Any]]:
         runtime = runtime_provider()
@@ -193,6 +275,24 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         }
 
     return router
+
+
+def _agent_run_to_dict(row: AgentRun) -> dict[str, Any]:
+    return {
+        "agent_run_id": row.agent_run_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "agent_name": row.agent_name,
+        "template_name": row.template_name,
+        "protocol_kind": row.protocol_kind,
+        "status": row.status,
+        "input_summary": row.input_summary,
+        "output_summary": row.output_summary,
+        "artifact_path": row.artifact_path,
+        "error": row.error,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
 
 
 __all__ = ["register_runtime_routes"]
