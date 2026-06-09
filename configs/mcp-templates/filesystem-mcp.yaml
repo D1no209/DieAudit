@@ -1,9 +1,11 @@
 name: filesystem-mcp
-image: dieaudit/mock-mcp:local
+image: dieaudit/tool-mcp:local
 transport: http
 port: 8001
+mcp_endpoint: /mcp
 env:
   MCP_NAME: filesystem-mcp
+  WORKSPACE_ROOT: /workspace
 workspace_mount:
   target: /workspace
   read_only: true
@@ -16,8 +18,8 @@ healthcheck:
   Timeout: 3000000000
   Retries: 10
 tools:
-  - filesystem.read
-  - filesystem.list
+  - list_files
+  - read_file
 permissions:
   workspace: read-only
   docker_api: false

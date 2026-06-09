@@ -353,6 +353,20 @@ services:
     networks:
       - platform
 
+  tool-mcp-image:
+    build:
+      context: .
+      dockerfile: services/mcp-tools/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    image: dieaudit/tool-mcp:local
+    profiles: ["demo", "tools"]
+    command: ["python", "/app/tool_mcp.py"]
+    networks:
+      - platform
+
   opencode-agent-image:
     build:
       context: .

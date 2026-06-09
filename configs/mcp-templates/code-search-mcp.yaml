@@ -1,9 +1,11 @@
 name: code-search-mcp
-image: dieaudit/mock-mcp:local
+image: dieaudit/tool-mcp:local
 transport: http
 port: 8001
+mcp_endpoint: /mcp
 env:
   MCP_NAME: code-search-mcp
+  WORKSPACE_ROOT: /workspace
 workspace_mount:
   target: /workspace
   read_only: true
@@ -16,8 +18,9 @@ healthcheck:
   Timeout: 3000000000
   Retries: 10
 tools:
-  - code.search
-  - code.read_snippet
+  - search_code
+  - read_snippet
+  - read_file
 permissions:
   workspace: read-only
   docker_api: false

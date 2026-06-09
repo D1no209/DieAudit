@@ -88,9 +88,10 @@ class RuntimeOrchestrator:
                 )
                 mcp_results.append(mcp_container)
                 if mcp.get("transport", "http") in {"http", "sse"}:
+                    endpoint = mcp.get("mcp_endpoint", "")
                     mcp_servers[mcp["name"]] = {
                         "transport": mcp.get("transport", "http"),
-                        "url": f"http://{mcp_container['name']}:{mcp.get('port', 8001)}",
+                        "url": f"http://{mcp_container['name']}:{mcp.get('port', 8001)}{endpoint}",
                     }
 
             runtime_package: dict[str, Any] | None = None
