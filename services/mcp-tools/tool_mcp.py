@@ -123,6 +123,30 @@ async def start_sandbox_service_route(request):
     return JSONResponse(await start_sandbox_service(**body))
 
 
+@mcp.custom_route("/tools/codeql_query", methods=["POST"])
+async def codeql_query_route(request):
+    body = await request.json()
+    return JSONResponse(
+        codeql_query(
+            database=body.get("database", ""),
+            query=body.get("query", ""),
+            timeout_seconds=int(body.get("timeout_seconds", 300)),
+        )
+    )
+
+
+@mcp.custom_route("/tools/joern_query", methods=["POST"])
+async def joern_query_route(request):
+    body = await request.json()
+    return JSONResponse(
+        joern_query(
+            query=body.get("query", ""),
+            cpg_path=body.get("cpg_path"),
+            timeout_seconds=int(body.get("timeout_seconds", 300)),
+        )
+    )
+
+
 @mcp.tool()
 def list_files(path: str = ".", max_results: int = 200) -> dict[str, Any]:
     """List files under the authorized workspace."""
@@ -527,6 +551,50 @@ async def start_sandbox_service(
     return await _platform_post(f"/audit-runs/{audit_run_id}/sandbox/service", payload)
 
 
+@mcp.tool()
+def codeql_query(database: str, query: str, timeout_seconds: int = 300) -> dict[str, Any]:
+    """Run a CodeQL query when CodeQL is installed in this MCP image."""
+    codeql = shutil.which("codeql")
+    if not codeql:
+        return _tool_unavailable("codeql", "codeql executable is not installed in this MCP image")
+    if not database or not query:
+        raise ValueError("database and query are required")
+    database_path = _safe_path(database)
+    query_path = _safe_path(query)
+    artifact_dir = _artifact_dir("codeql")
+    output_path = artifact_dir / "codeql-query.bqrs"
+    command = [
+        codeql,
+        "query",
+        "run",
+        str(query_path),
+        "--database",
+        str(database_path),
+        "--output",
+        str(output_path),
+    ]
+    return _run_tool_command("codeql", command, output_path, timeout_seconds)
+
+
+@mcp.tool()
+def joern_query(query: str, cpg_path: str | None = None, timeout_seconds: int = 300) -> dict[str, Any]:
+    """Run a Joern script/query when Joern is installed in this MCP image."""
+    joern = shutil.which("joern")
+    if not joern:
+        return _tool_unavailable("joern", "joern executable is not installed in this MCP image")
+    if not query.strip():
+        raise ValueError("query is required")
+    artifact_dir = _artifact_dir("joern")
+    script_path = artifact_dir / "query.sc"
+    output_path = artifact_dir / "joern-query.txt"
+    script = query
+    if cpg_path:
+        script = f'importCpg("{_safe_path(cpg_path).as_posix()}")\n{query}'
+    script_path.write_text(script, encoding="utf-8")
+    command = [joern, "--script", str(script_path)]
+    return _run_tool_command("joern", command, output_path, timeout_seconds)
+
+
 def _safe_path(path: str) -> Path:
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -743,6 +811,44 @@ def _validate_http_target(url: str):
 def _safe_response_headers(headers: httpx.Headers) -> dict[str, str]:
     blocked = {"set-cookie", "authorization", "proxy-authorization"}
     return {key: value for key, value in headers.items() if key.lower() not in blocked}
+
+
+def _tool_unavailable(tool: str, error: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "available": False,
+        "tool": tool,
+        "error": error,
+        "artifact_path": None,
+    }
+
+
+def _run_tool_command(tool: str, command: list[str], output_path: Path, timeout_seconds: int) -> dict[str, Any]:
+    timeout_seconds = min(max(int(timeout_seconds), 5), 1800)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "available": True,
+            "tool": tool,
+            "timeout_seconds": timeout_seconds,
+            "error": f"{tool} command timed out",
+            "stdout": _tail_text(exc.stdout),
+            "stderr": _tail_text(exc.stderr),
+            "artifact_path": None,
+        }
+    if result.stdout:
+        output_path.write_text(result.stdout, encoding="utf-8", errors="replace")
+    return {
+        "ok": result.returncode == 0,
+        "available": True,
+        "tool": tool,
+        "exit_code": result.returncode,
+        "stdout": result.stdout[-4000:],
+        "stderr": result.stderr[-4000:],
+        "artifact_path": str(output_path) if output_path.exists() else None,
+    }
 
 
 if __name__ == "__main__":
