@@ -46,6 +46,7 @@ from app.schemas import (
 from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, get_current_api_key, hash_api_key, has_scope
 from app.services.dependency_scanner import DependencyScanner
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService
+from app.services.pipeline_recovery import is_active_pipeline
 from app.services.templates import TemplateStore
 from app.services.workspace import WorkspaceImportError, WorkspaceService
 from app.settings import Settings
@@ -577,7 +578,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         if not workspace_path:
             raise HTTPException(status_code=400, detail="audit run has no workspace path")
-        if _is_active_audit_status(audit_run.get("status")) or _is_active_pipeline_state(audit_run.get("config")):
+        if is_active_pipeline(audit_run.get("status"), audit_run.get("config")):
             raise HTTPException(status_code=409, detail="audit run pipeline is already active")
         await _clear_pipeline_cancel(audit_run_id)
         await _mark_audit_run_status(audit_run_id, "queued")
@@ -1747,15 +1748,6 @@ async def _cancel_reason(audit_run_id: str) -> str | None:
 async def _raise_if_cancelled(audit_run_id: str) -> None:
     if await _is_cancel_requested(audit_run_id):
         raise PipelineCancelled(await _cancel_reason(audit_run_id) or "cancel_requested")
-
-
-def _is_active_audit_status(status: str | None) -> bool:
-    return status in {"queued", "running", "validating", "cancelling"}
-
-
-def _is_active_pipeline_state(config: dict[str, Any] | None) -> bool:
-    pipeline_state = (config or {}).get("pipeline_state") or {}
-    return pipeline_state.get("status") in {"queued", "running", "validating", "cancelling"}
 
 
 async def _get_project(project_id: str) -> dict[str, Any] | None:

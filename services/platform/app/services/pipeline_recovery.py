@@ -55,11 +55,7 @@ async def recover_interrupted_pipelines(
     reason = f"{service_name} restarted while pipeline was active; background execution cannot be resumed automatically"
     recovered: list[dict[str, Any]] = []
     async with session_factory() as session:
-        rows = (
-            await session.execute(
-                select(AuditRun).where(AuditRun.status.in_(sorted(ACTIVE_AUDIT_STATUSES)))
-            )
-        ).scalars()
+        rows = (await session.execute(select(AuditRun))).scalars()
         for row in rows:
             if not is_active_pipeline(row.status, row.config):
                 continue
