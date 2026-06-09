@@ -145,6 +145,13 @@ type SandboxCapabilities = {
   warnings?: string[];
 };
 
+type AuthStatus = {
+  enabled?: boolean;
+  api_key_header?: string;
+  public_metrics?: boolean;
+  service?: string;
+};
+
 type ContainerRow = {
   Id: string;
   Image: string;
@@ -179,6 +186,7 @@ function withAuth(options?: RequestInit): RequestInit {
 
 function App() {
   const [apiHealth, setApiHealth] = useState<any>();
+  const [authStatus, setAuthStatus] = useState<AuthStatus>();
   const [dockerHealth, setDockerHealth] = useState<any>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
@@ -210,12 +218,16 @@ function App() {
   async function refresh() {
     setError(undefined);
     try {
-      const [api, docker, projectRows] = await Promise.all([
+      const [api, auth] = await Promise.all([
         readJson("/api/health"),
+        readJson("/api/auth/status"),
+      ]);
+      setApiHealth(api);
+      setAuthStatus(auth);
+      const [docker, projectRows] = await Promise.all([
         readJson("/gateway/runtime/docker/health"),
         readJson("/gateway/projects"),
       ]);
-      setApiHealth(api);
       setDockerHealth(docker);
       readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
       readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
@@ -654,6 +666,10 @@ function App() {
           {error && <Alert type="error" showIcon message="运行错误" description={error} className="section" />}
           <div className="stats-grid section">
             <Card><Statistic title="Web API" value={apiHealth?.ok ? "Healthy" : "Unknown"} prefix={<ApiOutlined />} /></Card>
+            <Card>
+              <Statistic title="API Auth" value={authStatus?.enabled ? "Enabled" : "Disabled"} prefix={<SafetyCertificateOutlined />} />
+              {!authStatus?.enabled && <Text type="danger">Set DIEAUDIT_API_KEY before production use.</Text>}
+            </Card>
             <Card><Statistic title="Docker Runtime" value={dockerHealth?.ok ? "Ready" : "Unknown"} prefix={<CloudServerOutlined />} /></Card>
             <Card><Statistic title="Projects" value={projects.length} prefix={<FolderOpenOutlined />} /></Card>
             <Card><Statistic title="Findings" value={findings.length} prefix={<BugOutlined />} /></Card>

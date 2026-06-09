@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     agent_gateway_url: str = "http://agent-gateway:8000"
     dieaudit_api_key: str = ""
     api_key_header: str = "X-DieAudit-Api-Key"
+    public_metrics: bool = False
     default_sandbox_runtime: str = "runc"
     enable_gvisor: bool = False
     allow_runc_sandbox: bool = False

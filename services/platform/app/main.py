@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=f"DieAudit {settings.service_name}", version="0.1.0", lifespan=lifespan)
 
 
-PUBLIC_PATHS = {"/", "/health", "/ready", "/metrics"}
+PUBLIC_PATHS = {"/", "/health", "/ready", "/auth/status"}
 
 
 @app.middleware("http")
@@ -51,6 +51,8 @@ app.include_router(register_runtime_routes(settings, get_runtime))
 
 
 def _is_public_path(path: str) -> bool:
+    if path == "/metrics" and settings.public_metrics:
+        return True
     return path in PUBLIC_PATHS
 
 
@@ -61,3 +63,13 @@ def _bearer_token(value: str | None) -> str | None:
     if value.startswith(prefix):
         return value[len(prefix) :]
     return None
+
+
+@app.get("/auth/status")
+async def auth_status() -> dict[str, Any]:
+    return {
+        "enabled": bool(settings.dieaudit_api_key),
+        "api_key_header": settings.api_key_header,
+        "public_metrics": settings.public_metrics,
+        "service": settings.service_name,
+    }
