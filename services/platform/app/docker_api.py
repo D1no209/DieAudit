@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from urllib.parse import quote
 from typing import Any
 
 import httpx
@@ -36,6 +37,8 @@ class DockerClient:
         return await self.request("GET", "/version")
 
     async def pull_image(self, image: str) -> None:
+        if await self.image_exists(image):
+            return
         from_image, tag = image, None
         if ":" in image and "/" not in image.rsplit(":", 1)[-1]:
             from_image, tag = image.rsplit(":", 1)
@@ -48,6 +51,17 @@ class DockerClient:
                 raise DockerApiError(f"pull {image} failed: {response.status_code} {text.decode(errors='replace')}")
             async for _ in response.aiter_lines():
                 pass
+
+    async def image_exists(self, image: str) -> bool:
+        encoded = quote(image, safe="")
+        response = await self.client.get(f"/images/{encoded}/json")
+        if response.status_code == 200:
+            return True
+        if response.status_code == 404:
+            return False
+        if response.status_code >= 400:
+            raise DockerApiError(f"inspect image {image} failed: {response.status_code} {response.text}")
+        return True
 
     async def create_network(self, name: str, *, internal: bool = True, labels: dict[str, str] | None = None) -> dict[str, Any]:
         payload = {
