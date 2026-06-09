@@ -1,4 +1,6 @@
+import contextlib
 import json
+import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -184,24 +186,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         )
         try:
             text = service.extract_text(artifact_path, file.content_type)
-            chunks = service.chunk_text(text)
-            if not chunks:
+            chunk_rows = service.chunk_rows(
+                document_id=document_id,
+                title=title,
+                source_name=file.filename or artifact_path.name,
+                scope=normalized_scope,
+                project_id=project_id,
+                text=text,
+            )
+            if not chunk_rows:
                 raise KnowledgeIndexError("document did not contain indexable text")
-            chunk_rows = [
-                {
-                    "chunk_id": str(uuid.uuid4()),
-                    "document_id": document_id,
-                    "scope": normalized_scope,
-                    "project_id": project_id if normalized_scope == "project" else None,
-                    "chunk_index": index,
-                    "text": chunk,
-                    "token_count": len(chunk.split()),
-                    "vector_id": str(uuid.uuid4()),
-                    "title": title,
-                    "source_name": file.filename or artifact_path.name,
-                }
-                for index, chunk in enumerate(chunks)
-            ]
             await service.upsert_chunks(chunk_rows)
             status = "indexed"
             error = None
@@ -250,6 +244,75 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             if not row:
                 raise HTTPException(status_code=404, detail="knowledge document not found")
             return _knowledge_document_to_dict(row)
+
+    @router.post("/knowledge/documents/{document_id}/reindex")
+    async def reindex_knowledge_document(document_id: str) -> dict[str, Any]:
+        service = KnowledgeService(settings)
+        async with SessionLocal() as session:
+            document = await session.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id))
+            if not document:
+                raise HTTPException(status_code=404, detail="knowledge document not found")
+            artifact_path = Path(document.artifact_path or "")
+            if not artifact_path.is_file():
+                with contextlib.suppress(KnowledgeIndexError):
+                    await service.delete_document_vectors(document_id)
+                document.status = "failed"
+                document.chunk_count = 0
+                document.metadata_json = {"error": f"artifact not found: {document.artifact_path}"}
+                await session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document_id))
+                await session.commit()
+                raise HTTPException(status_code=409, detail=document.metadata_json["error"])
+            try:
+                text = service.extract_text(artifact_path, document.content_type)
+                chunk_rows = service.chunk_rows(
+                    document_id=document_id,
+                    title=document.title,
+                    source_name=document.source_name,
+                    scope=document.scope,
+                    project_id=document.project_id,
+                    text=text,
+                )
+                if not chunk_rows:
+                    raise KnowledgeIndexError("document did not contain indexable text")
+                await service.delete_document_vectors(document_id)
+                await service.upsert_chunks(chunk_rows)
+            except Exception as exc:
+                with contextlib.suppress(KnowledgeIndexError):
+                    await service.delete_document_vectors(document_id)
+                document.status = "failed"
+                document.chunk_count = 0
+                document.metadata_json = {"error": str(exc)}
+                await session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document_id))
+                await session.commit()
+                return {"document": _knowledge_document_to_dict(document), "chunks_indexed": 0, "error": str(exc)}
+            await session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document_id))
+            for row in chunk_rows:
+                session.add(_knowledge_chunk_from_row(row))
+            document.status = "indexed"
+            document.chunk_count = len(chunk_rows)
+            document.metadata_json = {}
+            await session.commit()
+            return {"document": _knowledge_document_to_dict(document), "chunks_indexed": len(chunk_rows)}
+
+    @router.delete("/knowledge/documents/{document_id}")
+    async def delete_knowledge_document(document_id: str) -> dict[str, Any]:
+        service = KnowledgeService(settings)
+        async with SessionLocal() as session:
+            document = await session.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id))
+            if not document:
+                raise HTTPException(status_code=404, detail="knowledge document not found")
+            artifact_path = Path(document.artifact_path).resolve() if document.artifact_path else None
+            try:
+                await service.delete_document_vectors(document_id)
+            except KnowledgeIndexError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            await session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.document_id == document_id))
+            await session.delete(document)
+            await session.commit()
+        deleted_artifact = False
+        if artifact_path:
+            deleted_artifact = _delete_knowledge_artifact(settings, artifact_path)
+        return {"document_id": document_id, "deleted": True, "artifact_deleted": deleted_artifact}
 
     @router.get("/knowledge/documents/{document_id}/chunks")
     async def list_knowledge_chunks(document_id: str) -> list[dict[str, Any]]:
@@ -1495,6 +1558,40 @@ def _knowledge_chunk_to_dict(row: KnowledgeChunk) -> dict[str, Any]:
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
+
+
+def _knowledge_chunk_from_row(row: dict[str, Any]) -> KnowledgeChunk:
+    return KnowledgeChunk(
+        chunk_id=row["chunk_id"],
+        document_id=row["document_id"],
+        scope=row["scope"],
+        project_id=row["project_id"],
+        chunk_index=row["chunk_index"],
+        text=row["text"],
+        token_count=row["token_count"],
+        vector_id=row["vector_id"],
+        metadata_json={
+            "title": row["title"],
+            "source_name": row["source_name"],
+        },
+    )
+
+
+def _delete_knowledge_artifact(settings: Settings, artifact_path: Path) -> bool:
+    knowledge_root = (settings.artifact_root / "knowledge").resolve()
+    try:
+        if not artifact_path.exists():
+            return False
+        if artifact_path != knowledge_root and knowledge_root not in artifact_path.parents:
+            return False
+        target_dir = artifact_path.parent
+        if target_dir != knowledge_root and knowledge_root in target_dir.parents:
+            shutil.rmtree(target_dir)
+            return True
+        artifact_path.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def _attempt_to_dict(row: ValidationAttempt) -> dict[str, Any]:

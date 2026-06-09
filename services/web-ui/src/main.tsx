@@ -25,6 +25,7 @@ import {
   Input,
   Layout,
   List,
+  Popconfirm,
   Space,
   Statistic,
   Table,
@@ -724,6 +725,25 @@ function App() {
     });
   }
 
+  async function reindexKnowledgeDocument(documentId: string) {
+    await runAction(async () => {
+      const result = await readJson(`/gateway/knowledge/documents/${documentId}/reindex`, { method: "POST" });
+      setLastResponse(result);
+      const rows = await readJson("/gateway/knowledge/documents");
+      setKnowledgeDocuments(rows);
+    });
+  }
+
+  async function deleteKnowledgeDocument(documentId: string) {
+    await runAction(async () => {
+      const result = await readJson(`/gateway/knowledge/documents/${documentId}`, { method: "DELETE" });
+      setLastResponse(result);
+      const rows = await readJson("/gateway/knowledge/documents");
+      setKnowledgeDocuments(rows);
+      setKnowledgeMatches((items) => items.filter((item) => item.document_id !== documentId));
+    });
+  }
+
   function saveApiKey() {
     const normalized = apiKey.trim();
     if (normalized) {
@@ -844,6 +864,19 @@ function App() {
     { title: "Status", dataIndex: "status", render: (value) => <Tag color={value === "indexed" ? "green" : "red"}>{value}</Tag> },
     { title: "Chunks", dataIndex: "chunk_count" },
     { title: "Created", dataIndex: "created_at" },
+    {
+      title: "Action",
+      render: (_, row) => (
+        <Space>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => reindexKnowledgeDocument(row.document_id)}>
+            重建
+          </Button>
+          <Popconfirm title="删除知识库文档？" okText="删除" cancelText="取消" onConfirm={() => deleteKnowledgeDocument(row.document_id)}>
+            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
   ];
 
   return (

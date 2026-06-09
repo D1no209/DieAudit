@@ -73,6 +73,33 @@ class KnowledgeService:
                 break
         return chunks
 
+    def chunk_rows(
+        self,
+        *,
+        document_id: str,
+        title: str,
+        source_name: str,
+        scope: str,
+        project_id: str | None,
+        text: str,
+    ) -> list[dict[str, Any]]:
+        chunks = self.chunk_text(text)
+        return [
+            {
+                "chunk_id": str(uuid.uuid4()),
+                "document_id": document_id,
+                "scope": scope,
+                "project_id": project_id if scope == "project" else None,
+                "chunk_index": index,
+                "text": chunk,
+                "token_count": len(chunk.split()),
+                "vector_id": str(uuid.uuid4()),
+                "title": title,
+                "source_name": source_name,
+            }
+            for index, chunk in enumerate(chunks)
+        ]
+
     async def upsert_chunks(self, chunks: list[dict[str, Any]]) -> None:
         if not chunks:
             return
@@ -99,6 +126,25 @@ class KnowledgeService:
                 f"/collections/{self.collection_name}/points",
                 json={"points": points, "wait": True},
             )
+            if response.status_code >= 400:
+                raise KnowledgeIndexError(response.text)
+
+    async def delete_document_vectors(self, document_id: str) -> None:
+        await self.ensure_collection()
+        async with httpx.AsyncClient(base_url=self.settings.qdrant_url, timeout=60) as client:
+            response = await client.post(
+                f"/collections/{self.collection_name}/points/delete",
+                json={
+                    "filter": {
+                        "must": [
+                            {"key": "document_id", "match": {"value": document_id}},
+                        ]
+                    },
+                    "wait": True,
+                },
+            )
+            if response.status_code == 404:
+                return
             if response.status_code >= 400:
                 raise KnowledgeIndexError(response.text)
 
