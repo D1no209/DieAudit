@@ -29,6 +29,10 @@ body {
   color: #667085;
 }
 
+.api-key-input {
+  width: 180px;
+}
+
 .app-content {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;

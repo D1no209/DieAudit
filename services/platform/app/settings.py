@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     minio_bucket_artifacts: str = "dieaudit-artifacts"
     qdrant_url: str = "http://qdrant:6333"
     agent_gateway_url: str = "http://agent-gateway:8000"
+    dieaudit_api_key: str = ""
+    api_key_header: str = "X-DieAudit-Api-Key"
 
     class Config:
         env_file = ".env"

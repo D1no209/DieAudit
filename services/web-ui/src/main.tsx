@@ -42,6 +42,8 @@ import "./styles.css";
 
 const { Header, Content } = Layout;
 const { Title, Text, Paragraph } = Typography;
+const API_KEY_STORAGE_KEY = "dieaudit.apiKey";
+const API_KEY_HEADER = "X-DieAudit-Api-Key";
 
 type Project = {
   project_id: string;
@@ -145,7 +147,7 @@ type ContainerRow = {
 };
 
 async function readJson(path: string, options?: RequestInit) {
-  const response = await fetch(path, options);
+  const response = await fetch(path, withAuth(options));
   const text = await response.text();
   if (!response.ok) {
     throw new Error(text || response.statusText);
@@ -153,10 +155,20 @@ async function readJson(path: string, options?: RequestInit) {
   return text ? JSON.parse(text) : {};
 }
 
+function withAuth(options?: RequestInit): RequestInit {
+  const headers = new Headers(options?.headers);
+  const apiKey = window.localStorage.getItem(API_KEY_STORAGE_KEY);
+  if (apiKey) {
+    headers.set(API_KEY_HEADER, apiKey);
+  }
+  return { ...options, headers };
+}
+
 function App() {
   const [apiHealth, setApiHealth] = useState<any>();
   const [dockerHealth, setDockerHealth] = useState<any>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
+  const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [auditRun, setAuditRun] = useState<AuditRun>();
@@ -348,7 +360,10 @@ function App() {
       return;
     }
     await runAction(async () => {
-      const response = await fetch(`/gateway/audit-runs/${auditRun.audit_run_id}/containers/${encodeURIComponent(row.Id)}/logs`);
+      const response = await fetch(
+        `/gateway/audit-runs/${auditRun.audit_run_id}/containers/${encodeURIComponent(row.Id)}/logs`,
+        withAuth(),
+      );
       const text = await response.text();
       if (!response.ok) {
         throw new Error(text || response.statusText);
@@ -389,6 +404,16 @@ function App() {
         await refreshAuditRun(auditRun.audit_run_id);
       }
     });
+  }
+
+  function saveApiKey() {
+    const normalized = apiKey.trim();
+    if (normalized) {
+      window.localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
+    } else {
+      window.localStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+    refresh();
   }
 
   async function runAction(action: () => Promise<void>) {
@@ -465,6 +490,14 @@ function App() {
               </div>
             </Space>
             <Space wrap>
+              <Input.Password
+                className="api-key-input"
+                placeholder="API Key"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                onPressEnter={saveApiKey}
+              />
+              <Button onClick={saveApiKey}>保存 Key</Button>
               <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
               <Button type="primary" icon={<PlayCircleOutlined />} loading={loading} onClick={startAudit}>启动审计</Button>
               <Button icon={<PlayCircleOutlined />} loading={loading} onClick={runPipeline}>一键闭环</Button>

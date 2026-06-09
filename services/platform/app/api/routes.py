@@ -48,8 +48,11 @@ class PipelineCancelled(RuntimeError):
 
 def register_runtime_routes(settings: Settings, runtime_provider: callable) -> APIRouter:
     async def proxy_gateway(path: str, *, method: str = "GET", json: dict[str, Any] | None = None) -> Any:
+        headers = {}
+        if settings.dieaudit_api_key:
+            headers[settings.api_key_header] = settings.dieaudit_api_key
         async with httpx.AsyncClient(base_url=settings.agent_gateway_url, timeout=120) as client:
-            response = await client.request(method, path, json=json)
+            response = await client.request(method, path, json=json, headers=headers)
         if response.status_code >= 400:
             raise HTTPException(status_code=response.status_code, detail=response.text)
         content_type = response.headers.get("content-type", "")
