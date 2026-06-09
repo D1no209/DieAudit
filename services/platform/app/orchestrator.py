@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
+
 from .db import ContainerRun, RuntimeNetwork, SessionLocal
 from .docker_api import DockerClient
 from .settings import Settings
@@ -105,6 +107,7 @@ class RuntimeOrchestrator:
         network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}"
         await self.docker.disconnect_network(network_name, self.settings.agent_gateway_container_name)
         await self.docker.remove_network(network_name)
+        await self._mark_network_cleaned(audit_run_id, network_name)
         return {"audit_run_id": audit_run_id, "removed_containers": removed, "removed_network": network_name}
 
     async def containers(self, audit_run_id: str) -> list[dict[str, Any]]:
@@ -202,22 +205,43 @@ class RuntimeOrchestrator:
         status: str,
     ) -> None:
         async with SessionLocal() as session:
-            session.add(
-                ContainerRun(
-                    audit_run_id=audit_run_id,
-                    project_id=project_id,
-                    container_id=container_id,
-                    image=image,
-                    role=role,
-                    labels=labels,
-                    status=status,
+            existing = await session.scalar(select(ContainerRun).where(ContainerRun.container_id == container_id))
+            if existing:
+                existing.status = status
+                existing.labels = labels
+            else:
+                session.add(
+                    ContainerRun(
+                        audit_run_id=audit_run_id,
+                        project_id=project_id,
+                        container_id=container_id,
+                        image=image,
+                        role=role,
+                        labels=labels,
+                        status=status,
+                    )
                 )
-            )
             await session.commit()
 
     async def _record_network(self, audit_run_id: str, name: str, status: str) -> None:
         async with SessionLocal() as session:
-            session.add(RuntimeNetwork(audit_run_id=audit_run_id, name=name, status=status))
+            existing = await session.scalar(select(RuntimeNetwork).where(RuntimeNetwork.name == name))
+            if existing:
+                existing.status = status
+            else:
+                session.add(RuntimeNetwork(audit_run_id=audit_run_id, name=name, status=status))
+            await session.commit()
+
+    async def _mark_network_cleaned(self, audit_run_id: str, name: str) -> None:
+        async with SessionLocal() as session:
+            network = await session.scalar(
+                select(RuntimeNetwork).where(
+                    RuntimeNetwork.audit_run_id == audit_run_id,
+                    RuntimeNetwork.name == name,
+                )
+            )
+            if network:
+                network.status = "cleaned"
             await session.commit()
 
     def _binds(self, workspace_host_path: str | None, template: dict[str, Any]) -> list[str]:

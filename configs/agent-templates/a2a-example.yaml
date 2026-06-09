@@ -1,0 +1,24 @@
+name: a2a-example
+image: dieaudit/mock-agent:local
+command: ["python", "/app/mock_agent.py"]
+env:
+  AGENT_ROLE: a2a-example
+model_profile: auditor-strong
+protocol:
+  kind: a2a
+  transport: http
+  base_url: http://a2a-example:8000
+  agent_card_url: http://a2a-example:8000/.well-known/agent-card.json
+workspace_mount:
+  target: /workspace
+  read_only: true
+artifact_mount:
+  target: /artifacts
+  read_only: false
+required_mcp:
+  - filesystem-mcp
+  - kb-mcp
+read_only: false
+healthcheck: null
+output_schema:
+  type: object

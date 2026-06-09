@@ -55,6 +55,19 @@ Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/cleanu
 - MCP templates live in `configs/mcp-templates`.
 - Mock Agent and MCP images prove that the platform can inject `MCP_SERVERS_JSON` and connect Agent containers to sidecars.
 
+## Agent Protocols
+
+The gateway includes both selected protocol SDKs:
+
+- `agent-client-protocol` for stdio JSON-RPC Agent Client Protocol agents.
+- `a2a-sdk` for A2A HTTP agent-to-agent clients.
+
+Check SDK availability and template readiness:
+
+```powershell
+Invoke-RestMethod http://localhost:18001/runtime/protocols
+```
+
 ## Persistence And Database
 
 The platform uses SQLAlchemy ORM models and creates the first schema on `web-api` startup. Raw SQL is not required for the application schema.

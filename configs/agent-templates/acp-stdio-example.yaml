@@ -1,0 +1,22 @@
+name: acp-stdio-example
+image: dieaudit/mock-agent:local
+command: ["python", "/app/mock_agent.py"]
+env:
+  AGENT_ROLE: acp-stdio-example
+model_profile: orchestrator-long-context
+protocol:
+  kind: agent-client-protocol
+  transport: stdio
+  stdio_command: ["python", "/app/acp_agent.py"]
+workspace_mount:
+  target: /workspace
+  read_only: true
+artifact_mount:
+  target: /artifacts
+  read_only: false
+required_mcp:
+  - filesystem-mcp
+read_only: false
+healthcheck: null
+output_schema:
+  type: object

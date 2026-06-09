@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from .db import init_db
 from .docker_api import DockerApiError
 from .orchestrator import RuntimeOrchestrator
+from .protocols import classify_agent_protocol, fetch_a2a_agent_card, serialize_capabilities
 from .settings import get_settings
 from .templates import TemplateStore
 
@@ -46,6 +47,10 @@ class TemplateBody(BaseModel):
     template: dict[str, Any]
 
 
+class A2AAgentCardRequest(BaseModel):
+    url: str
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {"ok": True, "service": settings.service_name}
@@ -75,11 +80,29 @@ async def root() -> dict[str, Any]:
         "service": settings.service_name,
         "endpoints": [
             "/health",
+            "/runtime/protocols",
             "/runtime/docker/health",
             "/runtime/templates/agents",
             "/runtime/templates/mcp",
         ],
     }
+
+
+@app.get("/runtime/protocols")
+async def runtime_protocols() -> dict[str, Any]:
+    templates = TemplateStore(settings.config_root, "agent-templates").list()
+    return {
+        "sdk_capabilities": serialize_capabilities(),
+        "agent_protocols": [classify_agent_protocol(template) for template in templates],
+    }
+
+
+@app.post("/runtime/protocols/a2a/agent-card")
+async def get_a2a_agent_card(body: A2AAgentCardRequest) -> dict[str, Any]:
+    try:
+        return await fetch_a2a_agent_card(body.url)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/runtime/templates/agents")
