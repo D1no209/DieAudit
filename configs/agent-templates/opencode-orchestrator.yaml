@@ -8,7 +8,7 @@ model_profile: orchestrator-long-context
 protocol:
   kind: agent-client-protocol
   transport: stdio
-  stdio_command: ["python", "/app/opencode_acp_runner.py"]
+  stdio_command: ["opencode", "acp"]
   runtime: opencode
 workspace_mount:
   target: /workspace
