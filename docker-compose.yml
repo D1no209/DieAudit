@@ -111,6 +111,10 @@ services:
     depends_on:
       docker-socket-proxy:
         condition: service_started
+      postgres:
+        condition: service_healthy
+      web-api:
+        condition: service_healthy
       redis:
         condition: service_healthy
       nats:
