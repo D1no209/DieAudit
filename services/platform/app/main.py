@@ -10,7 +10,7 @@ from app.api.routes import register_runtime_routes
 from app.domain.models import PlatformAuditEvent
 from app.repositories import SessionLocal, init_db
 from app.runtime import RuntimeOrchestrator
-from app.services.auth import auth_is_enabled, authenticate_api_key
+from app.services.auth import auth_is_enabled, authenticate_api_key, can_access_scope, required_scope_for_path
 from app.settings import get_settings
 
 
@@ -57,6 +57,19 @@ async def api_key_auth(request: Request, call_next):
     if auth_principal:
         auth_result = "success"
         request.state.auth_principal = auth_principal
+        required_scope = required_scope_for_path(request.method, path)
+        if not can_access_scope(auth_principal, required_scope, request.method):
+            auth_result = "insufficient_scope"
+            response = JSONResponse(
+                {
+                    "detail": "insufficient API key scope",
+                    "required_scope": required_scope,
+                },
+                status_code=403,
+            )
+            response.headers["X-Request-Id"] = request_id
+            await _record_platform_audit_event(request, 403, request_id, auth_enabled, auth_result, auth_principal, started)
+            return response
         response = await call_next(request)
         status_code = response.status_code
         response.headers["X-Request-Id"] = request_id

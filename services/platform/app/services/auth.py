@@ -27,6 +27,39 @@ def has_scope(principal: dict[str, Any] | None, scope: str) -> bool:
     return "*" in scopes or scope in scopes
 
 
+def can_access_scope(principal: dict[str, Any] | None, required_scope: str | None, method: str) -> bool:
+    if not required_scope:
+        return True
+    if has_scope(principal, "admin"):
+        return True
+    if has_scope(principal, required_scope):
+        return True
+    if method.upper() == "GET" and required_scope != "admin" and has_scope(principal, "read"):
+        return True
+    return False
+
+
+def required_scope_for_path(method: str, path: str) -> str | None:
+    normalized_method = method.upper()
+    if normalized_method in {"OPTIONS", "HEAD"}:
+        return None
+    if path == "/auth/me":
+        return None
+    if path.startswith("/auth/api-keys"):
+        return "admin"
+    if path.startswith("/platform"):
+        return "admin"
+    if path.startswith("/runtime/templates") or path.startswith("/runtime/policy"):
+        return "admin"
+    if path.startswith("/runtime"):
+        return "runtime"
+    if path.startswith("/projects") or path.startswith("/audit-runs") or path.startswith("/findings") or path.startswith("/reports"):
+        return "audit"
+    if path == "/metrics":
+        return "admin"
+    return None
+
+
 def bootstrap_principal(settings: Settings) -> dict[str, Any]:
     return {
         "key_id": BOOTSTRAP_KEY_ID,
