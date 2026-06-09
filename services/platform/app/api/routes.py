@@ -38,7 +38,7 @@ from app.schemas import (
     TemplateBody,
     ValidatorScaleRequest,
 )
-from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, hash_api_key, has_scope
+from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, get_current_api_key, hash_api_key, has_scope
 from app.services.dependency_scanner import DependencyScanner
 from app.services.templates import TemplateStore
 from app.services.workspace import WorkspaceImportError, WorkspaceService
@@ -55,8 +55,9 @@ class PipelineCancelled(RuntimeError):
 def register_runtime_routes(settings: Settings, runtime_provider: callable) -> APIRouter:
     async def proxy_gateway(path: str, *, method: str = "GET", json: dict[str, Any] | None = None) -> Any:
         headers = {}
-        if settings.dieaudit_api_key:
-            headers[settings.api_key_header] = settings.dieaudit_api_key
+        api_key = get_current_api_key() or settings.dieaudit_api_key
+        if api_key:
+            headers[settings.api_key_header] = api_key
         async with httpx.AsyncClient(base_url=settings.agent_gateway_url, timeout=120) as client:
             response = await client.request(method, path, json=json, headers=headers)
         if response.status_code >= 400:

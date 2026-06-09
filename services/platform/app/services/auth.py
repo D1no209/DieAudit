@@ -1,3 +1,4 @@
+from contextvars import ContextVar, Token
 import hashlib
 import secrets
 from datetime import datetime, timezone
@@ -12,10 +13,23 @@ from app.settings import Settings
 
 API_KEY_PREFIX = "dak_"
 BOOTSTRAP_KEY_ID = "env-bootstrap"
+_current_api_key: ContextVar[str | None] = ContextVar("dieaudit_current_api_key", default=None)
 
 
 def generate_api_key() -> str:
     return f"{API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+
+
+def set_current_api_key(value: str | None) -> Token[str | None]:
+    return _current_api_key.set(value)
+
+
+def reset_current_api_key(token: Token[str | None]) -> None:
+    _current_api_key.reset(token)
+
+
+def get_current_api_key() -> str | None:
+    return _current_api_key.get()
 
 
 def hash_api_key(value: str) -> str:

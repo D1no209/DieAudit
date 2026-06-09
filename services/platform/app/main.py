@@ -10,7 +10,14 @@ from app.api.routes import register_runtime_routes
 from app.domain.models import PlatformAuditEvent
 from app.repositories import SessionLocal, init_db
 from app.runtime import RuntimeOrchestrator
-from app.services.auth import auth_is_enabled, authenticate_api_key, can_access_scope, required_scope_for_path
+from app.services.auth import (
+    auth_is_enabled,
+    authenticate_api_key,
+    can_access_scope,
+    required_scope_for_path,
+    reset_current_api_key,
+    set_current_api_key,
+)
 from app.settings import get_settings
 
 
@@ -38,6 +45,8 @@ PUBLIC_PATHS = {"/", "/health", "/ready", "/auth/status"}
 
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
+    current_api_key_token = set_current_api_key(None)
+    forwarded_api_key_token = None
     request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
     path = request.url.path
     public_path = _is_public_path(path)
@@ -45,42 +54,48 @@ async def api_key_auth(request: Request, call_next):
     auth_result = "not_required"
     auth_principal: dict[str, Any] | None = None
     started = time.perf_counter()
-    if public_path or not auth_enabled:
-        request.state.auth_principal = auth_principal
-        response = await call_next(request)
-        status_code = response.status_code
-        response.headers["X-Request-Id"] = request_id
-        await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, auth_principal, started)
-        return response
-    supplied = request.headers.get(settings.api_key_header) or _bearer_token(request.headers.get("Authorization"))
-    auth_principal = await authenticate_api_key(settings, supplied)
-    if auth_principal:
-        auth_result = "success"
-        request.state.auth_principal = auth_principal
-        required_scope = required_scope_for_path(request.method, path)
-        if not can_access_scope(auth_principal, required_scope, request.method):
-            auth_result = "insufficient_scope"
-            response = JSONResponse(
-                {
-                    "detail": "insufficient API key scope",
-                    "required_scope": required_scope,
-                },
-                status_code=403,
-            )
+    try:
+        if public_path or not auth_enabled:
+            request.state.auth_principal = auth_principal
+            response = await call_next(request)
+            status_code = response.status_code
             response.headers["X-Request-Id"] = request_id
-            await _record_platform_audit_event(request, 403, request_id, auth_enabled, auth_result, auth_principal, started)
+            await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, auth_principal, started)
             return response
-        response = await call_next(request)
-        status_code = response.status_code
+        supplied = request.headers.get(settings.api_key_header) or _bearer_token(request.headers.get("Authorization"))
+        auth_principal = await authenticate_api_key(settings, supplied)
+        if auth_principal:
+            forwarded_api_key_token = set_current_api_key(supplied)
+            auth_result = "success"
+            request.state.auth_principal = auth_principal
+            required_scope = required_scope_for_path(request.method, path)
+            if not can_access_scope(auth_principal, required_scope, request.method):
+                auth_result = "insufficient_scope"
+                response = JSONResponse(
+                    {
+                        "detail": "insufficient API key scope",
+                        "required_scope": required_scope,
+                    },
+                    status_code=403,
+                )
+                response.headers["X-Request-Id"] = request_id
+                await _record_platform_audit_event(request, 403, request_id, auth_enabled, auth_result, auth_principal, started)
+                return response
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers["X-Request-Id"] = request_id
+            await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, auth_principal, started)
+            return response
+        auth_result = "failed"
+        request.state.auth_principal = None
+        response = JSONResponse({"detail": "missing or invalid API key"}, status_code=401)
         response.headers["X-Request-Id"] = request_id
-        await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, auth_principal, started)
+        await _record_platform_audit_event(request, 401, request_id, auth_enabled, auth_result, auth_principal, started)
         return response
-    auth_result = "failed"
-    request.state.auth_principal = None
-    response = JSONResponse({"detail": "missing or invalid API key"}, status_code=401)
-    response.headers["X-Request-Id"] = request_id
-    await _record_platform_audit_event(request, 401, request_id, auth_enabled, auth_result, auth_principal, started)
-    return response
+    finally:
+        if forwarded_api_key_token is not None:
+            reset_current_api_key(forwarded_api_key_token)
+        reset_current_api_key(current_api_key_token)
 
 
 def get_runtime() -> RuntimeOrchestrator | None:
