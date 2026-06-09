@@ -1,9 +1,11 @@
 name: sandbox-mcp
-image: dieaudit/mock-mcp:local
+image: dieaudit/tool-mcp:local
 transport: http
 port: 8001
+mcp_endpoint: /mcp
 env:
   MCP_NAME: sandbox-mcp
+  PLATFORM_API_URL: http://agent-gateway:8000
 mounts: []
 resources:
   memory: 512m
@@ -13,9 +15,10 @@ healthcheck:
   Timeout: 3000000000
   Retries: 10
 tools:
-  - sandbox.exec_poc
-  - sandbox.logs
+  - run_poc
+  - start_sandbox_service
 permissions:
   docker_api: false
+  platform_api: sandbox
   execution: sandbox-runner-only
 read_only: false

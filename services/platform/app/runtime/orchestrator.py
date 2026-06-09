@@ -863,7 +863,8 @@ class RuntimeOrchestrator:
             "PROJECT_ID": project_id,
         }
         if template.get("permissions", {}).get("platform_api"):
-            env.setdefault("KNOWLEDGE_API_URL", "http://agent-gateway:8000")
+            env.setdefault("PLATFORM_API_URL", "http://agent-gateway:8000")
+            env.setdefault("KNOWLEDGE_API_URL", env["PLATFORM_API_URL"])
             env["API_KEY_HEADER"] = self.settings.api_key_header
             api_key = get_current_api_key() or self.settings.dieaudit_api_key
             if api_key:

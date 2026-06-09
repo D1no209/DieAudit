@@ -17,10 +17,12 @@ WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_ROOT", "/workspace")).resolve()
 MAX_READ_BYTES = int(os.environ.get("MAX_READ_BYTES", "200000"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "100"))
 ARTIFACT_ROOT = Path(os.environ.get("ARTIFACT_ROOT", "/artifacts")).resolve()
-KNOWLEDGE_API_URL = os.environ.get("KNOWLEDGE_API_URL", "http://agent-gateway:8000").rstrip("/")
+PLATFORM_API_URL = os.environ.get("PLATFORM_API_URL") or os.environ.get("KNOWLEDGE_API_URL", "http://agent-gateway:8000")
+PLATFORM_API_URL = PLATFORM_API_URL.rstrip("/")
 API_KEY_HEADER = os.environ.get("API_KEY_HEADER", "X-DieAudit-Api-Key")
 PLATFORM_API_KEY = os.environ.get("DIEAUDIT_API_KEY") or os.environ.get("KNOWLEDGE_API_KEY")
 PROJECT_ID = os.environ.get("PROJECT_ID")
+AUDIT_RUN_ID = os.environ.get("AUDIT_RUN_ID")
 ENFORCE_PROJECT_FILTER = os.environ.get("ENFORCE_PROJECT_FILTER", "false").lower() in {"1", "true", "yes"}
 HTTP_TEST_ALLOWED_HOSTS = {
     item.strip().lower()
@@ -107,6 +109,18 @@ async def http_request_route(request):
             allow_redirects=bool(body.get("allow_redirects", False)),
         )
     )
+
+
+@mcp.custom_route("/tools/run_poc", methods=["POST"])
+async def run_poc_route(request):
+    body = await request.json()
+    return JSONResponse(await run_poc(**body))
+
+
+@mcp.custom_route("/tools/start_sandbox_service", methods=["POST"])
+async def start_sandbox_service_route(request):
+    body = await request.json()
+    return JSONResponse(await start_sandbox_service(**body))
 
 
 @mcp.tool()
@@ -455,6 +469,64 @@ async def http_request(
     }
 
 
+@mcp.tool()
+async def run_poc(
+    command: list[str],
+    image: str = "python:3.12-slim",
+    env: dict[str, str] | None = None,
+    allow_external_network: bool = False,
+    timeout_seconds: int = 120,
+    expected_exit_code: int = 0,
+    target_url: str | None = None,
+    allow_weak_isolation: bool = False,
+) -> dict[str, Any]:
+    """Run a PoC command through the platform sandbox runner."""
+    audit_run_id = _required_audit_run_id()
+    if not command:
+        raise ValueError("command is required")
+    payload = {
+        "image": image,
+        "command": command,
+        "env": env or {},
+        "allow_external_network": allow_external_network,
+        "timeout_seconds": timeout_seconds,
+        "expected_exit_code": expected_exit_code,
+        "target_url": target_url,
+        "allow_weak_isolation": allow_weak_isolation,
+    }
+    return await _platform_post(f"/audit-runs/{audit_run_id}/sandbox/poc", payload)
+
+
+@mcp.tool()
+async def start_sandbox_service(
+    image: str,
+    command: list[str],
+    service_name: str = "target",
+    port: int = 8080,
+    env: dict[str, str] | None = None,
+    allow_external_network: bool = False,
+    healthcheck_path: str | None = None,
+    startup_timeout_seconds: int = 30,
+    allow_weak_isolation: bool = False,
+) -> dict[str, Any]:
+    """Start a target service through the platform sandbox runner."""
+    audit_run_id = _required_audit_run_id()
+    if not command:
+        raise ValueError("command is required")
+    payload = {
+        "image": image,
+        "command": command,
+        "env": env or {},
+        "service_name": service_name,
+        "port": port,
+        "allow_external_network": allow_external_network,
+        "healthcheck_path": healthcheck_path,
+        "startup_timeout_seconds": startup_timeout_seconds,
+        "allow_weak_isolation": allow_weak_isolation,
+    }
+    return await _platform_post(f"/audit-runs/{audit_run_id}/sandbox/service", payload)
+
+
 def _safe_path(path: str) -> Path:
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -635,7 +707,7 @@ def _platform_headers() -> dict[str, str]:
 
 
 async def _platform_get(path: str) -> dict[str, Any] | list[dict[str, Any]]:
-    async with httpx.AsyncClient(base_url=KNOWLEDGE_API_URL, timeout=60, headers=_platform_headers()) as client:
+    async with httpx.AsyncClient(base_url=PLATFORM_API_URL, timeout=60, headers=_platform_headers()) as client:
         response = await client.get(path)
         if response.status_code >= 400:
             raise RuntimeError(f"platform API {path} failed: {response.status_code} {response.text[-1000:]}")
@@ -643,11 +715,17 @@ async def _platform_get(path: str) -> dict[str, Any] | list[dict[str, Any]]:
 
 
 async def _platform_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    async with httpx.AsyncClient(base_url=KNOWLEDGE_API_URL, timeout=60, headers=_platform_headers()) as client:
+    async with httpx.AsyncClient(base_url=PLATFORM_API_URL, timeout=60, headers=_platform_headers()) as client:
         response = await client.post(path, json=payload)
         if response.status_code >= 400:
             raise RuntimeError(f"platform API {path} failed: {response.status_code} {response.text[-1000:]}")
         return response.json()
+
+
+def _required_audit_run_id() -> str:
+    if not AUDIT_RUN_ID:
+        raise ValueError("AUDIT_RUN_ID is required for sandbox tools")
+    return AUDIT_RUN_ID
 
 
 def _validate_http_target(url: str):
