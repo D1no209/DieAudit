@@ -55,6 +55,10 @@ body {
   margin-top: 16px;
 }
 
+.drawer-stack {
+  width: 100%;
+}
+
 pre {
   margin: 0;
   padding: 14px;

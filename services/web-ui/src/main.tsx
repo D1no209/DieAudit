@@ -6,6 +6,7 @@ import {
   CloudServerOutlined,
   DeleteOutlined,
   FolderOpenOutlined,
+  FileTextOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
@@ -14,11 +15,15 @@ import {
   Alert,
   Button,
   Card,
+  Collapse,
   ConfigProvider,
+  Descriptions,
+  Drawer,
   Flex,
   Form,
   Input,
   Layout,
+  List,
   Space,
   Statistic,
   Table,
@@ -67,8 +72,26 @@ type Finding = {
   severity: string;
   status: string;
   file_path?: string;
+  line_start?: number;
+  line_end?: number;
   rule_id?: string;
   source: string;
+  description?: string;
+  raw?: Record<string, unknown>;
+};
+
+type FindingDetail = {
+  finding: Finding;
+  evidence: Array<Record<string, unknown>>;
+  validation_attempts: Array<Record<string, unknown>>;
+};
+
+type ReportArtifact = {
+  report_id: string;
+  kind: string;
+  path: string;
+  summary: Record<string, unknown>;
+  created_at: string;
 };
 
 type ContainerRow = {
@@ -98,6 +121,9 @@ function App() {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [containers, setContainers] = useState<ContainerRow[]>([]);
+  const [reports, setReports] = useState<ReportArtifact[]>([]);
+  const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
+  const [agentEvents, setAgentEvents] = useState<Array<Record<string, unknown>>>();
   const [lastResponse, setLastResponse] = useState<any>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -133,16 +159,18 @@ function App() {
   }
 
   async function refreshAuditRun(auditRunId: string) {
-    const [run, agents, findingRows, containerRows] = await Promise.all([
+    const [run, agents, findingRows, containerRows, reportRows] = await Promise.all([
       readJson(`/gateway/audit-runs/${auditRunId}`),
       readJson(`/gateway/audit-runs/${auditRunId}/agent-runs`),
       readJson(`/gateway/audit-runs/${auditRunId}/findings`),
       readJson(`/gateway/audit-runs/${auditRunId}/containers`),
+      readJson(`/gateway/audit-runs/${auditRunId}/reports`),
     ]);
     setAuditRun(run);
     setAgentRuns(agents);
     setFindings(findingRows);
     setContainers(containerRows);
+    setReports(reportRows);
   }
 
   async function createGitProject(values: { name: string; git_url: string; ref?: string }) {
@@ -211,6 +239,59 @@ function App() {
     });
   }
 
+  async function runPipeline() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/run-pipeline`, { method: "POST" });
+      setLastResponse(result);
+      await refreshAuditRun(auditRun.audit_run_id);
+    });
+  }
+
+  async function runJudge() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/judge`, { method: "POST" });
+      setLastResponse(result);
+      await refreshAuditRun(auditRun.audit_run_id);
+    });
+  }
+
+  async function generateReport() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/report`, { method: "POST" });
+      setLastResponse(result);
+      await refreshAuditRun(auditRun.audit_run_id);
+    });
+  }
+
+  async function openFinding(findingId: string) {
+    await runAction(async () => {
+      const result = await readJson(`/gateway/findings/${findingId}`);
+      setSelectedFinding(result);
+    });
+  }
+
+  async function openAgentEvents(agentRunId: string) {
+    if (!auditRun) {
+      return;
+    }
+    await runAction(async () => {
+      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/agent-runs/${agentRunId}/events`);
+      setAgentEvents(result);
+    });
+  }
+
   async function cleanup() {
     if (!auditRun) {
       return;
@@ -249,6 +330,7 @@ function App() {
     { title: "Status", dataIndex: "status", render: (value) => <Tag color={value === "completed" ? "green" : "blue"}>{value}</Tag> },
     { title: "Protocol", dataIndex: "protocol_kind" },
     { title: "Created", dataIndex: "created_at" },
+    { title: "Events", render: (_, row) => <Button size="small" onClick={() => openAgentEvents(row.agent_run_id)}>查看</Button> },
   ];
 
   const findingColumns: ColumnsType<Finding> = [
@@ -258,6 +340,7 @@ function App() {
     { title: "Path", dataIndex: "file_path", render: (value) => value || "-" },
     { title: "Rule", dataIndex: "rule_id", render: (value) => value || "-" },
     { title: "Source", dataIndex: "source" },
+    { title: "Detail", render: (_, row) => <Button size="small" onClick={() => openFinding(row.finding_id)}>研判</Button> },
   ];
 
   const containerColumns: ColumnsType<ContainerRow> = [
@@ -282,7 +365,10 @@ function App() {
             <Space wrap>
               <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
               <Button type="primary" icon={<PlayCircleOutlined />} loading={loading} onClick={startAudit}>启动审计</Button>
+              <Button icon={<PlayCircleOutlined />} loading={loading} onClick={runPipeline}>一键闭环</Button>
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runSca}>SCA 扫描</Button>
+              <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
+              <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
               <Button danger icon={<DeleteOutlined />} loading={loading} onClick={cleanup}>清理运行时</Button>
             </Space>
           </Flex>
@@ -362,8 +448,71 @@ function App() {
               { key: "agents", label: "AgentRuns", children: <Card><Table rowKey="agent_run_id" columns={agentColumns} dataSource={agentRuns} pagination={false} /></Card> },
               { key: "findings", label: "Findings", children: <Card><Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 8 }} /></Card> },
               { key: "containers", label: "Containers", children: <Card><Table rowKey="Id" columns={containerColumns} dataSource={containers} pagination={false} /></Card> },
+              {
+                key: "reports",
+                label: "Reports",
+                children: (
+                  <Card>
+                    <List
+                      dataSource={reports}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <List.Item.Meta title={item.kind} description={item.path} />
+                          <Tag>{String(item.summary?.finding_count ?? 0)} findings</Tag>
+                        </List.Item>
+                      )}
+                    />
+                  </Card>
+                ),
+              },
             ]}
           />
+          <Drawer
+            title={selectedFinding?.finding.title || "Finding"}
+            open={Boolean(selectedFinding)}
+            width={720}
+            onClose={() => setSelectedFinding(undefined)}
+          >
+            {selectedFinding && (
+              <Space direction="vertical" size={16} className="drawer-stack">
+                <Descriptions bordered size="small" column={1}>
+                  <Descriptions.Item label="ID">{selectedFinding.finding.finding_id}</Descriptions.Item>
+                  <Descriptions.Item label="Severity"><Tag color={severityColor(selectedFinding.finding.severity)}>{selectedFinding.finding.severity}</Tag></Descriptions.Item>
+                  <Descriptions.Item label="Status"><Tag>{selectedFinding.finding.status}</Tag></Descriptions.Item>
+                  <Descriptions.Item label="Location">{selectedFinding.finding.file_path || "-"}:{selectedFinding.finding.line_start || "-"}</Descriptions.Item>
+                  <Descriptions.Item label="Source">{selectedFinding.finding.source}</Descriptions.Item>
+                  <Descriptions.Item label="Description">{selectedFinding.finding.description || "-"}</Descriptions.Item>
+                </Descriptions>
+                <Collapse
+                  items={[
+                    {
+                      key: "evidence",
+                      label: `Evidence (${selectedFinding.evidence.length})`,
+                      children: <pre>{JSON.stringify(selectedFinding.evidence, null, 2)}</pre>,
+                    },
+                    {
+                      key: "attempts",
+                      label: `Validation Attempts (${selectedFinding.validation_attempts.length})`,
+                      children: <pre>{JSON.stringify(selectedFinding.validation_attempts, null, 2)}</pre>,
+                    },
+                    {
+                      key: "raw",
+                      label: "Raw",
+                      children: <pre>{JSON.stringify(selectedFinding.finding.raw || {}, null, 2)}</pre>,
+                    },
+                  ]}
+                />
+              </Space>
+            )}
+          </Drawer>
+          <Drawer
+            title="Agent Events"
+            open={Boolean(agentEvents)}
+            width={720}
+            onClose={() => setAgentEvents(undefined)}
+          >
+            <pre>{JSON.stringify(agentEvents || [], null, 2)}</pre>
+          </Drawer>
         </Content>
       </Layout>
     </ConfigProvider>
