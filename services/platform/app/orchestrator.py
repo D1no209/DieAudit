@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .db import ContainerRun, RuntimeNetwork, SessionLocal
 from .docker_api import DockerClient
 from .settings import Settings
 from .templates import TemplateStore
@@ -45,6 +46,7 @@ class RuntimeOrchestrator:
 
         await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
         await self.docker.connect_network(network_name, self.settings.agent_gateway_container_name, aliases=["agent-gateway"])
+        await self._record_network(audit_run_id, network_name, "created")
 
         agent = self.agent_templates.get(agent_name)
         mcp_results: list[dict[str, Any]] = []
@@ -142,6 +144,7 @@ class RuntimeOrchestrator:
         created = await self.docker.create_container(name, payload)
         await self.docker.start_container(created["Id"])
         await self.docker.wait_for_healthy(created["Id"], timeout_seconds=template.get("health_timeout_seconds", 45))
+        await self._record_container(audit_run_id, project_id, created["Id"], image, "mcp", labels, "running")
         return {"id": created["Id"], "name": name, "image": image, "role": "mcp", "template": template["name"]}
 
     async def _start_agent(
@@ -185,7 +188,37 @@ class RuntimeOrchestrator:
         )
         created = await self.docker.create_container(name, payload)
         await self.docker.start_container(created["Id"])
+        await self._record_container(audit_run_id, project_id, created["Id"], image, "agent", labels, "running")
         return {"id": created["Id"], "name": name, "image": image, "role": "agent", "template": template["name"]}
+
+    async def _record_container(
+        self,
+        audit_run_id: str,
+        project_id: str,
+        container_id: str,
+        image: str,
+        role: str,
+        labels: dict[str, str],
+        status: str,
+    ) -> None:
+        async with SessionLocal() as session:
+            session.add(
+                ContainerRun(
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    container_id=container_id,
+                    image=image,
+                    role=role,
+                    labels=labels,
+                    status=status,
+                )
+            )
+            await session.commit()
+
+    async def _record_network(self, audit_run_id: str, name: str, status: str) -> None:
+        async with SessionLocal() as session:
+            session.add(RuntimeNetwork(audit_run_id=audit_run_id, name=name, status=status))
+            await session.commit()
 
     def _binds(self, workspace_host_path: str | None, template: dict[str, Any]) -> list[str]:
         binds: list[str] = []

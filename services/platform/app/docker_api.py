@@ -64,6 +64,9 @@ class DockerClient:
         return True
 
     async def create_network(self, name: str, *, internal: bool = True, labels: dict[str, str] | None = None) -> dict[str, Any]:
+        existing = await self.network_exists(name)
+        if existing:
+            return existing
         payload = {
             "Name": name,
             "Driver": "bridge",
@@ -72,6 +75,16 @@ class DockerClient:
             "CheckDuplicate": True,
         }
         return await self.request("POST", "/networks/create", json=payload)
+
+    async def network_exists(self, name: str) -> dict[str, Any] | None:
+        response = await self.client.get(f"/networks/{name}")
+        if response.status_code == 200:
+            return response.json()
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            raise DockerApiError(f"inspect network {name} failed: {response.status_code} {response.text}")
+        return response.json()
 
     async def connect_network(self, network: str, container: str, aliases: list[str] | None = None) -> None:
         payload = {"Container": container, "EndpointConfig": {"Aliases": aliases or []}}

@@ -4,6 +4,8 @@ DieAudit is a local-first, multi-agent code audit platform skeleton. This first 
 
 ## Quick Start
 
+The first build needs access to Docker Hub for base images such as Python, Node, Nginx, Postgres, Redis, NATS, Qdrant, and Temporal. If your network blocks Docker Hub, pre-pull or mirror those images first.
+
 ```powershell
 copy .env.example .env
 .\scripts\bootstrap.ps1
@@ -52,3 +54,7 @@ Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/cleanu
 - Agent templates live in `configs/agent-templates`.
 - MCP templates live in `configs/mcp-templates`.
 - Mock Agent and MCP images prove that the platform can inject `MCP_SERVERS_JSON` and connect Agent containers to sidecars.
+
+## Persistence And Database
+
+The platform uses SQLAlchemy ORM models and creates the first schema on `web-api` startup. Raw SQL is not required for the application schema.
