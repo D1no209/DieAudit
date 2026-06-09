@@ -547,25 +547,130 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.get("/findings/{finding_id}")
     async def get_finding(finding_id: str) -> dict[str, Any]:
+        detail = await _get_finding_detail(finding_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="finding not found")
+        return detail
+
+    @router.post("/findings/{finding_id}/poc")
+    async def run_finding_poc(finding_id: str, body: RunPocRequest) -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(
+                f"/findings/{finding_id}/poc",
+                method="POST",
+                json=body.model_dump(),
+            )
         async with SessionLocal() as session:
             finding = await session.scalar(select(Finding).where(Finding.finding_id == finding_id))
             if not finding:
                 raise HTTPException(status_code=404, detail="finding not found")
-            evidence_rows = (
-                await session.execute(select(Evidence).where(Evidence.finding_id == finding_id).order_by(Evidence.created_at.asc()))
-            ).scalars()
-            attempt_rows = (
+            audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == finding.audit_run_id))
+            if not audit_run:
+                raise HTTPException(status_code=404, detail="audit run not found")
+            audit_run_id = finding.audit_run_id
+            project_id = finding.project_id
+            existing_attempts = (
                 await session.execute(
-                    select(ValidationAttempt)
-                    .where(ValidationAttempt.finding_id == finding_id)
-                    .order_by(ValidationAttempt.round_index.asc())
+                    select(ValidationAttempt).where(ValidationAttempt.finding_id == finding_id).order_by(ValidationAttempt.round_index.desc())
                 )
             ).scalars()
+            highest_round = max((attempt.round_index for attempt in existing_attempts), default=0)
+            attempt = ValidationAttempt(
+                attempt_id=str(uuid.uuid4()),
+                finding_id=finding_id,
+                audit_run_id=finding.audit_run_id,
+                round_index=highest_round + 1,
+                status="running",
+                result={
+                    "kind": "poc",
+                    "request": body.model_dump(),
+                },
+            )
+            session.add(attempt)
+            await session.commit()
+
+        audit_run_dict = await _get_audit_run(audit_run_id)
+        workspace_path = (audit_run_dict or {}).get("config", {}).get("workspace_host_path")
+        try:
+            poc_result = await runtime.run_poc_container(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                image=body.image,
+                command=body.command,
+                env=body.env,
+                workspace_host_path=workspace_path,
+                allow_external_network=body.allow_external_network,
+                retain_runtime_on_failure=body.retain_runtime_on_failure,
+                timeout_seconds=body.timeout_seconds,
+                mount_workspace=body.mount_workspace,
+            )
+            exit_code = _optional_int(poc_result.get("container", {}).get("exit_code"))
+            expected_exit_code = _optional_int(body.expected_exit_code)
+            matched = bool(exit_code is not None and expected_exit_code is not None and exit_code == expected_exit_code)
+            status = "completed" if matched else "failed"
+            summary = f"PoC exited with {exit_code}; expected {expected_exit_code}."
+            async with SessionLocal() as session:
+                row = await session.scalar(select(ValidationAttempt).where(ValidationAttempt.attempt_id == attempt.attempt_id))
+                if row:
+                    row.status = status
+                    row.result = {
+                        "kind": "poc",
+                        "matched_expected_exit_code": matched,
+                        "expected_exit_code": expected_exit_code,
+                        "poc": poc_result,
+                    }
+                refreshed_finding = await session.scalar(select(Finding).where(Finding.finding_id == finding_id))
+                if refreshed_finding and body.mark_confirmed_on_success and matched:
+                    refreshed_finding.status = "confirmed"
+                session.add(
+                    Evidence(
+                        evidence_id=str(uuid.uuid4()),
+                        finding_id=finding_id,
+                        audit_run_id=audit_run_id,
+                        kind="poc-run",
+                        summary=summary,
+                        artifact_path=poc_result.get("container", {}).get("log_artifact"),
+                        payload={
+                            "matched_expected_exit_code": matched,
+                            "expected_exit_code": expected_exit_code,
+                            "poc": poc_result,
+                        },
+                    )
+                )
+                await session.commit()
+            await _record_audit_run_event(
+                audit_run_id,
+                "finding_poc_completed",
+                {"finding_id": finding_id, "attempt_id": attempt.attempt_id, "matched_expected_exit_code": matched, "poc": poc_result},
+            )
             return {
-                "finding": _finding_to_dict(finding),
-                "evidence": [_evidence_to_dict(row) for row in evidence_rows],
-                "validation_attempts": [_attempt_to_dict(row) for row in attempt_rows],
+                "finding_id": finding_id,
+                "attempt_id": attempt.attempt_id,
+                "status": status,
+                "matched_expected_exit_code": matched,
+                "poc": poc_result,
+                "finding": await _get_finding_detail(finding_id),
             }
+        except Exception as exc:
+            async with SessionLocal() as session:
+                row = await session.scalar(select(ValidationAttempt).where(ValidationAttempt.attempt_id == attempt.attempt_id))
+                if row:
+                    row.status = "failed"
+                    row.result = {"kind": "poc", "error": str(exc), "request": body.model_dump()}
+                session.add(
+                    Evidence(
+                        evidence_id=str(uuid.uuid4()),
+                        finding_id=finding_id,
+                        audit_run_id=audit_run_id,
+                        kind="poc-error",
+                        summary=f"PoC execution failed: {exc}",
+                        payload={"error": str(exc), "request": body.model_dump()},
+                    )
+                )
+                await session.commit()
+            await _record_audit_run_event(audit_run_id, "finding_poc_failed", {"finding_id": finding_id, "attempt_id": attempt.attempt_id, "error": str(exc)})
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/runtime/protocols")
     async def runtime_protocols() -> dict[str, Any]:
@@ -963,6 +1068,28 @@ def _attempt_to_dict(row: ValidationAttempt) -> dict[str, Any]:
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
+
+
+async def _get_finding_detail(finding_id: str) -> dict[str, Any] | None:
+    async with SessionLocal() as session:
+        finding = await session.scalar(select(Finding).where(Finding.finding_id == finding_id))
+        if not finding:
+            return None
+        evidence_rows = (
+            await session.execute(select(Evidence).where(Evidence.finding_id == finding_id).order_by(Evidence.created_at.asc()))
+        ).scalars()
+        attempt_rows = (
+            await session.execute(
+                select(ValidationAttempt)
+                .where(ValidationAttempt.finding_id == finding_id)
+                .order_by(ValidationAttempt.round_index.asc())
+            )
+        ).scalars()
+        return {
+            "finding": _finding_to_dict(finding),
+            "evidence": [_evidence_to_dict(row) for row in evidence_rows],
+            "validation_attempts": [_attempt_to_dict(row) for row in attempt_rows],
+        }
 
 
 def _report_to_dict(row: ReportArtifact) -> dict[str, Any]:

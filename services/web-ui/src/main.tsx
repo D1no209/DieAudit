@@ -385,6 +385,35 @@ function App() {
     });
   }
 
+  async function runFindingPoc() {
+    if (!selectedFinding || !auditRun) {
+      return;
+    }
+    const findingId = selectedFinding.finding.finding_id;
+    await runAction(async () => {
+      const result = await readJson(`/gateway/findings/${findingId}/poc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: "python:3.12-slim",
+          command: [
+            "python",
+            "-c",
+            "import os, json; print('dieaudit finding poc smoke'); print(json.dumps({'workspace': os.listdir('/workspace')[:20] if os.path.exists('/workspace') else [], 'artifact_dir': os.environ.get('ARTIFACT_DIR')}))",
+          ],
+          allow_external_network: false,
+          timeout_seconds: 120,
+          expected_exit_code: 0,
+        }),
+      });
+      setLastResponse(result);
+      setSelectedFinding(result.finding);
+      await refreshAuditRun(auditRun.audit_run_id);
+      const managed = await readJson("/gateway/runtime/managed");
+      setManagedRuntime(managed);
+    });
+  }
+
   async function openAgentEvents(agentRunId: string) {
     if (!auditRun) {
       return;
@@ -710,6 +739,9 @@ function App() {
           >
             {selectedFinding && (
               <Space direction="vertical" size={16} className="drawer-stack">
+                <Space wrap>
+                  <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runFindingPoc}>运行 PoC 验证</Button>
+                </Space>
                 <Descriptions bordered size="small" column={1}>
                   <Descriptions.Item label="ID">{selectedFinding.finding.finding_id}</Descriptions.Item>
                   <Descriptions.Item label="Severity"><Tag color={severityColor(selectedFinding.finding.severity)}>{selectedFinding.finding.severity}</Tag></Descriptions.Item>

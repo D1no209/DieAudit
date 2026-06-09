@@ -79,3 +79,5 @@ class RunPocRequest(BaseModel):
     retain_runtime_on_failure: bool = False
     timeout_seconds: int = Field(default=120, ge=1, le=3600)
     mount_workspace: bool = True
+    expected_exit_code: int = 0
+    mark_confirmed_on_success: bool = False
