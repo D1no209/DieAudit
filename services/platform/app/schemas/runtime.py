@@ -83,6 +83,7 @@ class RunPocRequest(BaseModel):
     mark_confirmed_on_success: bool = False
     network_name: str | None = None
     target_url: str | None = None
+    allow_weak_isolation: bool = False
 
 
 class StartSandboxServiceRequest(BaseModel):
@@ -99,3 +100,4 @@ class StartSandboxServiceRequest(BaseModel):
     mount_workspace: bool = True
     healthcheck_path: str | None = None
     startup_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    allow_weak_isolation: bool = False

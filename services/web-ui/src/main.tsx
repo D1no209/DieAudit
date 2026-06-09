@@ -136,7 +136,9 @@ type SandboxCapabilities = {
   ok?: boolean;
   docker_available?: boolean;
   configured_gvisor?: boolean;
+  allow_runc_sandbox?: boolean;
   gvisor_available?: boolean;
+  strong_isolation_available?: boolean;
   sandbox_execution_available?: boolean;
   requested_runtime?: string;
   reason?: string;
@@ -366,6 +368,7 @@ function App() {
           ],
           allow_external_network: false,
           timeout_seconds: 120,
+          allow_weak_isolation: true,
         }),
       });
       setLastResponse(result);
@@ -392,6 +395,7 @@ function App() {
           allow_external_network: false,
           retain_runtime_on_failure: true,
           startup_timeout_seconds: 30,
+          allow_weak_isolation: true,
         }),
       });
       setSandboxTarget({ network: result.network, target_url: result.target_url });
@@ -427,6 +431,7 @@ function App() {
           allow_external_network: false,
           timeout_seconds: 120,
           expected_exit_code: 0,
+          allow_weak_isolation: true,
         }),
       });
       setLastResponse(result);
@@ -466,6 +471,7 @@ function App() {
           allow_external_network: false,
           timeout_seconds: 120,
           expected_exit_code: 0,
+          allow_weak_isolation: true,
         }),
       });
       setLastResponse(result);
@@ -658,6 +664,11 @@ function App() {
                 value={sandboxCapabilities?.sandbox_execution_available ? "Ready" : "Unavailable"}
                 prefix={<SafetyCertificateOutlined />}
               />
+              {sandboxCapabilities?.requested_runtime === "runc" && !sandboxCapabilities?.strong_isolation_available && (
+                <Text type={sandboxCapabilities?.allow_runc_sandbox ? "warning" : "danger"}>
+                  {sandboxCapabilities?.allow_runc_sandbox ? "Weak runc isolation enabled" : "Strong isolation unavailable"}
+                </Text>
+              )}
               {sandboxCapabilities?.warnings?.[0] && <Text type="secondary">{sandboxCapabilities.warnings[0]}</Text>}
             </Card>
           </div>

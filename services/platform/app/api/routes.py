@@ -607,6 +607,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 mount_workspace=body.mount_workspace,
                 network_name=body.network_name,
                 target_url=body.target_url,
+                allow_weak_isolation=body.allow_weak_isolation,
             )
             exit_code = _optional_int(poc_result.get("container", {}).get("exit_code"))
             expected_exit_code = _optional_int(body.expected_exit_code)
@@ -931,6 +932,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 mount_workspace=body.mount_workspace,
                 network_name=body.network_name,
                 target_url=body.target_url,
+                allow_weak_isolation=body.allow_weak_isolation,
             )
         except (DockerApiError, RuntimeError, ValueError) as exc:
             await _record_audit_run_event(audit_run_id, "poc_run_failed", {"error": str(exc), "request": body.model_dump()})
@@ -966,6 +968,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 startup_timeout_seconds=body.startup_timeout_seconds,
                 mount_workspace=body.mount_workspace,
                 healthcheck_path=body.healthcheck_path,
+                allow_weak_isolation=body.allow_weak_isolation,
             )
         except (DockerApiError, RuntimeError, ValueError) as exc:
             await _record_audit_run_event(audit_run_id, "sandbox_service_failed", {"error": str(exc), "request": body.model_dump()})
