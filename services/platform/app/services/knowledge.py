@@ -215,6 +215,40 @@ class KnowledgeService:
             return await self._openai_compatible_embeddings(texts)
         raise KnowledgeIndexError(f"unsupported knowledge embedding provider: {self.embedding_provider}")
 
+    def embedding_status(self) -> dict[str, Any]:
+        status: dict[str, Any] = {
+            "provider": self.embedding_provider,
+            "collection": self.collection_name,
+            "vector_size": self.vector_size,
+            "configured": True,
+            "semantic": self.embedding_provider in {"openai", "openai-compatible"},
+            "status": "pass",
+            "message": "knowledge embedding provider is configured",
+        }
+        if self.embedding_provider in {"hash", "local-hash", ""}:
+            status["status"] = "warn"
+            status["message"] = "local hash embeddings are deterministic but not semantic; configure openai-compatible embeddings for production retrieval quality"
+            return status
+        if self.embedding_provider not in {"openai", "openai-compatible"}:
+            status["status"] = "fail"
+            status["configured"] = False
+            status["message"] = f"unsupported knowledge embedding provider: {self.embedding_provider}"
+            return status
+        base_url = str(getattr(self.settings, "knowledge_embedding_base_url", "") or "")
+        model = str(getattr(self.settings, "knowledge_embedding_model", "") or "")
+        status["base_url_configured"] = bool(base_url)
+        status["model"] = model or None
+        status["api_key_configured"] = bool(getattr(self.settings, "knowledge_embedding_api_key", "") or "")
+        if not base_url:
+            status["status"] = "fail"
+            status["configured"] = False
+            status["message"] = "KNOWLEDGE_EMBEDDING_BASE_URL is required for openai-compatible embeddings"
+        elif not model:
+            status["status"] = "fail"
+            status["configured"] = False
+            status["message"] = "KNOWLEDGE_EMBEDDING_MODEL is required for openai-compatible embeddings"
+        return status
+
     async def _openai_compatible_embeddings(self, texts: list[str]) -> list[list[float]]:
         base_url = str(getattr(self.settings, "knowledge_embedding_base_url", "") or "").rstrip("/")
         api_key = str(getattr(self.settings, "knowledge_embedding_api_key", "") or "")

@@ -167,6 +167,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             rows = (await session.execute(query)).scalars()
             return [_knowledge_document_to_dict(row) for row in rows]
 
+    @router.get("/knowledge/status")
+    async def knowledge_status() -> dict[str, Any]:
+        service = KnowledgeService(settings)
+        return {"embedding": service.embedding_status()}
+
     @router.post("/knowledge/documents")
     async def upload_knowledge_document(
         title: str = Form(...),
@@ -1131,6 +1136,15 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             )
         except Exception as exc:
             checks.append({"id": "sandbox_isolation", "title": "Sandbox has strong isolation", "status": "fail", "detail": str(exc)})
+        embedding = KnowledgeService(settings).embedding_status()
+        checks.append(
+            {
+                "id": "knowledge_embedding",
+                "title": "Knowledge embedding provider is production-ready",
+                "status": embedding.get("status", "fail"),
+                "detail": embedding,
+            }
+        )
         fail_count = sum(1 for check in checks if check["status"] == "fail")
         warn_count = sum(1 for check in checks if check["status"] == "warn")
         return {

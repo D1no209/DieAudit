@@ -39,6 +39,58 @@ def test_embedding_is_normalized_and_stable() -> None:
     assert abs(sum(value * value for value in first) - 1.0) < 0.000001
 
 
+def test_embedding_status_warns_for_hash_provider(tmp_path: Path) -> None:
+    service = KnowledgeService(SimpleNamespace(artifact_root=tmp_path, qdrant_url="http://qdrant:6333"))
+
+    status = service.embedding_status()
+
+    assert status["status"] == "warn"
+    assert status["semantic"] is False
+
+
+def test_embedding_status_fails_for_incomplete_remote_provider(tmp_path: Path) -> None:
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant:6333",
+            knowledge_collection_name="remote",
+            knowledge_vector_size=1536,
+            knowledge_embedding_provider="openai-compatible",
+            knowledge_embedding_base_url="",
+            knowledge_embedding_api_key="secret",
+            knowledge_embedding_model="text-embedding-3-small",
+        )
+    )
+
+    status = service.embedding_status()
+
+    assert status["status"] == "fail"
+    assert status["configured"] is False
+    assert "api_key" not in status
+    assert status["api_key_configured"] is True
+
+
+def test_embedding_status_passes_for_configured_remote_provider(tmp_path: Path) -> None:
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant:6333",
+            knowledge_collection_name="remote",
+            knowledge_vector_size=1536,
+            knowledge_embedding_provider="openai-compatible",
+            knowledge_embedding_base_url="http://embedding.local/v1",
+            knowledge_embedding_api_key="secret",
+            knowledge_embedding_model="text-embedding-3-small",
+        )
+    )
+
+    status = service.embedding_status()
+
+    assert status["status"] == "pass"
+    assert status["semantic"] is True
+    assert status["api_key_configured"] is True
+
+
 @pytest.mark.asyncio
 async def test_openai_compatible_embeddings_parse_response(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
