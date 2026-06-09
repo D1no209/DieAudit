@@ -275,6 +275,10 @@ function App() {
     });
   }
 
+  function downloadReport(reportId: string) {
+    window.open(`/gateway/reports/${reportId}/download`, "_blank", "noopener,noreferrer");
+  }
+
   async function openFinding(findingId: string) {
     await runAction(async () => {
       const result = await readJson(`/gateway/findings/${findingId}`);
@@ -458,7 +462,10 @@ function App() {
                       renderItem={(item) => (
                         <List.Item>
                           <List.Item.Meta title={item.kind} description={item.path} />
-                          <Tag>{String(item.summary?.finding_count ?? 0)} findings</Tag>
+                          <Space>
+                            <Tag>{String(item.summary?.finding_count ?? 0)} findings</Tag>
+                            <Button size="small" icon={<FileTextOutlined />} onClick={() => downloadReport(item.report_id)}>下载</Button>
+                          </Space>
                         </List.Item>
                       )}
                     />

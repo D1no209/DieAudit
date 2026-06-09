@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 
 from app.domain.models import (
@@ -293,7 +294,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             }
 
     @router.post("/audit-runs/{audit_run_id}/run-pipeline")
-    async def run_pipeline(audit_run_id: str) -> dict[str, Any]:
+    async def run_pipeline(audit_run_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/run-pipeline", method="POST")
@@ -303,12 +304,22 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         if not workspace_path:
             raise HTTPException(status_code=400, detail="audit run has no workspace path")
+        await _mark_audit_run_status(audit_run_id, "queued")
+        background_tasks.add_task(_execute_pipeline, audit_run_id, settings, runtime)
+        return {"audit_run_id": audit_run_id, "status": "accepted"}
 
+    async def _execute_pipeline(audit_run_id: str, settings: Settings, runtime) -> None:
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            return
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        if not workspace_path:
+            await _mark_audit_run_status(audit_run_id, "failed")
+            return
         await _mark_audit_run_status(audit_run_id, "running")
         steps: list[dict[str, Any]] = []
-        agent_result = await start_agent_run(
-            audit_run_id,
-            StartAgentRunRequest(
+        try:
+            agent_result = await runtime.start_agent_run(
                 audit_run_id=audit_run_id,
                 project_id=audit_run["project_id"],
                 agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
@@ -322,24 +333,26 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                         "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
                     )
                 },
-            ),
-        )
-        steps.append({"step": "agent-audit", "result": agent_result})
+            )
+            steps.append({"step": "agent-audit", "result": agent_result})
 
-        try:
-            sca_result = await run_sca(audit_run_id)
-        except Exception as exc:
-            sca_result = {"ok": False, "error": str(exc)}
-            await _record_pipeline_event(audit_run_id, "sca_failed", sca_result)
-        steps.append({"step": "sca", "result": sca_result})
+            try:
+                sca_result = await _run_sca_mcp(audit_run_id, audit_run["project_id"], workspace_path, runtime, audit_run)
+            except Exception as exc:
+                sca_result = {"ok": False, "error": str(exc)}
+                await _record_pipeline_event(audit_run_id, "sca_failed", sca_result)
+            steps.append({"step": "sca", "result": sca_result})
 
-        semgrep_result = await _run_semgrep_best_effort(audit_run_id, audit_run["project_id"], workspace_path, settings)
-        steps.append({"step": "semgrep", "result": semgrep_result})
+            try:
+                semgrep_result = await _run_semgrep_mcp(audit_run_id, audit_run["project_id"], workspace_path, runtime, audit_run)
+            except Exception as exc:
+                semgrep_result = {"ok": False, "error": str(exc)}
+                await _record_pipeline_event(audit_run_id, "semgrep_failed", semgrep_result)
+            steps.append({"step": "semgrep", "result": semgrep_result})
 
-        findings = await _list_findings(audit_run_id)
-        validator_result = await scale_validators(
-            audit_run_id,
-            ValidatorScaleRequest(
+            findings = await _list_findings(audit_run_id)
+            validator_result = await runtime.scale_validators(
+                audit_run_id=audit_run_id,
                 project_id=audit_run["project_id"],
                 findings=findings,
                 workspace_host_path=workspace_path,
@@ -349,102 +362,36 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 allow_external_network=audit_run["allow_external_network"],
                 retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                 wait_for_completion=True,
-            ),
-        )
-        steps.append({"step": "validators", "result": validator_result})
+            )
+            steps.append({"step": "validators", "result": validator_result})
 
-        judge_result = await judge_audit_run(audit_run_id)
-        report_result = await generate_report(audit_run_id)
-        await _mark_audit_run_status(audit_run_id, "completed")
-        return {
-            "audit_run_id": audit_run_id,
-            "status": "completed",
-            "steps": steps,
-            "judge": judge_result,
-            "report": report_result,
-        }
+            judge_result = await _judge_audit_run_internal(audit_run_id, runtime)
+            report_result = await _generate_report_internal(audit_run_id, settings)
+            await _record_pipeline_summary(audit_run_id, {"steps": steps, "judge": judge_result, "report": report_result})
+            await _mark_audit_run_status(audit_run_id, "completed")
+        except Exception as exc:
+            await _record_pipeline_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": steps})
+            await _mark_audit_run_status(audit_run_id, "failed")
 
     @router.post("/audit-runs/{audit_run_id}/judge")
     async def judge_audit_run(audit_run_id: str) -> dict[str, Any]:
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/judge", method="POST")
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
+        result = await _judge_audit_run_internal(audit_run_id, runtime)
+        if result.get("missing"):
             raise HTTPException(status_code=404, detail="audit run not found")
-        findings = await _list_findings(audit_run_id)
-        attempts = await _list_validation_attempts(audit_run_id)
-        evidence = await _list_evidence(audit_run_id)
-        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
-        judger_result = None
-        if findings and workspace_path:
-            try:
-                judger_result = await start_agent_run(
-                    audit_run_id,
-                    StartAgentRunRequest(
-                        audit_run_id=audit_run_id,
-                        project_id=audit_run["project_id"],
-                        agent_name="opencode-judger",
-                        workspace_host_path=workspace_path,
-                        allow_external_network=audit_run["allow_external_network"],
-                        retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                        input_payload={
-                            "goal": "Judge the supplied findings and validation evidence. Return concise JSON decisions.",
-                            "findings": findings,
-                            "validation_attempts": attempts,
-                            "evidence": evidence,
-                        },
-                    ),
-                )
-            except Exception as exc:
-                judger_result = {"ok": False, "error": str(exc)}
-                await _record_pipeline_event(audit_run_id, "judger_failed", judger_result)
-
-        decisions = await _apply_judgement(audit_run_id)
-        return {"audit_run_id": audit_run_id, "judger_agent": judger_result, "decisions": decisions}
+        return result
 
     @router.post("/audit-runs/{audit_run_id}/report")
     async def generate_report(audit_run_id: str) -> dict[str, Any]:
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/report", method="POST")
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
+        result = await _generate_report_internal(audit_run_id, settings)
+        if result.get("missing"):
             raise HTTPException(status_code=404, detail="audit run not found")
-        findings = await _list_findings(audit_run_id)
-        evidence = await _list_evidence(audit_run_id)
-        attempts = await _list_validation_attempts(audit_run_id)
-        agent_runs = await _list_agent_runs(audit_run_id)
-        report_dir = settings.artifact_root / "reports" / audit_run_id
-        report_dir.mkdir(parents=True, exist_ok=True)
-        report_json = report_dir / "report.json"
-        report_md = report_dir / "report.md"
-        payload = {
-            "audit_run": audit_run,
-            "findings": findings,
-            "evidence": evidence,
-            "validation_attempts": attempts,
-            "agent_runs": agent_runs,
-        }
-        report_json.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        report_md.write_text(_report_markdown(payload), encoding="utf-8")
-        report_id = str(uuid.uuid4())
-        async with SessionLocal() as session:
-            record = ReportArtifact(
-                report_id=report_id,
-                audit_run_id=audit_run_id,
-                project_id=audit_run["project_id"],
-                kind="audit-report",
-                path=str(report_md),
-                summary={
-                    "json_path": str(report_json),
-                    "finding_count": len(findings),
-                    "confirmed_count": len([item for item in findings if item.get("status") == "confirmed"]),
-                },
-            )
-            session.add(record)
-            await session.commit()
-        return {"report_id": report_id, "markdown_path": str(report_md), "json_path": str(report_json)}
+        return result
 
     @router.get("/audit-runs/{audit_run_id}/evidence")
     async def audit_run_evidence(audit_run_id: str) -> list[dict[str, Any]]:
@@ -465,6 +412,17 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 )
             ).scalars()
             return [_report_to_dict(row) for row in rows]
+
+    @router.get("/reports/{report_id}/download")
+    async def download_report(report_id: str) -> FileResponse:
+        async with SessionLocal() as session:
+            report = await session.scalar(select(ReportArtifact).where(ReportArtifact.report_id == report_id))
+            if not report:
+                raise HTTPException(status_code=404, detail="report not found")
+            path = Path(report.path)
+            if not path.exists():
+                raise HTTPException(status_code=404, detail="report artifact not found")
+            return FileResponse(path, filename=path.name, media_type="text/markdown")
 
     @router.get("/findings/{finding_id}")
     async def get_finding(finding_id: str) -> dict[str, Any]:
@@ -938,6 +896,248 @@ async def _record_pipeline_event(audit_run_id: str, event_type: str, payload: di
             await session.commit()
 
 
+async def _record_pipeline_summary(audit_run_id: str, summary: dict[str, Any]) -> None:
+    async with SessionLocal() as session:
+        audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
+        if not audit_run:
+            return
+        config = dict(audit_run.config or {})
+        config["pipeline"] = summary
+        audit_run.config = config
+        agent_run = await session.scalar(
+            select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
+        )
+        if agent_run:
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type="pipeline_summary", payload=summary))
+        await session.commit()
+
+
+async def _run_sca_mcp(
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    runtime: Any,
+    audit_run: dict[str, Any],
+) -> dict[str, Any]:
+    allow_network = bool(audit_run.get("config", {}).get("allow_sca_external_network", True))
+    sbom_result: dict[str, Any] | None = None
+    try:
+        sbom_result = await runtime.run_mcp_tool(
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            mcp_name="sca-mcp",
+            tool_path="/tools/generate_sbom",
+            workspace_host_path=workspace_path,
+            payload={"output_format": "spdx-json", "timeout_seconds": 300},
+            allow_external_network=allow_network,
+            retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+        )
+    except Exception as exc:
+        sbom_result = {"ok": False, "error": str(exc)}
+        await _record_pipeline_event(audit_run_id, "sca_sbom_failed", sbom_result)
+
+    osv_result = await runtime.run_mcp_tool(
+        audit_run_id=audit_run_id,
+        project_id=project_id,
+        mcp_name="sca-mcp",
+        tool_path="/tools/query_osv",
+        workspace_host_path=workspace_path,
+        payload={"max_packages": int(audit_run.get("config", {}).get("sca_max_packages", 200))},
+        allow_external_network=allow_network,
+        retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+    )
+    result = osv_result.get("result", {})
+    artifact_path = None
+    if isinstance(sbom_result, dict):
+        artifact_path = ((sbom_result.get("result") or {}).get("artifact_path") if sbom_result.get("result") else None)
+    created = await _ingest_tool_findings(
+        audit_run_id=audit_run_id,
+        project_id=project_id,
+        source="sca-mcp",
+        findings=result.get("findings", []) if isinstance(result, dict) else [],
+        evidence_kind="sca-result",
+        artifact_path=artifact_path,
+    )
+    summary = {
+        "ok": bool(osv_result.get("ok")),
+        "packages": len(result.get("packages", [])) if isinstance(result, dict) else 0,
+        "vulnerabilities": len(result.get("vulnerabilities", [])) if isinstance(result, dict) else 0,
+        "findings_created": created,
+        "sbom": sbom_result,
+    }
+    await _record_pipeline_event(audit_run_id, "sca_completed", summary)
+    return summary
+
+
+async def _run_semgrep_mcp(
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    runtime: Any,
+    audit_run: dict[str, Any],
+) -> dict[str, Any]:
+    mcp_result = await runtime.run_mcp_tool(
+        audit_run_id=audit_run_id,
+        project_id=project_id,
+        mcp_name="semgrep-mcp",
+        tool_path="/tools/semgrep_scan",
+        workspace_host_path=workspace_path,
+        payload={"config": "auto", "output_format": "json", "timeout_seconds": 300},
+        allow_external_network=False,
+        retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+    )
+    result = mcp_result.get("result", {})
+    created = await _ingest_tool_findings(
+        audit_run_id=audit_run_id,
+        project_id=project_id,
+        source="semgrep-mcp",
+        findings=result.get("findings", []) if isinstance(result, dict) else [],
+        evidence_kind="semgrep-result",
+        artifact_path=result.get("artifact_path") if isinstance(result, dict) else None,
+    )
+    summary = {
+        "ok": bool(result.get("ok")) if isinstance(result, dict) else bool(mcp_result.get("ok")),
+        "available": result.get("available") if isinstance(result, dict) else None,
+        "artifact_path": result.get("artifact_path") if isinstance(result, dict) else None,
+        "findings_created": created,
+    }
+    await _record_pipeline_event(audit_run_id, "semgrep_completed", summary)
+    return summary
+
+
+async def _ingest_tool_findings(
+    *,
+    audit_run_id: str,
+    project_id: str,
+    source: str,
+    findings: list[Any],
+    evidence_kind: str,
+    artifact_path: str | None = None,
+) -> int:
+    created = 0
+    async with SessionLocal() as session:
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("rule_id") or f"{source} finding")[:255]
+            finding = Finding(
+                finding_id=str(uuid.uuid4()),
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                title=title,
+                severity=str(item.get("severity") or "unknown").lower(),
+                status=str(item.get("status") or "candidate"),
+                file_path=str(item["file_path"]) if item.get("file_path") else None,
+                line_start=_optional_int(item.get("line_start")),
+                line_end=_optional_int(item.get("line_end")),
+                rule_id=str(item["rule_id"]) if item.get("rule_id") else None,
+                description=str(item["description"]) if item.get("description") else None,
+                source=str(item.get("source") or source),
+                raw=item,
+            )
+            session.add(finding)
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding.finding_id,
+                    audit_run_id=audit_run_id,
+                    kind=evidence_kind,
+                    summary=finding.description or finding.title,
+                    artifact_path=artifact_path,
+                    payload=item,
+                )
+            )
+            created += 1
+        await session.commit()
+    return created
+
+
+async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id)
+    if not audit_run:
+        return {"missing": True}
+    workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+    findings = await _list_findings(audit_run_id)
+    evidence = await _list_evidence(audit_run_id)
+    attempts = await _list_validation_attempts(audit_run_id)
+    agent_result: dict[str, Any] | None = None
+    parsed_decisions: list[dict[str, Any]] = []
+    if findings and workspace_path:
+        try:
+            agent_result = await runtime.start_agent_run(
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                agent_name="opencode-judger",
+                workspace_host_path=workspace_path,
+                allow_external_network=audit_run["allow_external_network"],
+                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+                input_payload={
+                    "goal": (
+                        "Judge the audit findings. Return JSON with decisions: "
+                        "[{\"finding_id\":\"...\",\"status\":\"confirmed|false_positive|needs_review\",\"reason\":\"...\"}]."
+                    ),
+                    "findings": findings,
+                    "evidence": evidence,
+                    "validation_attempts": attempts,
+                },
+            )
+            agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+            if agent_run_id:
+                parsed_decisions = await _extract_judger_decisions(agent_run_id)
+        except Exception as exc:
+            agent_result = {"ok": False, "error": str(exc)}
+            await _record_pipeline_event(audit_run_id, "judger_failed", agent_result)
+    decisions = await _apply_judgement(audit_run_id, parsed_decisions)
+    result = {"audit_run_id": audit_run_id, "agent_run": agent_result, "decisions": decisions}
+    await _record_pipeline_event(audit_run_id, "judgement_completed", result)
+    return result
+
+
+async def _generate_report_internal(audit_run_id: str, settings: Settings) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id)
+    if not audit_run:
+        return {"missing": True}
+    findings = await _list_findings(audit_run_id)
+    evidence = await _list_evidence(audit_run_id)
+    attempts = await _list_validation_attempts(audit_run_id)
+    agent_runs = await _list_agent_runs(audit_run_id)
+    payload = {
+        "audit_run": audit_run,
+        "findings": findings,
+        "evidence": evidence,
+        "validation_attempts": attempts,
+        "agent_runs": agent_runs,
+    }
+    report_id = str(uuid.uuid4())
+    report_dir = settings.artifact_root / "reports" / audit_run_id
+    report_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = report_dir / f"{report_id}.md"
+    json_path = report_dir / f"{report_id}.json"
+    markdown_path.write_text(_report_markdown(payload), encoding="utf-8")
+    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    summary = {
+        "finding_count": len(findings),
+        "evidence_count": len(evidence),
+        "validation_attempt_count": len(attempts),
+        "json_path": str(json_path),
+    }
+    async with SessionLocal() as session:
+        session.add(
+            ReportArtifact(
+                report_id=report_id,
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                kind="markdown",
+                path=str(markdown_path),
+                summary=summary,
+            )
+        )
+        await session.commit()
+    result = {"report_id": report_id, "markdown_path": str(markdown_path), "json_path": str(json_path), "summary": summary}
+    await _record_pipeline_event(audit_run_id, "report_generated", result)
+    return result
+
+
 async def _run_semgrep_best_effort(
     audit_run_id: str,
     project_id: str,
@@ -1004,13 +1204,80 @@ async def _run_semgrep_best_effort(
     return {"ok": True, "available": True, "artifact_path": str(output_path), "findings_created": len(created)}
 
 
-async def _apply_judgement(audit_run_id: str) -> list[dict[str, Any]]:
+async def _extract_judger_decisions(agent_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        agent_run = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
+        if not agent_run:
+            return []
+        payload = agent_run.output_summary or {}
+    for candidate in _walk_values(payload):
+        parsed = None
+        if isinstance(candidate, dict) and ("decisions" in candidate or "findings" in candidate):
+            parsed = candidate
+        elif isinstance(candidate, str) and ("decisions" in candidate or "finding_id" in candidate):
+            parsed = _parse_json_object(candidate)
+        if not isinstance(parsed, dict):
+            continue
+        decisions = parsed.get("decisions") or parsed.get("findings")
+        if isinstance(decisions, list):
+            return [item for item in decisions if isinstance(item, dict)]
+    return []
+
+
+def _walk_values(value: Any):
+    yield value
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_values(item)
+
+
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    candidates = [stripped]
+    first = stripped.find("{")
+    last = stripped.rfind("}")
+    if first >= 0 and last > first:
+        candidates.append(stripped[first : last + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+async def _apply_judgement(audit_run_id: str, structured_decisions: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    allowed_statuses = {"confirmed", "false_positive", "needs_review"}
+    structured_by_id: dict[str, dict[str, Any]] = {}
+    for decision in structured_decisions or []:
+        finding_id = str(decision.get("finding_id") or decision.get("id") or "")
+        status = str(decision.get("status") or decision.get("judgement") or "").lower()
+        if finding_id and status in allowed_statuses:
+            structured_by_id[finding_id] = decision
     async with SessionLocal() as session:
         findings = (
             await session.execute(select(Finding).where(Finding.audit_run_id == audit_run_id).order_by(Finding.created_at.asc()))
         ).scalars()
         decisions = []
         for finding in findings:
+            structured = structured_by_id.get(finding.finding_id)
+            if structured:
+                status = str(structured.get("status") or structured.get("judgement")).lower()
+                finding.status = status
+                decisions.append(
+                    {
+                        "finding_id": finding.finding_id,
+                        "status": status,
+                        "source": "judger-agent",
+                        "reason": structured.get("reason") or structured.get("description") or structured.get("rationale"),
+                    }
+                )
+                continue
             attempts = (
                 await session.execute(
                     select(ValidationAttempt).where(
@@ -1033,12 +1300,22 @@ async def _apply_judgement(audit_run_id: str) -> list[dict[str, Any]]:
                 {
                     "finding_id": finding.finding_id,
                     "status": status,
+                    "source": "rule-fallback",
                     "completed_attempts": len(completed),
                     "failed_attempts": len(failed),
                 }
             )
         await session.commit()
         return decisions
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _report_markdown(payload: dict[str, Any]) -> str:

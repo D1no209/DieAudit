@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy import select
 
 from app.domain.models import AgentRun, AgentRunEvent, AuditRun, ContainerRun, Evidence, Finding, RuntimeNetwork, ValidationAttempt
@@ -199,17 +200,78 @@ class RuntimeOrchestrator:
             removed.append({"id": cid, "names": container.get("Names", [])})
             await self.docker.remove_container(cid, force=True)
 
-        network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}"
-        await self.docker.disconnect_network(network_name, self.settings.agent_gateway_container_name)
-        await self.docker.remove_network(network_name)
-        await self._mark_network_cleaned(audit_run_id, network_name)
-        return {"audit_run_id": audit_run_id, "removed_containers": removed, "removed_network": network_name}
+        removed_networks = []
+        networks = await self.docker.list_networks_by_run(audit_run_id)
+        if not networks:
+            networks = [{"Name": f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}"}]
+        for network in networks:
+            network_name = network.get("Name")
+            if not network_name:
+                continue
+            await self.docker.disconnect_network(network_name, self.settings.agent_gateway_container_name)
+            await self.docker.remove_network(network_name)
+            await self._mark_network_cleaned(audit_run_id, network_name)
+            removed_networks.append(network_name)
+        return {"audit_run_id": audit_run_id, "removed_containers": removed, "removed_networks": removed_networks}
 
     async def containers(self, audit_run_id: str) -> list[dict[str, Any]]:
         return await self.docker.list_containers_by_run(audit_run_id)
 
     async def logs(self, container_id: str) -> str:
         return await self.docker.logs(container_id)
+
+    async def run_mcp_tool(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        mcp_name: str,
+        tool_path: str,
+        workspace_host_path: str | None,
+        payload: dict[str, Any] | None = None,
+        allow_external_network: bool = False,
+        retain_runtime_on_failure: bool = False,
+    ) -> dict[str, Any]:
+        tool_run_id = str(uuid.uuid4())
+        dedicated_network = allow_external_network
+        network_name = (
+            f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}-tool-{tool_run_id[:8]}"
+            if dedicated_network
+            else f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}"
+        )
+        labels = self._labels(audit_run_id, project_id, role="runtime", ttl=utc_ttl())
+        await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
+        await self.docker.connect_network(network_name, self.settings.agent_gateway_container_name, aliases=["agent-gateway"])
+        await self._record_network(audit_run_id, network_name, "created")
+        template = self.mcp_templates.get(mcp_name)
+        container: dict[str, Any] | None = None
+        try:
+            container = await self._start_mcp(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                agent_run_id=f"tool-{tool_run_id}",
+                network_name=network_name,
+                workspace_host_path=workspace_host_path,
+                template=template,
+            )
+            url = f"http://{container['name']}:{template.get('port', 8001)}{tool_path}"
+            async with httpx.AsyncClient(timeout=template.get("tool_timeout_seconds", 900), trust_env=False) as client:
+                response = await client.post(url, json=payload or {})
+            if response.status_code >= 400:
+                raise RuntimeError(f"{mcp_name} {tool_path} failed: {response.status_code} {response.text}")
+            result = response.json()
+            return {"ok": True, "mcp": container, "result": result}
+        except Exception as exc:
+            if not retain_runtime_on_failure and container:
+                await self.docker.remove_container(container["id"], force=True)
+            raise RuntimeError(str(exc)) from exc
+        finally:
+            if not retain_runtime_on_failure and container:
+                await self.docker.remove_container(container["id"], force=True)
+            if dedicated_network and not retain_runtime_on_failure:
+                await self.docker.disconnect_network(network_name, self.settings.agent_gateway_container_name)
+                await self.docker.remove_network(network_name)
+                await self._mark_network_cleaned(audit_run_id, network_name)
 
     async def scale_validators(
         self,
@@ -592,7 +654,7 @@ class RuntimeOrchestrator:
                 existing.max_parallel_validators = max_parallel_validators
                 existing.allow_external_network = allow_external_network
                 existing.retain_runtime_on_failure = retain_runtime_on_failure
-                existing.config = config
+                existing.config = {**(existing.config or {}), **config}
             else:
                 session.add(
                     AuditRun(

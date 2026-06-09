@@ -25,6 +25,40 @@ async def health(request):
     return JSONResponse({"ok": True, "service": MCP_NAME, "workspace_root": str(WORKSPACE_ROOT)})
 
 
+@mcp.custom_route("/tools/semgrep_scan", methods=["POST"])
+async def semgrep_scan_route(request):
+    body = await request.json()
+    return JSONResponse(
+        semgrep_scan(
+            config=body.get("config", "auto"),
+            output_format=body.get("output_format", "json"),
+            timeout_seconds=int(body.get("timeout_seconds", 120)),
+        )
+    )
+
+
+@mcp.custom_route("/tools/detect_dependencies", methods=["POST"])
+async def detect_dependencies_route(request):
+    return JSONResponse(detect_dependencies())
+
+
+@mcp.custom_route("/tools/generate_sbom", methods=["POST"])
+async def generate_sbom_route(request):
+    body = await request.json()
+    return JSONResponse(
+        generate_sbom(
+            output_format=body.get("output_format", "spdx-json"),
+            timeout_seconds=int(body.get("timeout_seconds", 120)),
+        )
+    )
+
+
+@mcp.custom_route("/tools/query_osv", methods=["POST"])
+async def query_osv_route(request):
+    body = await request.json()
+    return JSONResponse(query_osv(max_packages=int(body.get("max_packages", 200))))
+
+
 @mcp.tool()
 def list_files(path: str = ".", max_results: int = 200) -> dict[str, Any]:
     """List files under the authorized workspace."""

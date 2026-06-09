@@ -107,6 +107,10 @@ class DockerClient:
         except DockerApiError:
             pass
 
+    async def list_networks_by_run(self, audit_run_id: str) -> list[dict[str, Any]]:
+        filters = {"label": [f"dieaudit.audit_run_id={audit_run_id}", "dieaudit.managed=true"]}
+        return await self.request("GET", "/networks", params={"filters": json.dumps(filters)})
+
     async def create_container(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", "/containers/create", params={"name": name}, json=payload)
 
