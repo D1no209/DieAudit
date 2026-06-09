@@ -42,6 +42,22 @@ class AuditRunEvent(TimestampMixin, Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class PlatformAuditEvent(TimestampMixin, Base):
+    __tablename__ = "platform_audit_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    service: Mapped[str] = mapped_column(String(64), index=True)
+    method: Mapped[str] = mapped_column(String(16), index=True)
+    path: Mapped[str] = mapped_column(Text)
+    status_code: Mapped[int] = mapped_column(Integer, index=True)
+    client_host: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_enabled: Mapped[bool] = mapped_column(default=False)
+    auth_result: Mapped[str] = mapped_column(String(32), index=True, default="not_required")
+    request_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class Project(TimestampMixin, Base):
     __tablename__ = "projects"
 

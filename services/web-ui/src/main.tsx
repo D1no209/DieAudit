@@ -152,6 +152,21 @@ type AuthStatus = {
   service?: string;
 };
 
+type PlatformAuditEvent = {
+  id: number;
+  service: string;
+  method: string;
+  path: string;
+  status_code: number;
+  client_host?: string;
+  user_agent?: string;
+  auth_enabled: boolean;
+  auth_result: string;
+  request_id?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
 type ContainerRow = {
   Id: string;
   Image: string;
@@ -190,6 +205,7 @@ function App() {
   const [dockerHealth, setDockerHealth] = useState<any>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
+  const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
@@ -231,6 +247,7 @@ function App() {
       setDockerHealth(docker);
       readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
       readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
+      readJson("/gateway/platform/audit-events?limit=100").then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
       setProjects(projectRows);
       if (!selectedProjectId && projectRows.length > 0) {
         setSelectedProjectId(projectRows[0].project_id);
@@ -626,6 +643,32 @@ function App() {
     { title: "Logs", render: (_, row) => <Button size="small" icon={<FileTextOutlined />} onClick={() => openContainerLogs(row)}>查看</Button> },
   ];
 
+  const platformAuditColumns: ColumnsType<PlatformAuditEvent> = [
+    { title: "Time", dataIndex: "created_at", width: 190 },
+    { title: "Service", dataIndex: "service", width: 130, render: (value) => <Tag>{value}</Tag> },
+    { title: "Method", dataIndex: "method", width: 90 },
+    { title: "Path", dataIndex: "path", ellipsis: true },
+    {
+      title: "Status",
+      dataIndex: "status_code",
+      width: 90,
+      render: (value) => <Tag color={value >= 500 ? "red" : value >= 400 ? "orange" : "green"}>{value}</Tag>,
+    },
+    {
+      title: "Auth",
+      dataIndex: "auth_result",
+      width: 130,
+      render: (value) => <Tag color={value === "failed" ? "red" : value === "success" ? "green" : "default"}>{value}</Tag>,
+    },
+    { title: "Client", dataIndex: "client_host", width: 140, render: (value) => value || "-" },
+    {
+      title: "Duration",
+      width: 110,
+      render: (_, row) => `${row.metadata?.duration_ms ?? "-"} ms`,
+    },
+    { title: "Request ID", dataIndex: "request_id", width: 260, ellipsis: true },
+  ];
+
   return (
     <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
       <Layout className="app-shell">
@@ -800,6 +843,21 @@ function App() {
               },
               { key: "findings", label: "Findings", children: <Card><Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 8 }} /></Card> },
               { key: "containers", label: "Containers", children: <Card><Table rowKey="Id" columns={containerColumns} dataSource={containers} pagination={false} /></Card> },
+              {
+                key: "platform-audit",
+                label: "Platform Audit",
+                children: (
+                  <Card>
+                    <Table
+                      rowKey="id"
+                      columns={platformAuditColumns}
+                      dataSource={platformAuditEvents}
+                      pagination={{ pageSize: 10 }}
+                      scroll={{ x: 1200 }}
+                    />
+                  </Card>
+                ),
+              },
               {
                 key: "reports",
                 label: "Reports",

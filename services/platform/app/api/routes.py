@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ from app.domain.models import (
     AuditRunEvent,
     Evidence,
     Finding,
+    PlatformAuditEvent,
     Project,
     ProjectSnapshot,
     ReportArtifact,
@@ -691,6 +692,24 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.get("/platform/audit-events")
+    async def list_platform_audit_events(
+        limit: int = Query(default=200, ge=1, le=1000),
+        service: str | None = None,
+        auth_result: str | None = None,
+        status_code: int | None = None,
+    ) -> list[dict[str, Any]]:
+        query = select(PlatformAuditEvent).order_by(PlatformAuditEvent.created_at.desc()).limit(limit)
+        if service:
+            query = query.where(PlatformAuditEvent.service == service)
+        if auth_result:
+            query = query.where(PlatformAuditEvent.auth_result == auth_result)
+        if status_code:
+            query = query.where(PlatformAuditEvent.status_code == status_code)
+        async with SessionLocal() as session:
+            rows = (await session.execute(query)).scalars()
+            return [_platform_audit_event_to_dict(row) for row in rows]
+
     @router.get("/runtime/templates/agents")
     async def list_agent_templates() -> list[dict[str, Any]]:
         return TemplateStore(settings.config_root, "agent-templates").list()
@@ -1014,6 +1033,24 @@ def _agent_run_to_dict(row: AgentRun) -> dict[str, Any]:
         "output_summary": row.output_summary,
         "artifact_path": row.artifact_path,
         "error": row.error,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _platform_audit_event_to_dict(row: PlatformAuditEvent) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "service": row.service,
+        "method": row.method,
+        "path": row.path,
+        "status_code": row.status_code,
+        "client_host": row.client_host,
+        "user_agent": row.user_agent,
+        "auth_enabled": row.auth_enabled,
+        "auth_result": row.auth_result,
+        "request_id": row.request_id,
+        "metadata": row.metadata_json,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
