@@ -173,7 +173,19 @@ def semgrep_scan(
         str(output_path),
         str(WORKSPACE_ROOT),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "available": True,
+            "timeout_seconds": timeout_seconds,
+            "error": "semgrep scan timed out",
+            "stdout": _tail_text(exc.stdout),
+            "stderr": _tail_text(exc.stderr),
+            "artifact_path": str(output_path) if output_path.exists() else None,
+            "findings": [],
+        }
     if result.returncode not in {0, 1}:
         return {
             "ok": False,
@@ -228,7 +240,18 @@ def generate_sbom(output_format: str = "spdx-json", timeout_seconds: int = 120) 
     artifact_dir = _artifact_dir("sbom")
     output_path = artifact_dir / f"sbom.{safe_format}.json"
     command = [syft, str(WORKSPACE_ROOT), "-o", output_format]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "available": True,
+            "timeout_seconds": timeout_seconds,
+            "error": "syft sbom generation timed out",
+            "stdout": _tail_text(exc.stdout),
+            "stderr": _tail_text(exc.stderr),
+            "artifact_path": None,
+        }
     if result.returncode != 0:
         return {
             "ok": False,
@@ -408,6 +431,14 @@ def _osv_severity(vuln: dict[str, Any]) -> str:
 
 def _load_json_artifact(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def _tail_text(value: str | bytes | None, limit: int = 4000) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return value[-limit:]
 
 
 def _semgrep_findings(data: dict[str, Any]) -> list[dict[str, Any]]:
