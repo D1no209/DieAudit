@@ -1,4 +1,17 @@
 providers:
+  dieaudit-anthropic:
+    type: custom
+    npm: "@ai-sdk/anthropic"
+    name: DieAudit Anthropic-Compatible
+    base_url: https://token-plan-cn.xiaomimimo.com/anthropic/v1
+    api_key_env: ANTHROPIC_API_KEY
+    default_model: mimo-v2.5-pro
+    models:
+      mimo-v2.5-pro:
+        name: mimo-v2.5-pro
+        limit:
+          context: 200000
+          output: 8192
   local-openai-compatible:
     type: openai-compatible
     base_url: http://host.docker.internal:8000/v1
@@ -10,10 +23,10 @@ providers:
     default_model: gpt-4.1
 profiles:
   orchestrator-long-context:
-    provider: local-openai-compatible
-    model: qwen2.5-coder
+    provider: dieaudit-anthropic
+    model: mimo-v2.5-pro
     temperature: 0.1
   auditor-strong:
-    provider: openai
-    model: gpt-4.1
+    provider: dieaudit-anthropic
+    model: mimo-v2.5-pro
     temperature: 0.1

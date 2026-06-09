@@ -345,6 +345,7 @@ class RuntimeOrchestrator:
             env["OPENCODE_CONFIG"] = runtime_config_path
             env["DIEAUDIT_RUNTIME_DIR"] = str(Path(runtime_config_path).parent)
             env.update(self.opencode_client.command_env())
+            env.update(self.opencode_packages.runtime_env(template))
         mounts = await self._mounts(workspace_host_path, template)
         artifact_host_path = self._agent_artifact_dir(audit_run_id, agent_run_id)
         artifact_target = template.get("artifact_mount", {}).get("target", "/artifacts")

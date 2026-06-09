@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,7 @@ class OpenCodeRuntimePackageBuilder:
             "project_id": project_id,
             "agent_run_id": agent_run_id,
             "agent": template["name"],
+            "model_profile": template.get("model_profile", "orchestrator-long-context"),
             "opencode_config": "opencode.json",
             "instructions": [f"instructions/{instruction_name}"],
             "mcp": sorted(mcp_servers),
@@ -88,6 +90,7 @@ class OpenCodeRuntimePackageBuilder:
             "autoupdate": False,
             "model": model_config["model_ref"],
             "provider": model_config["providers"],
+            "enabled_providers": [model_config["provider_name"]],
             "instructions": [f"./instructions/{instruction_target.name}"],
             "mcp": mcp_config,
             "tools": {
@@ -112,16 +115,41 @@ class OpenCodeRuntimePackageBuilder:
         provider = providers.get(provider_name, {})
         model = profile.get("model") or provider.get("default_model") or "gpt-4.1"
 
-        provider_entry: dict[str, Any] = {"models": {}, "options": {}}
+        provider_entry: dict[str, Any] = {
+            "models": self._provider_models(provider, model),
+            "options": {},
+        }
+        if provider.get("npm"):
+            provider_entry["npm"] = provider["npm"]
+        if provider.get("name"):
+            provider_entry["name"] = provider["name"]
         api_key_env = provider.get("api_key_env")
         if api_key_env:
             provider_entry["options"]["apiKey"] = f"{{env:{api_key_env}}}"
         if provider.get("base_url"):
             provider_entry["options"]["baseURL"] = provider["base_url"]
         return {
+            "provider_name": provider_name,
             "model_ref": f"{provider_name}/{model}",
+            "api_key_env": api_key_env,
             "providers": {provider_name: provider_entry},
         }
+
+    @staticmethod
+    def _provider_models(provider: dict[str, Any], model: str) -> dict[str, Any]:
+        configured = provider.get("models") or {}
+        models = dict(configured)
+        if provider.get("type") == "custom" and model not in models:
+            models[model] = {"name": model}
+        return models
+
+    def runtime_env(self, template: dict[str, Any]) -> dict[str, str]:
+        profile_name = template.get("model_profile", "orchestrator-long-context")
+        model_config = self._model_config(profile_name)
+        api_key_env = model_config.get("api_key_env")
+        if not api_key_env:
+            return {}
+        return {api_key_env: os.environ.get(api_key_env, "")}
 
     @staticmethod
     def _mcp_config(mcp_servers: dict[str, dict[str, str]]) -> dict[str, dict[str, Any]]:

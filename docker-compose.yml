@@ -13,6 +13,9 @@ x-platform-env: &platform-env
   QDRANT_URL: http://qdrant:6333
   TEMPORAL_ADDRESS: temporal:7233
   DOCKER_HOST: ${DOCKER_HOST:-tcp://docker-socket-proxy:2375}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
   NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,minio,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
   no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,minio,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
   CONFIG_ROOT: /app/configs
