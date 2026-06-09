@@ -121,6 +121,15 @@ type PipelineStatus = {
   events: AuditRunEvent[];
 };
 
+type ManagedRuntime = {
+  summary?: {
+    container_count?: number;
+    network_count?: number;
+    run_count?: number;
+    expired_run_count?: number;
+  };
+};
+
 type ContainerRow = {
   Id: string;
   Image: string;
@@ -147,6 +156,7 @@ async function readJson(path: string, options?: RequestInit) {
 function App() {
   const [apiHealth, setApiHealth] = useState<any>();
   const [dockerHealth, setDockerHealth] = useState<any>();
+  const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [auditRun, setAuditRun] = useState<AuditRun>();
@@ -180,6 +190,7 @@ function App() {
       ]);
       setApiHealth(api);
       setDockerHealth(docker);
+      readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
       setProjects(projectRows);
       if (!selectedProjectId && projectRows.length > 0) {
         setSelectedProjectId(projectRows[0].project_id);
@@ -368,6 +379,18 @@ function App() {
     });
   }
 
+  async function cleanupExpiredRuntime() {
+    await runAction(async () => {
+      const result = await readJson("/gateway/runtime/cleanup-expired", { method: "POST" });
+      setLastResponse(result);
+      const managed = await readJson("/gateway/runtime/managed");
+      setManagedRuntime(managed);
+      if (auditRun) {
+        await refreshAuditRun(auditRun.audit_run_id);
+      }
+    });
+  }
+
   async function runAction(action: () => Promise<void>) {
     setLoading(true);
     setError(undefined);
@@ -449,6 +472,7 @@ function App() {
               <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
               <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
               <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={cancelAuditRun}>取消</Button>
+              <Button icon={<DeleteOutlined />} loading={loading} onClick={cleanupExpiredRuntime}>清理过期</Button>
               <Button danger icon={<DeleteOutlined />} loading={loading} onClick={cleanup}>清理运行时</Button>
             </Space>
           </Flex>
@@ -460,6 +484,7 @@ function App() {
             <Card><Statistic title="Docker Runtime" value={dockerHealth?.ok ? "Ready" : "Unknown"} prefix={<CloudServerOutlined />} /></Card>
             <Card><Statistic title="Projects" value={projects.length} prefix={<FolderOpenOutlined />} /></Card>
             <Card><Statistic title="Findings" value={findings.length} prefix={<BugOutlined />} /></Card>
+            <Card><Statistic title="Runtime Containers" value={managedRuntime?.summary?.container_count ?? 0} prefix={<CloudServerOutlined />} /></Card>
           </div>
           <div className="workspace-grid section">
             <Card title="Projects">

@@ -45,6 +45,53 @@ class RuntimeOrchestrator:
         version = await self.docker.version()
         return {"ok": ping == "OK", "ping": ping, "version": version}
 
+    async def managed_runtime(self) -> dict[str, Any]:
+        containers = await self.docker.list_managed_containers()
+        networks = await self.docker.list_managed_networks()
+        now = datetime.now(timezone.utc)
+        runs: dict[str, dict[str, Any]] = {}
+        for container in containers:
+            labels = container.get("Labels") or {}
+            audit_run_id = labels.get("dieaudit.audit_run_id") or "unknown"
+            run = runs.setdefault(audit_run_id, self._empty_managed_run(audit_run_id))
+            item = self._managed_item_summary(container, labels, now)
+            run["containers"].append(item)
+            run["expired"] = bool(run["expired"] or item["expired"])
+        for network in networks:
+            labels = network.get("Labels") or {}
+            audit_run_id = labels.get("dieaudit.audit_run_id") or "unknown"
+            run = runs.setdefault(audit_run_id, self._empty_managed_run(audit_run_id))
+            item = self._managed_item_summary(network, labels, now)
+            run["networks"].append(item)
+            run["expired"] = bool(run["expired"] or item["expired"])
+        return {
+            "containers": containers,
+            "networks": networks,
+            "runs": list(runs.values()),
+            "summary": {
+                "container_count": len(containers),
+                "network_count": len(networks),
+                "run_count": len(runs),
+                "expired_run_count": sum(1 for run in runs.values() if run["expired"]),
+            },
+        }
+
+    async def cleanup_expired_runtime(self) -> dict[str, Any]:
+        state = await self.managed_runtime()
+        expired_run_ids = [
+            run["audit_run_id"]
+            for run in state["runs"]
+            if run["expired"] and run["audit_run_id"] != "unknown"
+        ]
+        cleanup_results = []
+        for audit_run_id in sorted(set(expired_run_ids)):
+            cleanup_results.append(await self.cleanup_run(audit_run_id))
+        return {
+            "expired_run_ids": sorted(set(expired_run_ids)),
+            "cleanup_results": cleanup_results,
+            "before": state["summary"],
+        }
+
     async def start_agent_run(
         self,
         *,
@@ -939,6 +986,44 @@ class RuntimeOrchestrator:
             "created_at": row.created_at.isoformat(),
             "updated_at": row.updated_at.isoformat(),
         }
+
+    @staticmethod
+    def _empty_managed_run(audit_run_id: str) -> dict[str, Any]:
+        return {
+            "audit_run_id": audit_run_id,
+            "expired": False,
+            "containers": [],
+            "networks": [],
+        }
+
+    @classmethod
+    def _managed_item_summary(cls, item: dict[str, Any], labels: dict[str, str], now: datetime) -> dict[str, Any]:
+        ttl = labels.get("dieaudit.ttl")
+        expires_at = cls._parse_ttl(ttl)
+        item_id = item.get("Id") or item.get("ID") or item.get("Name")
+        return {
+            "id": item_id,
+            "name": item.get("Name") or (item.get("Names") or [None])[0],
+            "role": labels.get("dieaudit.role"),
+            "ttl": ttl,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "expired": bool(expires_at and expires_at <= now),
+            "state": item.get("State"),
+            "status": item.get("Status"),
+        }
+
+    @staticmethod
+    def _parse_ttl(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        normalized = value.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     @staticmethod
     def _safe_artifact_name(value: str) -> str:

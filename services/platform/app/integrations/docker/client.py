@@ -111,6 +111,10 @@ class DockerClient:
         filters = {"label": [f"dieaudit.audit_run_id={audit_run_id}", "dieaudit.managed=true"]}
         return await self.request("GET", "/networks", params={"filters": json.dumps(filters)})
 
+    async def list_managed_networks(self) -> list[dict[str, Any]]:
+        filters = {"label": ["dieaudit.managed=true"]}
+        return await self.request("GET", "/networks", params={"filters": json.dumps(filters)})
+
     async def create_container(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", "/containers/create", params={"name": name}, json=payload)
 
@@ -157,6 +161,10 @@ class DockerClient:
 
     async def list_containers_by_run(self, audit_run_id: str) -> list[dict[str, Any]]:
         filters = {"label": [f"dieaudit.audit_run_id={audit_run_id}", "dieaudit.managed=true"]}
+        return await self.request("GET", "/containers/json", params={"all": 1, "filters": json.dumps(filters)})
+
+    async def list_managed_containers(self) -> list[dict[str, Any]]:
+        filters = {"label": ["dieaudit.managed=true"]}
         return await self.request("GET", "/containers/json", params={"all": 1, "filters": json.dumps(filters)})
 
     async def remove_container(self, container_id: str, *, force: bool = True) -> None:

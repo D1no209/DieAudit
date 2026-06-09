@@ -610,6 +610,20 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         except DockerApiError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @router.get("/runtime/managed")
+    async def managed_runtime() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/managed")
+        return await runtime.managed_runtime()
+
+    @router.post("/runtime/cleanup-expired")
+    async def cleanup_expired_runtime() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/cleanup-expired", method="POST")
+        return await runtime.cleanup_expired_runtime()
+
     @router.get("/runtime/tool-images")
     async def tool_images() -> dict[str, Any]:
         agents = TemplateStore(settings.config_root, "agent-templates").list()
