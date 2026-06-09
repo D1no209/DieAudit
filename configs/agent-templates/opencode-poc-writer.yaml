@@ -21,6 +21,7 @@ runtime_mount:
   read_only: true
 required_mcp:
   - filesystem-mcp
+  - kb-mcp
   - http-test-mcp
   - sandbox-mcp
 network_policy:

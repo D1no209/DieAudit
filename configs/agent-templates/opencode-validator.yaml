@@ -22,6 +22,7 @@ runtime_mount:
 required_mcp:
   - filesystem-mcp
   - code-search-mcp
+  - kb-mcp
   - http-test-mcp
   - sandbox-mcp
 network_policy:

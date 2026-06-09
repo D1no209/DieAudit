@@ -19,6 +19,7 @@ from app.integrations.protocols import OpenCodeAcpClient
 from app.repositories import SessionLocal
 from app.runtime.opencode_package import OpenCodeRuntimePackageBuilder
 from app.services.agent_output import AgentOutputIngestor
+from app.services.auth import get_current_api_key
 from app.services.templates import TemplateStore
 from app.settings import Settings
 
@@ -831,10 +832,15 @@ class RuntimeOrchestrator:
         mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / agent_run_id / template["name"]
         mcp_artifact_path.mkdir(parents=True, exist_ok=True)
         mounts = await self._mounts(workspace_host_path, template, artifact_host_path=mcp_artifact_path)
+        env = self._mcp_env(
+            template=template,
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+        )
         payload = self._container_payload(
             image=image,
             command=template.get("command"),
-            env=template.get("env", {}),
+            env=env,
             labels=labels,
             network_name=network_name,
             aliases=[name, template["name"]],
@@ -849,6 +855,21 @@ class RuntimeOrchestrator:
         await self.docker.wait_for_healthy(created["Id"], timeout_seconds=template.get("health_timeout_seconds", 45))
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "mcp", labels, "running")
         return {"id": created["Id"], "name": name, "image": image, "role": "mcp", "template": template["name"]}
+
+    def _mcp_env(self, *, template: dict[str, Any], audit_run_id: str, project_id: str) -> dict[str, Any]:
+        env = {
+            **template.get("env", {}),
+            "AUDIT_RUN_ID": audit_run_id,
+            "PROJECT_ID": project_id,
+        }
+        if template.get("permissions", {}).get("platform_api"):
+            env.setdefault("KNOWLEDGE_API_URL", "http://agent-gateway:8000")
+            env["API_KEY_HEADER"] = self.settings.api_key_header
+            api_key = get_current_api_key() or self.settings.dieaudit_api_key
+            if api_key:
+                env["DIEAUDIT_API_KEY"] = api_key
+        self._inject_internal_no_proxy(env, ["agent-gateway", "host.docker.internal"])
+        return env
 
     async def _start_agent(
         self,
@@ -1388,6 +1409,10 @@ class RuntimeOrchestrator:
             hostname = urlparse(server["url"]).hostname
             if hostname:
                 internal_hosts.append(hostname)
+        RuntimeOrchestrator._inject_internal_no_proxy(env, internal_hosts)
+
+    @staticmethod
+    def _inject_internal_no_proxy(env: dict[str, Any], internal_hosts: list[str]) -> None:
         existing = str(env.get("NO_PROXY") or env.get("no_proxy") or "")
         merged = [item for item in existing.split(",") if item]
         for host in internal_hosts:

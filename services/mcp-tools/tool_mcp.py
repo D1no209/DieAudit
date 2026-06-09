@@ -16,6 +16,11 @@ WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_ROOT", "/workspace")).resolve()
 MAX_READ_BYTES = int(os.environ.get("MAX_READ_BYTES", "200000"))
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "100"))
 ARTIFACT_ROOT = Path(os.environ.get("ARTIFACT_ROOT", "/artifacts")).resolve()
+KNOWLEDGE_API_URL = os.environ.get("KNOWLEDGE_API_URL", "http://agent-gateway:8000").rstrip("/")
+API_KEY_HEADER = os.environ.get("API_KEY_HEADER", "X-DieAudit-Api-Key")
+PLATFORM_API_KEY = os.environ.get("DIEAUDIT_API_KEY") or os.environ.get("KNOWLEDGE_API_KEY")
+PROJECT_ID = os.environ.get("PROJECT_ID")
+ENFORCE_PROJECT_FILTER = os.environ.get("ENFORCE_PROJECT_FILTER", "false").lower() in {"1", "true", "yes"}
 
 mcp = FastMCP(MCP_NAME, host="0.0.0.0", port=8001, stateless_http=True)
 
@@ -57,6 +62,25 @@ async def generate_sbom_route(request):
 async def query_osv_route(request):
     body = await request.json()
     return JSONResponse(query_osv(max_packages=int(body.get("max_packages", 200))))
+
+
+@mcp.custom_route("/tools/search_knowledge", methods=["POST"])
+async def search_knowledge_route(request):
+    body = await request.json()
+    return JSONResponse(
+        await search_knowledge(
+            query=body.get("query", ""),
+            project_id=body.get("project_id"),
+            include_global=bool(body.get("include_global", True)),
+            limit=int(body.get("limit", 8)),
+        )
+    )
+
+
+@mcp.custom_route("/tools/get_knowledge_document", methods=["POST"])
+async def get_knowledge_document_route(request):
+    body = await request.json()
+    return JSONResponse(await get_knowledge_document(document_id=body.get("document_id", "")))
 
 
 @mcp.tool()
@@ -322,6 +346,38 @@ def query_osv(max_packages: int = 200) -> dict[str, Any]:
     return {"ok": True, "available": True, "packages": packages, "vulnerabilities": vulnerabilities, "findings": findings}
 
 
+@mcp.tool()
+async def search_knowledge(
+    query: str,
+    project_id: str | None = None,
+    include_global: bool = True,
+    limit: int = 8,
+) -> dict[str, Any]:
+    """Search authorized global/project vulnerability knowledge."""
+    if not query.strip():
+        raise ValueError("query is required")
+    scoped_project_id = _authorized_project_id(project_id)
+    limit = min(max(limit, 1), 50)
+    payload = {
+        "query": query,
+        "project_id": scoped_project_id,
+        "include_global": include_global,
+        "limit": limit,
+    }
+    return await _platform_post("/knowledge/search", payload)
+
+
+@mcp.tool()
+async def get_knowledge_document(document_id: str) -> dict[str, Any]:
+    """Fetch an authorized knowledge document and its chunks."""
+    if not document_id.strip():
+        raise ValueError("document_id is required")
+    document = await _platform_get(f"/knowledge/documents/{document_id}")
+    _assert_document_authorized(document)
+    chunks = await _platform_get(f"/knowledge/documents/{document_id}/chunks")
+    return {"document": document, "chunks": chunks}
+
+
 def _safe_path(path: str) -> Path:
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -474,6 +530,47 @@ def _semgrep_findings(data: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return findings
+
+
+def _authorized_project_id(project_id: str | None) -> str | None:
+    requested = (project_id or PROJECT_ID or "").strip() or None
+    if ENFORCE_PROJECT_FILTER and PROJECT_ID and requested and requested != PROJECT_ID:
+        raise ValueError("project_id is not authorized for this MCP sidecar")
+    if ENFORCE_PROJECT_FILTER and PROJECT_ID:
+        return PROJECT_ID
+    return requested
+
+
+def _assert_document_authorized(document: dict[str, Any]) -> None:
+    scope = document.get("scope")
+    document_project_id = document.get("project_id")
+    if scope == "global":
+        return
+    if ENFORCE_PROJECT_FILTER and PROJECT_ID and document_project_id != PROJECT_ID:
+        raise ValueError("knowledge document is not authorized for this MCP sidecar")
+
+
+def _platform_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if PLATFORM_API_KEY:
+        headers[API_KEY_HEADER] = PLATFORM_API_KEY
+    return headers
+
+
+async def _platform_get(path: str) -> dict[str, Any] | list[dict[str, Any]]:
+    async with httpx.AsyncClient(base_url=KNOWLEDGE_API_URL, timeout=60, headers=_platform_headers()) as client:
+        response = await client.get(path)
+        if response.status_code >= 400:
+            raise RuntimeError(f"platform API {path} failed: {response.status_code} {response.text[-1000:]}")
+        return response.json()
+
+
+async def _platform_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async with httpx.AsyncClient(base_url=KNOWLEDGE_API_URL, timeout=60, headers=_platform_headers()) as client:
+        response = await client.post(path, json=payload)
+        if response.status_code >= 400:
+            raise RuntimeError(f"platform API {path} failed: {response.status_code} {response.text[-1000:]}")
+        return response.json()
 
 
 if __name__ == "__main__":
