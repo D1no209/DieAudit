@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.domain.models import AgentRun, ContainerRun, RuntimeNetwork
 from app.integrations.docker import DockerClient
 from app.repositories import SessionLocal
+from app.runtime.opencode_package import OpenCodeRuntimePackageBuilder
 from app.services.templates import TemplateStore
 from app.settings import Settings
 
@@ -23,6 +24,7 @@ class RuntimeOrchestrator:
         self.docker = DockerClient(settings.docker_host)
         self.agent_templates = TemplateStore(settings.config_root, "agent-templates")
         self.mcp_templates = TemplateStore(settings.config_root, "mcp-templates")
+        self.opencode_packages = OpenCodeRuntimePackageBuilder(settings)
 
     async def close(self) -> None:
         await self.docker.close()
@@ -84,12 +86,25 @@ class RuntimeOrchestrator:
                         "url": f"http://{mcp_container['name']}:{mcp.get('port', 8001)}",
                     }
 
+            runtime_package: dict[str, Any] | None = None
+            if self._is_opencode_agent(agent):
+                runtime_package = await self.opencode_packages.build(
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    agent_run_id=run_id,
+                    template=agent,
+                    mcp_servers=mcp_servers,
+                    input_payload=input_payload or {},
+                )
+
             agent_container = await self._start_agent(
                 audit_run_id=audit_run_id,
                 project_id=project_id,
                 agent_run_id=run_id,
                 network_name=network_name,
                 workspace_host_path=workspace_host_path,
+                runtime_host_path=runtime_package["host_path"] if runtime_package else None,
+                runtime_config_path=runtime_package["container_config_path"] if runtime_package else None,
                 template=agent,
                 mcp_servers=mcp_servers,
                 input_payload=input_payload or {},
@@ -103,7 +118,11 @@ class RuntimeOrchestrator:
                 protocol_kind=protocol_kind,
                 status="running",
                 input_summary=input_payload or {},
-                output_summary={"container_id": agent_container["id"], "mcp_servers": mcp_servers},
+                output_summary={
+                    "container_id": agent_container["id"],
+                    "mcp_servers": mcp_servers,
+                    "runtime_package": runtime_package,
+                },
             )
             return {
                 "run_id": run_id,
@@ -194,6 +213,8 @@ class RuntimeOrchestrator:
         agent_run_id: str,
         network_name: str,
         workspace_host_path: str | None,
+        runtime_host_path: str | None,
+        runtime_config_path: str | None,
         template: dict[str, Any],
         mcp_servers: dict[str, dict[str, str]],
         input_payload: dict[str, Any],
@@ -214,7 +235,13 @@ class RuntimeOrchestrator:
             "MCP_SERVERS_JSON": json.dumps(mcp_servers),
             "AGENT_INPUT_JSON": json.dumps(input_payload),
         }
+        if runtime_config_path:
+            env["OPENCODE_CONFIG"] = runtime_config_path
+            env["DIEAUDIT_RUNTIME_DIR"] = str(Path(runtime_config_path).parent)
         binds = self._binds(workspace_host_path, template)
+        if runtime_host_path:
+            target = template.get("runtime_mount", {}).get("target", "/dieaudit/runtime")
+            binds.append(f"{Path(runtime_host_path).resolve()}:{target}:ro")
         payload = self._container_payload(
             image=image,
             command=template.get("command"),
@@ -336,6 +363,11 @@ class RuntimeOrchestrator:
             mode = "ro" if mount.get("read_only", True) else "rw"
             binds.append(f"{source}:{target}:{mode}")
         return binds
+
+    @staticmethod
+    def _is_opencode_agent(template: dict[str, Any]) -> bool:
+        protocol = template.get("protocol", {})
+        return protocol.get("kind") == "agent-client-protocol" and protocol.get("runtime") == "opencode"
 
     def _container_payload(
         self,
