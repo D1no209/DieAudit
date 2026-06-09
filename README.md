@@ -19,6 +19,28 @@ Open:
 - Temporal UI: http://localhost:18088
 - MinIO Console: http://localhost:19001
 
+## Production Readiness
+
+Use `.env.production.example` as the deployment checklist. Do not commit the resulting `.env`.
+
+Required before exposing the platform:
+
+- Set `DIEAUDIT_API_KEY` or create a persisted active API key through the UI/API.
+- Keep `PUBLIC_METRICS=false` unless metrics are protected by a separate private network or auth layer.
+- Keep `PIPELINE_EXECUTION_BACKEND=workflow-worker`; `background-tasks` is only for local debugging.
+- Install gVisor `runsc` or another strong container runtime, then set `ENABLE_GVISOR=true` and `DEFAULT_SANDBOX_RUNTIME=runsc`.
+- Keep `ALLOW_RUNC_SANDBOX=false` for untrusted PoC execution.
+- Configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection.
+- Replace or extend the tool MCP image before relying on Joern/CodeQL templates; the default lightweight tool image reports those analyzers as unavailable if their CLIs are missing.
+
+Check the live deployment:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/gateway/runtime/readiness | ConvertTo-Json -Depth 10
+```
+
+The Compose default now queues audit pipelines for `workflow-worker`; the API process no longer owns pipeline execution through request-local background tasks.
+
 ## Demo Runtime Orchestration
 
 Build the demo Agent/MCP images and start the core platform:
