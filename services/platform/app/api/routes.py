@@ -17,6 +17,8 @@ from app.domain.models import (
     AuditRunEvent,
     Evidence,
     Finding,
+    KnowledgeChunk,
+    KnowledgeDocument,
     PlatformAuditEvent,
     Project,
     ProjectSnapshot,
@@ -32,6 +34,7 @@ from app.schemas import (
     CreateApiKeyRequest,
     CreateFindingRequest,
     CreateProjectRequest,
+    KnowledgeSearchRequest,
     RunPocRequest,
     StartAgentRunRequest,
     StartSandboxServiceRequest,
@@ -40,6 +43,7 @@ from app.schemas import (
 )
 from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, get_current_api_key, hash_api_key, has_scope
 from app.services.dependency_scanner import DependencyScanner
+from app.services.knowledge import KnowledgeIndexError, KnowledgeService
 from app.services.templates import TemplateStore
 from app.services.workspace import WorkspaceImportError, WorkspaceService
 from app.settings import Settings
@@ -146,6 +150,144 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             record = api_key_record_to_dict(row)
             await session.commit()
             return record
+
+    @router.get("/knowledge/documents")
+    async def list_knowledge_documents(
+        scope: str | None = Query(default=None),
+        project_id: str | None = Query(default=None),
+    ) -> list[dict[str, Any]]:
+        async with SessionLocal() as session:
+            query = select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
+            if scope:
+                query = query.where(KnowledgeDocument.scope == scope)
+            if project_id:
+                query = query.where(KnowledgeDocument.project_id == project_id)
+            rows = (await session.execute(query)).scalars()
+            return [_knowledge_document_to_dict(row) for row in rows]
+
+    @router.post("/knowledge/documents")
+    async def upload_knowledge_document(
+        title: str = Form(...),
+        scope: str = Form("global"),
+        project_id: str | None = Form(None),
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        normalized_scope = _normalize_knowledge_scope(scope)
+        if normalized_scope == "project" and not project_id:
+            raise HTTPException(status_code=400, detail="project_id is required for project-scoped knowledge")
+        document_id = str(uuid.uuid4())
+        service = KnowledgeService(settings)
+        artifact_path = service.save_upload(
+            document_id=document_id,
+            filename=file.filename or "knowledge-document.txt",
+            stream=file.file,
+        )
+        try:
+            text = service.extract_text(artifact_path, file.content_type)
+            chunks = service.chunk_text(text)
+            if not chunks:
+                raise KnowledgeIndexError("document did not contain indexable text")
+            chunk_rows = [
+                {
+                    "chunk_id": str(uuid.uuid4()),
+                    "document_id": document_id,
+                    "scope": normalized_scope,
+                    "project_id": project_id if normalized_scope == "project" else None,
+                    "chunk_index": index,
+                    "text": chunk,
+                    "token_count": len(chunk.split()),
+                    "vector_id": str(uuid.uuid4()),
+                    "title": title,
+                    "source_name": file.filename or artifact_path.name,
+                }
+                for index, chunk in enumerate(chunks)
+            ]
+            await service.upsert_chunks(chunk_rows)
+            status = "indexed"
+            error = None
+        except Exception as exc:
+            chunk_rows = []
+            status = "failed"
+            error = str(exc)
+        document = KnowledgeDocument(
+            document_id=document_id,
+            title=title,
+            source_name=file.filename or artifact_path.name,
+            content_type=file.content_type,
+            scope=normalized_scope,
+            project_id=project_id if normalized_scope == "project" else None,
+            status=status,
+            chunk_count=len(chunk_rows),
+            artifact_path=str(artifact_path),
+            metadata_json={"error": error} if error else {},
+        )
+        async with SessionLocal() as session:
+            session.add(document)
+            for row in chunk_rows:
+                session.add(
+                    KnowledgeChunk(
+                        chunk_id=row["chunk_id"],
+                        document_id=row["document_id"],
+                        scope=row["scope"],
+                        project_id=row["project_id"],
+                        chunk_index=row["chunk_index"],
+                        text=row["text"],
+                        token_count=row["token_count"],
+                        vector_id=row["vector_id"],
+                        metadata_json={
+                            "title": row["title"],
+                            "source_name": row["source_name"],
+                        },
+                    )
+                )
+            await session.commit()
+            return {"document": _knowledge_document_to_dict(document), "chunks_indexed": len(chunk_rows)}
+
+    @router.get("/knowledge/documents/{document_id}")
+    async def get_knowledge_document(document_id: str) -> dict[str, Any]:
+        async with SessionLocal() as session:
+            row = await session.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id))
+            if not row:
+                raise HTTPException(status_code=404, detail="knowledge document not found")
+            return _knowledge_document_to_dict(row)
+
+    @router.get("/knowledge/documents/{document_id}/chunks")
+    async def list_knowledge_chunks(document_id: str) -> list[dict[str, Any]]:
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(KnowledgeChunk)
+                    .where(KnowledgeChunk.document_id == document_id)
+                    .order_by(KnowledgeChunk.chunk_index.asc())
+                )
+            ).scalars()
+            return [_knowledge_chunk_to_dict(row) for row in rows]
+
+    @router.post("/knowledge/search")
+    async def search_knowledge(body: KnowledgeSearchRequest) -> dict[str, Any]:
+        service = KnowledgeService(settings)
+        try:
+            matches = await service.search(
+                query=body.query,
+                project_id=body.project_id,
+                include_global=body.include_global,
+                limit=body.limit,
+            )
+        except KnowledgeIndexError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        chunk_ids = [item["chunk_id"] for item in matches if item.get("chunk_id")]
+        chunks_by_id: dict[str, KnowledgeChunk] = {}
+        if chunk_ids:
+            async with SessionLocal() as session:
+                rows = (await session.execute(select(KnowledgeChunk).where(KnowledgeChunk.chunk_id.in_(chunk_ids)))).scalars()
+                chunks_by_id = {row.chunk_id: row for row in rows}
+        enriched = []
+        for item in matches:
+            chunk = chunks_by_id.get(str(item.get("chunk_id")))
+            if not chunk:
+                continue
+            enriched.append({**item, "text": chunk.text, "metadata": chunk.metadata_json or {}})
+        return {"query": body.query, "matches": enriched}
 
     @router.get("/projects")
     async def list_projects() -> list[dict[str, Any]]:
@@ -1322,6 +1464,39 @@ def _evidence_to_dict(row: Evidence) -> dict[str, Any]:
     }
 
 
+def _knowledge_document_to_dict(row: KnowledgeDocument) -> dict[str, Any]:
+    return {
+        "document_id": row.document_id,
+        "title": row.title,
+        "source_name": row.source_name,
+        "content_type": row.content_type,
+        "scope": row.scope,
+        "project_id": row.project_id,
+        "status": row.status,
+        "chunk_count": row.chunk_count,
+        "artifact_path": row.artifact_path,
+        "metadata": row.metadata_json or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def _knowledge_chunk_to_dict(row: KnowledgeChunk) -> dict[str, Any]:
+    return {
+        "chunk_id": row.chunk_id,
+        "document_id": row.document_id,
+        "scope": row.scope,
+        "project_id": row.project_id,
+        "chunk_index": row.chunk_index,
+        "text": row.text,
+        "token_count": row.token_count,
+        "vector_id": row.vector_id,
+        "metadata": row.metadata_json or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
 def _attempt_to_dict(row: ValidationAttempt) -> dict[str, Any]:
     return {
         "attempt_id": row.attempt_id,
@@ -2105,6 +2280,13 @@ async def _require_admin(request: Request, settings: Settings) -> None:
 def _normalize_scopes(scopes: list[str]) -> list[str]:
     normalized = sorted({item.strip().lower() for item in scopes if item and item.strip()})
     return normalized or ["read"]
+
+
+def _normalize_knowledge_scope(scope: str) -> str:
+    normalized = (scope or "global").strip().lower()
+    if normalized not in {"global", "project"}:
+        raise HTTPException(status_code=400, detail="knowledge scope must be global or project")
+    return normalized
 
 
 __all__ = ["register_runtime_routes"]

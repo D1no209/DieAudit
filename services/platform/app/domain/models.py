@@ -192,6 +192,35 @@ class Evidence(TimestampMixin, Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class KnowledgeDocument(TimestampMixin, Base):
+    __tablename__ = "knowledge_documents"
+
+    document_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    source_name: Mapped[str] = mapped_column(Text)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scope: Mapped[str] = mapped_column(String(32), index=True, default="global")
+    project_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="indexed")
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class KnowledgeChunk(TimestampMixin, Base):
+    __tablename__ = "knowledge_chunks"
+
+    chunk_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    document_id: Mapped[str] = mapped_column(String(128), index=True)
+    scope: Mapped[str] = mapped_column(String(32), index=True, default="global")
+    project_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text)
+    token_count: Mapped[int] = mapped_column(Integer, default=0)
+    vector_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class ValidationAttempt(TimestampMixin, Base):
     __tablename__ = "validation_attempts"
 

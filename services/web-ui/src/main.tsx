@@ -207,6 +207,30 @@ type PlatformAuditEvent = {
   created_at: string;
 };
 
+type KnowledgeDocument = {
+  document_id: string;
+  title: string;
+  source_name: string;
+  scope: string;
+  project_id?: string;
+  status: string;
+  chunk_count: number;
+  created_at: string;
+  metadata?: Record<string, unknown>;
+};
+
+type KnowledgeMatch = {
+  score?: number;
+  document_id: string;
+  chunk_id: string;
+  title?: string;
+  source_name?: string;
+  scope?: string;
+  project_id?: string;
+  chunk_index?: number;
+  text: string;
+};
+
 type ContainerRow = {
   Id: string;
   Image: string;
@@ -249,6 +273,8 @@ function App() {
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
+  const [knowledgeMatches, setKnowledgeMatches] = useState<KnowledgeMatch[]>([]);
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
@@ -266,9 +292,12 @@ function App() {
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [zipFiles, setZipFiles] = useState<UploadFile[]>([]);
+  const [knowledgeFiles, setKnowledgeFiles] = useState<UploadFile[]>([]);
   const [gitForm] = Form.useForm();
   const [zipForm] = Form.useForm();
   const [apiKeyForm] = Form.useForm();
+  const [knowledgeUploadForm] = Form.useForm();
+  const [knowledgeSearchForm] = Form.useForm();
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.project_id === selectedProjectId),
@@ -295,6 +324,7 @@ function App() {
       readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
       readJson("/gateway/auth/api-keys").then(setApiKeys).catch(() => setApiKeys([]));
       readJson("/gateway/platform/audit-events?limit=100").then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
+      readJson("/gateway/knowledge/documents").then(setKnowledgeDocuments).catch(() => setKnowledgeDocuments([]));
       setProjects(projectRows);
       if (!selectedProjectId && projectRows.length > 0) {
         setSelectedProjectId(projectRows[0].project_id);
@@ -654,6 +684,46 @@ function App() {
     });
   }
 
+  async function uploadKnowledgeDocument(values: { title: string; scope?: string; project_id?: string }) {
+    if (!knowledgeFiles[0]?.originFileObj) {
+      message.error("请选择知识库文档");
+      return;
+    }
+    await runAction(async () => {
+      const scope = (values.scope || "global").trim().toLowerCase();
+      const formData = new FormData();
+      formData.append("title", values.title);
+      formData.append("scope", scope);
+      if (scope === "project" && values.project_id) {
+        formData.append("project_id", values.project_id);
+      }
+      formData.append("file", knowledgeFiles[0].originFileObj);
+      const result = await readJson("/gateway/knowledge/documents", { method: "POST", body: formData });
+      setLastResponse(result);
+      knowledgeUploadForm.resetFields();
+      setKnowledgeFiles([]);
+      const rows = await readJson("/gateway/knowledge/documents");
+      setKnowledgeDocuments(rows);
+    });
+  }
+
+  async function searchKnowledge(values: { query: string; project_id?: string; limit?: string }) {
+    await runAction(async () => {
+      const result = await readJson("/gateway/knowledge/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: values.query,
+          project_id: values.project_id || selectedProjectId || undefined,
+          include_global: true,
+          limit: Number(values.limit || 8),
+        }),
+      });
+      setLastResponse(result);
+      setKnowledgeMatches(result.matches || []);
+    });
+  }
+
   function saveApiKey() {
     const normalized = apiKey.trim();
     if (normalized) {
@@ -765,6 +835,15 @@ function App() {
         </Button>
       ),
     },
+  ];
+
+  const knowledgeColumns: ColumnsType<KnowledgeDocument> = [
+    { title: "Title", dataIndex: "title" },
+    { title: "Source", dataIndex: "source_name", ellipsis: true },
+    { title: "Scope", dataIndex: "scope", render: (value, row) => <Tag>{value}{row.project_id ? `:${row.project_id}` : ""}</Tag> },
+    { title: "Status", dataIndex: "status", render: (value) => <Tag color={value === "indexed" ? "green" : "red"}>{value}</Tag> },
+    { title: "Chunks", dataIndex: "chunk_count" },
+    { title: "Created", dataIndex: "created_at" },
   ];
 
   return (
@@ -954,6 +1033,67 @@ function App() {
               },
               { key: "findings", label: "Findings", children: <Card><Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 8 }} /></Card> },
               { key: "containers", label: "Containers", children: <Card><Table rowKey="Id" columns={containerColumns} dataSource={containers} pagination={false} /></Card> },
+              {
+                key: "knowledge",
+                label: "Knowledge",
+                children: (
+                  <div className="knowledge-grid">
+                    <Card title="Knowledge Base">
+                      <Form form={knowledgeUploadForm} layout="vertical" onFinish={uploadKnowledgeDocument}>
+                        <Form.Item name="title" label="Title" rules={[{ required: true }]}>
+                          <Input />
+                        </Form.Item>
+                        <Form.Item name="scope" label="Scope" initialValue="global">
+                          <Input placeholder="global or project" />
+                        </Form.Item>
+                        <Form.Item name="project_id" label="Project ID">
+                          <Input placeholder={selectedProjectId || "optional for project scope"} />
+                        </Form.Item>
+                        <Upload
+                          beforeUpload={() => false}
+                          maxCount={1}
+                          fileList={knowledgeFiles}
+                          onChange={({ fileList }) => setKnowledgeFiles(fileList)}
+                        >
+                          <Button>选择文档</Button>
+                        </Upload>
+                        <Button className="form-action" htmlType="submit" type="primary" loading={loading}>上传并索引</Button>
+                      </Form>
+                      <Table
+                        className="table-toolbar"
+                        rowKey="document_id"
+                        columns={knowledgeColumns}
+                        dataSource={knowledgeDocuments}
+                        pagination={{ pageSize: 6 }}
+                      />
+                    </Card>
+                    <Card title="Search">
+                      <Form form={knowledgeSearchForm} layout="vertical" onFinish={searchKnowledge}>
+                        <Form.Item name="query" label="Query" rules={[{ required: true }]}>
+                          <Input.Search enterButton="检索" loading={loading} />
+                        </Form.Item>
+                        <Form.Item name="project_id" label="Project Filter">
+                          <Input placeholder={selectedProjectId || "optional"} />
+                        </Form.Item>
+                        <Form.Item name="limit" label="Limit" initialValue="8">
+                          <Input />
+                        </Form.Item>
+                      </Form>
+                      <List
+                        dataSource={knowledgeMatches}
+                        renderItem={(item) => (
+                          <List.Item>
+                            <List.Item.Meta
+                              title={<Space><Text strong>{item.title || item.source_name}</Text><Tag>{Number(item.score || 0).toFixed(3)}</Tag><Tag>{item.scope}</Tag></Space>}
+                              description={<Paragraph ellipsis={{ rows: 4, expandable: true }}>{item.text}</Paragraph>}
+                            />
+                          </List.Item>
+                        )}
+                      />
+                    </Card>
+                  </div>
+                ),
+              },
               {
                 key: "platform-audit",
                 label: "Platform Audit",

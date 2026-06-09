@@ -50,6 +50,13 @@ class CreateApiKeyRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+    project_id: str | None = None
+    include_global: bool = True
+    limit: int = Field(default=8, ge=1, le=50)
+
+
 class TemplateBody(BaseModel):
     template: dict[str, Any]
 
