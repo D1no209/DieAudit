@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.domain.models import AgentRunEvent, Evidence, Finding
 from app.repositories import SessionLocal
+from app.services.finding_dedupe import find_existing_finding, finding_identity, optional_int
 
 
 REQUIRED_FINDING_FIELDS = {"title", "severity", "file_path", "line_start", "description", "confidence", "source"}
@@ -31,6 +32,7 @@ class AgentOutputIngestor:
 
         created_findings: list[Finding] = []
         created_evidence: list[Evidence] = []
+        skipped_duplicates = 0
 
         async with SessionLocal() as session:
             for index, item in enumerate(findings_payload if isinstance(findings_payload, list) else []):
@@ -45,19 +47,31 @@ class AgentOutputIngestor:
                     warnings.append({"kind": "finding_empty_required_value", "index": index})
                     continue
 
+                identity = finding_identity(
+                    title=item["title"],
+                    source=item["source"],
+                    file_path=item["file_path"],
+                    line_start=item.get("line_start"),
+                    rule_id=item.get("rule_id"),
+                )
+                if await find_existing_finding(session, audit_run_id=audit_run_id, identity=identity):
+                    skipped_duplicates += 1
+                    warnings.append({"kind": "finding_duplicate_skipped", "index": index, "identity": identity})
+                    continue
+
                 finding = Finding(
                     finding_id=str(uuid.uuid4()),
                     audit_run_id=audit_run_id,
                     project_id=project_id,
-                    title=str(item["title"])[:255],
+                    title=identity["title"],
                     severity=str(item.get("severity") or "unknown").lower(),
                     status=str(item.get("status") or "candidate"),
-                    file_path=str(item["file_path"]),
-                    line_start=self._optional_int(item.get("line_start")),
-                    line_end=self._optional_int(item.get("line_end")),
-                    rule_id=str(item["rule_id"]) if item.get("rule_id") else None,
+                    file_path=identity["file_path"],
+                    line_start=identity["line_start"],
+                    line_end=optional_int(item.get("line_end")),
+                    rule_id=identity["rule_id"],
                     description=str(item["description"]),
-                    source=str(item["source"]),
+                    source=identity["source"],
                     raw={**item, "agent_run_id": agent_run_id},
                 )
                 session.add(finding)
@@ -106,6 +120,7 @@ class AgentOutputIngestor:
                         payload={
                             "summary": summary,
                             "findings_created": len(created_findings),
+                            "findings_skipped": skipped_duplicates,
                             "evidence_created": len(created_evidence),
                         },
                     )
@@ -115,6 +130,7 @@ class AgentOutputIngestor:
         return {
             "summary": summary,
             "findings_created": len(created_findings),
+            "findings_skipped": skipped_duplicates,
             "evidence_created": len(created_evidence),
             "warnings": warnings,
         }
@@ -158,15 +174,6 @@ class AgentOutputIngestor:
             if isinstance(parsed, dict):
                 return parsed
         return None
-
-    @staticmethod
-    def _optional_int(value: Any) -> int | None:
-        if value is None or value == "":
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
 
     @staticmethod
     def _finding_evidence_items(item: dict[str, Any]) -> list[dict[str, Any]]:

@@ -45,6 +45,7 @@ from app.schemas import (
 )
 from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, get_current_api_key, hash_api_key, has_scope
 from app.services.dependency_scanner import DependencyScanner
+from app.services.finding_dedupe import find_existing_finding, finding_identity
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService
 from app.services.pipeline_recovery import is_active_pipeline
 from app.services.templates import TemplateStore
@@ -2102,19 +2103,28 @@ async def _ingest_tool_findings(
             if not isinstance(item, dict):
                 continue
             title = str(item.get("title") or item.get("rule_id") or f"{source} finding")[:255]
+            identity = finding_identity(
+                title=title,
+                source=item.get("source") or source,
+                file_path=item.get("file_path"),
+                line_start=item.get("line_start"),
+                rule_id=item.get("rule_id"),
+            )
+            if await find_existing_finding(session, audit_run_id=audit_run_id, identity=identity):
+                continue
             finding = Finding(
                 finding_id=str(uuid.uuid4()),
                 audit_run_id=audit_run_id,
                 project_id=project_id,
-                title=title,
+                title=identity["title"],
                 severity=str(item.get("severity") or "unknown").lower(),
                 status=str(item.get("status") or "candidate"),
-                file_path=str(item["file_path"]) if item.get("file_path") else None,
-                line_start=_optional_int(item.get("line_start")),
+                file_path=identity["file_path"],
+                line_start=identity["line_start"],
                 line_end=_optional_int(item.get("line_end")),
-                rule_id=str(item["rule_id"]) if item.get("rule_id") else None,
+                rule_id=identity["rule_id"],
                 description=str(item["description"]) if item.get("description") else None,
-                source=str(item.get("source") or source),
+                source=identity["source"],
                 raw=item,
             )
             session.add(finding)
