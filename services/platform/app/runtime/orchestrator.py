@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import select
 
-from app.domain.models import AgentRun, AgentRunEvent, AuditRun, ContainerRun, RuntimeNetwork
+from app.domain.models import AgentRun, AgentRunEvent, AuditRun, ContainerRun, Evidence, Finding, RuntimeNetwork, ValidationAttempt
 from app.integrations.docker import DockerClient
 from app.integrations.protocols import OpenCodeAcpClient
 from app.repositories import SessionLocal
@@ -247,24 +247,79 @@ class RuntimeOrchestrator:
         semaphore = asyncio.Semaphore(max_parallel_validators)
 
         async def run_validator(finding: dict[str, Any], round_index: int) -> dict[str, Any]:
+            finding_id = str(finding.get("finding_id") or finding.get("id") or f"inline-{uuid.uuid4()}")
+            attempt_id = str(uuid.uuid4())
+            await self._record_validation_attempt(
+                attempt_id=attempt_id,
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                round_index=round_index,
+                status="queued",
+                result={"finding": finding},
+            )
             async with semaphore:
+                await self._record_validation_attempt(
+                    attempt_id=attempt_id,
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    round_index=round_index,
+                    status="running",
+                    result={"finding": finding},
+                )
                 payload = {
                     "goal": "Validate the supplied finding and produce evidence, confidence, and next steps.",
                     "finding": finding,
                     "round": round_index,
                     "validator_rounds": validator_rounds,
                 }
-                return await self.start_agent_run(
+                try:
+                    result = await self.start_agent_run(
+                        audit_run_id=audit_run_id,
+                        project_id=project_id,
+                        agent_name=validator_agent_name,
+                        workspace_host_path=workspace_host_path,
+                        allow_external_network=allow_external_network,
+                        retain_runtime_on_failure=retain_runtime_on_failure,
+                        input_payload=payload,
+                    )
+                except Exception as exc:
+                    await self._record_validation_attempt(
+                        attempt_id=attempt_id,
+                        finding_id=finding_id,
+                        audit_run_id=audit_run_id,
+                        round_index=round_index,
+                        status="failed",
+                        result={"finding": finding, "error": str(exc)},
+                    )
+                    await self._record_validation_evidence(
+                        finding_id=finding_id,
+                        audit_run_id=audit_run_id,
+                        kind="validator-error",
+                        summary=f"Validator round {round_index} failed: {exc}",
+                        payload={"round": round_index, "error": str(exc), "finding": finding},
+                    )
+                    raise
+                agent_run_id = str(result.get("agent_run_id") or result.get("run_id") or "")
+                await self._record_validation_attempt(
+                    attempt_id=attempt_id,
+                    finding_id=finding_id,
                     audit_run_id=audit_run_id,
-                    project_id=project_id,
-                    agent_name=validator_agent_name,
-                    workspace_host_path=workspace_host_path,
-                    allow_external_network=allow_external_network,
-                    retain_runtime_on_failure=retain_runtime_on_failure,
-                    input_payload=payload,
+                    round_index=round_index,
+                    status="completed",
+                    agent_run_id=agent_run_id or None,
+                    result={"finding": finding, "agent_run": result},
                 )
+                await self._record_validation_evidence(
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="validator-agent-run",
+                    summary=f"Validator round {round_index} completed with AgentRun {agent_run_id or 'unknown'}.",
+                    payload={"round": round_index, "agent_run_id": agent_run_id, "result": result},
+                )
+                return result
 
         scheduled: list[asyncio.Task] = []
+        await self._mark_findings_status([str(finding.get("finding_id")) for finding in findings if finding.get("finding_id")], "validating")
         for finding in findings:
             for round_index in range(1, validator_rounds + 1):
                 scheduled.append(asyncio.create_task(run_validator(finding, round_index)))
@@ -445,6 +500,68 @@ class RuntimeOrchestrator:
                         status=status,
                     )
                 )
+            await session.commit()
+
+    async def _record_validation_attempt(
+        self,
+        *,
+        attempt_id: str,
+        finding_id: str,
+        audit_run_id: str,
+        round_index: int,
+        status: str,
+        result: dict[str, Any],
+        agent_run_id: str | None = None,
+    ) -> None:
+        async with SessionLocal() as session:
+            existing = await session.scalar(select(ValidationAttempt).where(ValidationAttempt.attempt_id == attempt_id))
+            if existing:
+                existing.status = status
+                existing.result = result
+                existing.agent_run_id = agent_run_id or existing.agent_run_id
+            else:
+                session.add(
+                    ValidationAttempt(
+                        attempt_id=attempt_id,
+                        finding_id=finding_id,
+                        audit_run_id=audit_run_id,
+                        agent_run_id=agent_run_id,
+                        round_index=round_index,
+                        status=status,
+                        result=result,
+                    )
+                )
+            await session.commit()
+
+    async def _record_validation_evidence(
+        self,
+        *,
+        finding_id: str,
+        audit_run_id: str,
+        kind: str,
+        summary: str,
+        payload: dict[str, Any],
+    ) -> None:
+        async with SessionLocal() as session:
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    kind=kind,
+                    summary=summary,
+                    payload=payload,
+                )
+            )
+            await session.commit()
+
+    async def _mark_findings_status(self, finding_ids: list[str], status: str) -> None:
+        if not finding_ids:
+            return
+        async with SessionLocal() as session:
+            rows = (await session.execute(select(Finding).where(Finding.finding_id.in_(finding_ids)))).scalars()
+            for row in rows:
+                row.status = status
             await session.commit()
 
     async def _record_agent_event(self, agent_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
