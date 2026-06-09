@@ -127,11 +127,33 @@ class DockerClient:
         return await self.request("GET", f"/containers/{container_id}/json")
 
     async def logs(self, container_id: str, *, tail: int | str = 200) -> str:
-        return await self.request(
-            "GET",
+        response = await self.client.get(
             f"/containers/{container_id}/logs",
             params={"stdout": 1, "stderr": 1, "tail": tail, "timestamps": 1},
         )
+        if response.status_code >= 400:
+            raise DockerApiError(f"GET /containers/{container_id}/logs failed: {response.status_code} {response.text}")
+        return self._decode_log_stream(response.content)
+
+    @staticmethod
+    def _decode_log_stream(content: bytes) -> str:
+        frames: list[bytes] = []
+        offset = 0
+        while offset + 8 <= len(content):
+            header = content[offset : offset + 8]
+            stream_type = header[0]
+            size = int.from_bytes(header[4:8], "big")
+            if stream_type not in {0, 1, 2} or header[1:4] != b"\x00\x00\x00" or size < 0:
+                break
+            payload_start = offset + 8
+            payload_end = payload_start + size
+            if payload_end > len(content):
+                break
+            frames.append(content[payload_start:payload_end])
+            offset = payload_end
+        if frames and offset == len(content):
+            return b"".join(frames).decode("utf-8", errors="replace")
+        return content.decode("utf-8", errors="replace")
 
     async def list_containers_by_run(self, audit_run_id: str) -> list[dict[str, Any]]:
         filters = {"label": [f"dieaudit.audit_run_id={audit_run_id}", "dieaudit.managed=true"]}
