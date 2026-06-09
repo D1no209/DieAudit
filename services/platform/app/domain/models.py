@@ -58,6 +58,19 @@ class PlatformAuditEvent(TimestampMixin, Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class ApiKeyRecord(TimestampMixin, Base):
+    __tablename__ = "api_keys"
+
+    key_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    key_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="active")
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class Project(TimestampMixin, Base):
     __tablename__ = "projects"
 

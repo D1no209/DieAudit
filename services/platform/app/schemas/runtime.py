@@ -44,6 +44,12 @@ class CreateFindingRequest(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreateApiKeyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    scopes: list[str] = Field(default_factory=lambda: ["admin"])
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class TemplateBody(BaseModel):
     template: dict[str, Any]
 

@@ -176,9 +176,20 @@ type SandboxCapabilities = {
 
 type AuthStatus = {
   enabled?: boolean;
+  bootstrap_key_enabled?: boolean;
   api_key_header?: string;
   public_metrics?: boolean;
   service?: string;
+};
+
+type ApiKeyRecord = {
+  key_id: string;
+  name: string;
+  scopes: string[];
+  status: string;
+  last_used_at?: string;
+  deactivated_at?: string;
+  created_at: string;
 };
 
 type PlatformAuditEvent = {
@@ -236,6 +247,7 @@ function App() {
   const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy>();
   const [runtimeReadiness, setRuntimeReadiness] = useState<RuntimeReadiness>();
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
+  const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -256,6 +268,7 @@ function App() {
   const [zipFiles, setZipFiles] = useState<UploadFile[]>([]);
   const [gitForm] = Form.useForm();
   const [zipForm] = Form.useForm();
+  const [apiKeyForm] = Form.useForm();
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.project_id === selectedProjectId),
@@ -280,6 +293,7 @@ function App() {
       readJson("/gateway/runtime/policy").then(setRuntimePolicy).catch(() => setRuntimePolicy(undefined));
       readJson("/gateway/runtime/readiness").then(setRuntimeReadiness).catch(() => setRuntimeReadiness(undefined));
       readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
+      readJson("/gateway/auth/api-keys").then(setApiKeys).catch(() => setApiKeys([]));
       readJson("/gateway/platform/audit-events?limit=100").then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
       setProjects(projectRows);
       if (!selectedProjectId && projectRows.length > 0) {
@@ -614,6 +628,32 @@ function App() {
     });
   }
 
+  async function createManagedApiKey(values: { name: string; scopes?: string }) {
+    await runAction(async () => {
+      const result = await readJson("/gateway/auth/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: values.name,
+          scopes: parseScopes(values.scopes),
+        }),
+      });
+      setLastResponse(result);
+      apiKeyForm.resetFields();
+      const rows = await readJson("/gateway/auth/api-keys");
+      setApiKeys(rows);
+    });
+  }
+
+  async function deactivateManagedApiKey(keyId: string) {
+    await runAction(async () => {
+      const result = await readJson(`/gateway/auth/api-keys/${keyId}/deactivate`, { method: "POST" });
+      setLastResponse(result);
+      const rows = await readJson("/gateway/auth/api-keys");
+      setApiKeys(rows);
+    });
+  }
+
   function saveApiKey() {
     const normalized = apiKey.trim();
     if (normalized) {
@@ -709,6 +749,22 @@ function App() {
       render: (_, row) => `${row.metadata?.duration_ms ?? "-"} ms`,
     },
     { title: "Request ID", dataIndex: "request_id", width: 260, ellipsis: true },
+  ];
+
+  const apiKeyColumns: ColumnsType<ApiKeyRecord> = [
+    { title: "Name", dataIndex: "name" },
+    { title: "Status", dataIndex: "status", render: (value) => <Tag color={value === "active" ? "green" : "default"}>{value}</Tag> },
+    { title: "Scopes", dataIndex: "scopes", render: (value: string[]) => <Space wrap>{value.map((item) => <Tag key={item}>{item}</Tag>)}</Space> },
+    { title: "Last Used", dataIndex: "last_used_at", render: (value) => value || "-" },
+    { title: "Created", dataIndex: "created_at" },
+    {
+      title: "Action",
+      render: (_, row) => (
+        <Button size="small" danger disabled={row.status !== "active"} onClick={() => deactivateManagedApiKey(row.key_id)}>
+          禁用
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -923,6 +979,30 @@ function App() {
                 ),
               },
               {
+                key: "api-keys",
+                label: "API Keys",
+                children: (
+                  <Card>
+                    <Form form={apiKeyForm} layout="inline" onFinish={createManagedApiKey} className="table-toolbar">
+                      <Form.Item name="name" rules={[{ required: true }]} className="api-key-name-field">
+                        <Input placeholder="Key name" />
+                      </Form.Item>
+                      <Form.Item name="scopes" initialValue="admin">
+                        <Input placeholder="Scopes: admin,audit,runtime" />
+                      </Form.Item>
+                      <Button htmlType="submit" type="primary" loading={loading}>创建 Key</Button>
+                    </Form>
+                    <Alert
+                      type="info"
+                      showIcon
+                      className="table-toolbar"
+                      message="新 Key 原文只在创建响应中显示一次；数据库只保存哈希。"
+                    />
+                    <Table rowKey="key_id" columns={apiKeyColumns} dataSource={apiKeys} pagination={{ pageSize: 8 }} />
+                  </Card>
+                ),
+              },
+              {
                 key: "reports",
                 label: "Reports",
                 children: (
@@ -1016,6 +1096,14 @@ function severityColor(value: string) {
 
 function isActiveRun(auditStatus?: string, pipelineStatus?: string) {
   return ["queued", "running", "validating"].includes(auditStatus || "") || ["queued", "running"].includes(pipelineStatus || "");
+}
+
+function parseScopes(value?: string) {
+  const scopes = (value || "admin")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(scopes.length ? scopes : ["admin"]));
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

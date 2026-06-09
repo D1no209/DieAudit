@@ -1,6 +1,5 @@
 from contextlib import asynccontextmanager
 import time
-import secrets
 from typing import Any
 import uuid
 
@@ -11,6 +10,7 @@ from app.api.routes import register_runtime_routes
 from app.domain.models import PlatformAuditEvent
 from app.repositories import SessionLocal, init_db
 from app.runtime import RuntimeOrchestrator
+from app.services.auth import auth_is_enabled, authenticate_api_key
 from app.settings import get_settings
 
 
@@ -41,27 +41,32 @@ async def api_key_auth(request: Request, call_next):
     request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
     path = request.url.path
     public_path = _is_public_path(path)
-    auth_enabled = bool(settings.dieaudit_api_key)
+    auth_enabled = bool(settings.dieaudit_api_key) if public_path else await auth_is_enabled(settings)
     auth_result = "not_required"
+    auth_principal: dict[str, Any] | None = None
     started = time.perf_counter()
     if public_path or not auth_enabled:
+        request.state.auth_principal = auth_principal
         response = await call_next(request)
         status_code = response.status_code
         response.headers["X-Request-Id"] = request_id
-        await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, started)
+        await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, auth_principal, started)
         return response
     supplied = request.headers.get(settings.api_key_header) or _bearer_token(request.headers.get("Authorization"))
-    if supplied and secrets.compare_digest(supplied, settings.dieaudit_api_key):
+    auth_principal = await authenticate_api_key(settings, supplied)
+    if auth_principal:
         auth_result = "success"
+        request.state.auth_principal = auth_principal
         response = await call_next(request)
         status_code = response.status_code
         response.headers["X-Request-Id"] = request_id
-        await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, started)
+        await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, auth_principal, started)
         return response
     auth_result = "failed"
+    request.state.auth_principal = None
     response = JSONResponse({"detail": "missing or invalid API key"}, status_code=401)
     response.headers["X-Request-Id"] = request_id
-    await _record_platform_audit_event(request, 401, request_id, auth_enabled, auth_result, started)
+    await _record_platform_audit_event(request, 401, request_id, auth_enabled, auth_result, auth_principal, started)
     return response
 
 
@@ -88,6 +93,7 @@ async def _record_platform_audit_event(
     request_id: str,
     auth_enabled: bool,
     auth_result: str,
+    auth_principal: dict[str, Any] | None,
     started: float,
 ) -> None:
     path = request.url.path
@@ -112,6 +118,8 @@ async def _record_platform_audit_event(
                         "query": str(request.url.query or ""),
                         "duration_ms": duration_ms,
                         "forwarded_for": request.headers.get("X-Forwarded-For"),
+                        "auth_key_id": (auth_principal or {}).get("key_id"),
+                        "auth_source": (auth_principal or {}).get("source"),
                     },
                 )
             )
@@ -132,8 +140,10 @@ def _bearer_token(value: str | None) -> str | None:
 
 @app.get("/auth/status")
 async def auth_status() -> dict[str, Any]:
+    enabled = await auth_is_enabled(settings)
     return {
-        "enabled": bool(settings.dieaudit_api_key),
+        "enabled": enabled,
+        "bootstrap_key_enabled": bool(settings.dieaudit_api_key),
         "api_key_header": settings.api_key_header,
         "public_metrics": settings.public_metrics,
         "service": settings.service_name,

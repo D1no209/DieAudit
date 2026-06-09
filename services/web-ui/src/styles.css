@@ -33,6 +33,10 @@ body {
   width: 180px;
 }
 
+.api-key-name-field {
+  min-width: 220px;
+}
+
 .app-content {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;

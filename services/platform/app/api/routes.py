@@ -5,13 +5,14 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import delete, select
 
 from app.domain.models import (
     AgentRun,
     AgentRunEvent,
+    ApiKeyRecord,
     AuditRun,
     AuditRunEvent,
     Evidence,
@@ -28,6 +29,7 @@ from app.repositories import SessionLocal
 from app.schemas import (
     A2AAgentCardRequest,
     CreateAuditRunRequest,
+    CreateApiKeyRequest,
     CreateFindingRequest,
     CreateProjectRequest,
     RunPocRequest,
@@ -36,6 +38,7 @@ from app.schemas import (
     TemplateBody,
     ValidatorScaleRequest,
 )
+from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, hash_api_key, has_scope
 from app.services.dependency_scanner import DependencyScanner
 from app.services.templates import TemplateStore
 from app.services.workspace import WorkspaceImportError, WorkspaceService
@@ -95,6 +98,53 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "/runtime/templates/mcp",
             ],
         }
+
+    @router.get("/auth/me")
+    async def current_auth_principal(request: Request) -> dict[str, Any]:
+        principal = getattr(request.state, "auth_principal", None)
+        return {"authenticated": bool(principal), "principal": principal}
+
+    @router.get("/auth/api-keys")
+    async def list_api_keys(request: Request) -> list[dict[str, Any]]:
+        await _require_admin(request, settings)
+        async with SessionLocal() as session:
+            rows = (await session.execute(select(ApiKeyRecord).order_by(ApiKeyRecord.created_at.desc()))).scalars()
+            return [api_key_record_to_dict(row) for row in rows]
+
+    @router.post("/auth/api-keys")
+    async def create_api_key(request: Request, body: CreateApiKeyRequest) -> dict[str, Any]:
+        await _require_admin(request, settings)
+        raw_key = generate_api_key()
+        row = ApiKeyRecord(
+            key_id=str(uuid.uuid4()),
+            name=body.name,
+            key_hash=hash_api_key(raw_key),
+            scopes=_normalize_scopes(body.scopes),
+            status="active",
+            metadata_json=body.metadata,
+        )
+        async with SessionLocal() as session:
+            session.add(row)
+            await session.flush()
+            await session.refresh(row)
+            record = api_key_record_to_dict(row)
+            await session.commit()
+            return {"api_key": raw_key, "record": record}
+
+    @router.post("/auth/api-keys/{key_id}/deactivate")
+    async def deactivate_api_key(request: Request, key_id: str) -> dict[str, Any]:
+        await _require_admin(request, settings)
+        async with SessionLocal() as session:
+            row = await session.scalar(select(ApiKeyRecord).where(ApiKeyRecord.key_id == key_id))
+            if not row:
+                raise HTTPException(status_code=404, detail="api key not found")
+            row.status = "inactive"
+            row.deactivated_at = datetime.now(timezone.utc)
+            await session.flush()
+            await session.refresh(row)
+            record = api_key_record_to_dict(row)
+            await session.commit()
+            return record
 
     @router.get("/projects")
     async def list_projects() -> list[dict[str, Any]]:
@@ -815,12 +865,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway("/runtime/readiness")
+        auth_enabled = await auth_is_enabled(settings)
         checks: list[dict[str, Any]] = [
             {
                 "id": "api_key",
                 "title": "API key is configured",
-                "status": "pass" if settings.dieaudit_api_key else "fail",
-                "detail": "DIEAUDIT_API_KEY is required before exposing the platform beyond local development.",
+                "status": "pass" if auth_enabled else "fail",
+                "detail": {
+                    "bootstrap_key_enabled": bool(settings.dieaudit_api_key),
+                    "message": "Configure DIEAUDIT_API_KEY or create at least one active persisted API key before exposing the platform.",
+                },
             },
             {
                 "id": "metrics_private",
@@ -2037,6 +2091,19 @@ def _slug_id(value: str) -> str:
     slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-")
     slug = "-".join(part for part in slug.split("-") if part)
     return slug[:80] or str(uuid.uuid4())
+
+
+async def _require_admin(request: Request, settings: Settings) -> None:
+    if not await auth_is_enabled(settings):
+        return
+    principal = getattr(request.state, "auth_principal", None)
+    if not has_scope(principal, "admin"):
+        raise HTTPException(status_code=403, detail="admin scope required")
+
+
+def _normalize_scopes(scopes: list[str]) -> list[str]:
+    normalized = sorted({item.strip().lower() for item in scopes if item and item.strip()})
+    return normalized or ["read"]
 
 
 __all__ = ["register_runtime_routes"]
