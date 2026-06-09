@@ -13,6 +13,37 @@ class StartAgentRunRequest(BaseModel):
     input_payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreateProjectRequest(BaseModel):
+    name: str = Field(min_length=1)
+    git_url: str | None = None
+    ref: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateAuditRunRequest(BaseModel):
+    snapshot_id: str | None = None
+    agent_name: str = "opencode-orchestrator"
+    validator_rounds: int = Field(default=1, ge=1)
+    max_parallel_validators: int = Field(default=2, ge=1)
+    allow_external_network: bool = True
+    retain_runtime_on_failure: bool = False
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+    start_agent: bool = True
+
+
+class CreateFindingRequest(BaseModel):
+    title: str = Field(min_length=1)
+    severity: str = "unknown"
+    status: str = "candidate"
+    file_path: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
+    rule_id: str | None = None
+    description: str | None = None
+    source: str = "manual"
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class TemplateBody(BaseModel):
     template: dict[str, Any]
 

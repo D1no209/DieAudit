@@ -24,12 +24,39 @@ class AuditRun(TimestampMixin, Base):
 
     audit_run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     project_id: Mapped[str] = mapped_column(String(128), index=True)
+    snapshot_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="created")
     validator_rounds: Mapped[int] = mapped_column(Integer, default=1)
     max_parallel_validators: Mapped[int] = mapped_column(Integer, default=2)
     allow_external_network: Mapped[bool] = mapped_column(default=False)
     retain_runtime_on_failure: Mapped[bool] = mapped_column(default=False)
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class Project(TimestampMixin, Base):
+    __tablename__ = "projects"
+
+    project_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    source_type: Mapped[str] = mapped_column(String(32))
+    source_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="created")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class ProjectSnapshot(TimestampMixin, Base):
+    __tablename__ = "project_snapshots"
+
+    snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    source_type: Mapped[str] = mapped_column(String(32))
+    source_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    workspace_path: Mapped[str] = mapped_column(Text)
+    artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="ready")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class ContainerRun(TimestampMixin, Base):
@@ -95,6 +122,59 @@ class RuntimePackage(TimestampMixin, Base):
     path: Mapped[str] = mapped_column(Text)
     content_hash: Mapped[str] = mapped_column(String(128))
     manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class Finding(TimestampMixin, Base):
+    __tablename__ = "findings"
+
+    finding_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    severity: Mapped[str] = mapped_column(String(32), default="unknown")
+    status: Mapped[str] = mapped_column(String(32), default="candidate")
+    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    line_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    line_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rule_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(64), default="agent")
+    raw: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class Evidence(TimestampMixin, Base):
+    __tablename__ = "evidence"
+
+    evidence_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(String(128), index=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class ValidationAttempt(TimestampMixin, Base):
+    __tablename__ = "validation_attempts"
+
+    attempt_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(String(128), index=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    agent_run_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    round_index: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="created")
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class ReportArtifact(TimestampMixin, Base):
+    __tablename__ = "report_artifacts"
+
+    report_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    path: Mapped[str] = mapped_column(Text)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class AgentTemplateRecord(TimestampMixin, Base):
