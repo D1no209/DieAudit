@@ -31,3 +31,14 @@ def test_findings_page_does_not_embed_dependency_inventory() -> None:
     assert "DependencyInventory" not in findings_page
     assert "DependenciesPage" not in findings_page
     assert "Tabs" not in findings_page
+
+
+def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
+    app = read_source("services/web-ui/src/App.tsx")
+    controller = read_source("services/web-ui/src/hooks/useDashboardController.tsx")
+
+    assert "useDashboardController" in app
+    assert "readJson(" not in app
+    assert app.count("useState") == 0
+    assert "function refresh()" in controller
+    assert "function runPipeline()" in controller
