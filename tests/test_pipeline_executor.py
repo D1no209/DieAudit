@@ -148,6 +148,8 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     assert runtime.agent_runs[0]["agent_name"] == "opencode-orchestrator"
     assert runtime.validator_runs[0]["validator_rounds"] == 2
     assert runtime.validator_runs[0]["max_parallel_validators"] == 3
+    assert callable(runtime.validator_runs[0]["cancel_requested"])
+    assert callable(runtime.validator_runs[0]["cancel_reason"])
     assert runtime.cleanup_runs == ["run-1"]
     assert recorder.summary is not None
     assert recorder.events[-1]["event_type"] == "pipeline_completed"

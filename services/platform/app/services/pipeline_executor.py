@@ -141,6 +141,8 @@ class PipelineExecutor:
                 allow_external_network=audit_run["allow_external_network"],
                 retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                 wait_for_completion=True,
+                cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
+                cancel_reason=lambda: self.cancel_reason(audit_run_id),
             )
             steps.append({"step": "validators", "result": validator_result})
             await self.record_audit_run_event(

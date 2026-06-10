@@ -90,6 +90,71 @@ def test_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch) -> None:
     asyncio.run(_run_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch))
 
 
+def test_validator_scaling_stops_starting_agents_after_cancel(monkeypatch) -> None:
+    asyncio.run(_run_validator_scaling_cancel_test(monkeypatch))
+
+
+async def _run_validator_scaling_cancel_test(monkeypatch) -> None:
+    orchestrator = _orchestrator()
+    attempts = []
+    evidence = []
+    started_agents = []
+    marked_statuses = []
+
+    async def fake_record_audit_run(**_kwargs):
+        return None
+
+    async def fake_record_attempt(**kwargs):
+        attempts.append(kwargs)
+
+    async def fake_record_evidence(**kwargs):
+        evidence.append(kwargs)
+
+    async def fake_mark_findings_status(finding_ids, status):
+        marked_statuses.append((finding_ids, status))
+
+    async def fake_start_agent_run(**kwargs):
+        started_agents.append(kwargs)
+        await asyncio.sleep(0)
+        return {"agent_run_id": f"agent-{len(started_agents)}"}
+
+    async def cancel_requested():
+        return bool(started_agents)
+
+    async def cancel_reason():
+        return "user_requested"
+
+    monkeypatch.setattr(orchestrator, "_record_audit_run", fake_record_audit_run)
+    monkeypatch.setattr(orchestrator, "_record_validation_attempt", fake_record_attempt)
+    monkeypatch.setattr(orchestrator, "_record_validation_evidence", fake_record_evidence)
+    monkeypatch.setattr(orchestrator, "_mark_findings_status", fake_mark_findings_status)
+    monkeypatch.setattr(orchestrator, "start_agent_run", fake_start_agent_run)
+
+    result = await orchestrator.scale_validators(
+        audit_run_id="run-1",
+        project_id="project-1",
+        findings=[
+            {"finding_id": "finding-1", "title": "one"},
+            {"finding_id": "finding-2", "title": "two"},
+        ],
+        workspace_host_path="/workspace/project",
+        validator_rounds=1,
+        max_parallel_validators=1,
+        validator_agent_name="opencode-validator",
+        allow_external_network=False,
+        retain_runtime_on_failure=False,
+        wait_for_completion=True,
+        cancel_requested=cancel_requested,
+        cancel_reason=cancel_reason,
+    )
+
+    assert len(started_agents) == 1
+    assert result["status_counts"] == {"completed": 1, "cancelled": 1}
+    assert any(item["status"] == "cancelled" and item["finding_id"] == "finding-2" for item in attempts)
+    assert any(item["kind"] == "validator-cancelled" and item["finding_id"] == "finding-2" for item in evidence)
+    assert marked_statuses == [(["finding-1", "finding-2"], "validating")]
+
+
 async def _run_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch) -> None:
     import app.runtime.orchestrator as orchestrator_module
 

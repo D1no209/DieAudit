@@ -7,7 +7,7 @@ import asyncio
 import contextlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -793,6 +793,8 @@ class RuntimeOrchestrator:
         allow_external_network: bool,
         retain_runtime_on_failure: bool,
         wait_for_completion: bool = False,
+        cancel_requested: Callable[[], Awaitable[bool]] | None = None,
+        cancel_reason: Callable[[], Awaitable[str | None]] | None = None,
     ) -> dict[str, Any]:
         await self._record_audit_run(
             audit_run_id=audit_run_id,
@@ -814,7 +816,41 @@ class RuntimeOrchestrator:
                 "note": "No findings were provided.",
             }
 
-        semaphore = asyncio.Semaphore(max_parallel_validators)
+        semaphore = asyncio.Semaphore(max(1, int(max_parallel_validators)))
+
+        async def validator_cancel_state() -> tuple[bool, str | None]:
+            if cancel_requested is None:
+                return False, None
+            if not await cancel_requested():
+                return False, None
+            reason = await cancel_reason() if cancel_reason is not None else None
+            return True, reason or "cancel_requested"
+
+        async def record_cancelled_attempt(
+            *,
+            attempt_id: str,
+            finding_id: str,
+            finding: dict[str, Any],
+            round_index: int,
+            reason: str,
+        ) -> dict[str, Any]:
+            result = {"finding": finding, "reason": reason, "round": round_index}
+            await self._record_validation_attempt(
+                attempt_id=attempt_id,
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                round_index=round_index,
+                status="cancelled",
+                result=result,
+            )
+            await self._record_validation_evidence(
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                kind="validator-cancelled",
+                summary=f"Validator round {round_index} was cancelled before starting an AgentRun.",
+                payload=result,
+            )
+            return {"status": "cancelled", "finding_id": finding_id, "round": round_index, "reason": reason}
 
         async def run_validator(finding: dict[str, Any], round_index: int) -> dict[str, Any]:
             finding_id = str(finding.get("finding_id") or finding.get("id") or f"inline-{uuid.uuid4()}")
@@ -827,7 +863,25 @@ class RuntimeOrchestrator:
                 status="queued",
                 result={"finding": finding},
             )
+            cancelled, reason = await validator_cancel_state()
+            if cancelled:
+                return await record_cancelled_attempt(
+                    attempt_id=attempt_id,
+                    finding_id=finding_id,
+                    finding=finding,
+                    round_index=round_index,
+                    reason=reason or "cancel_requested",
+                )
             async with semaphore:
+                cancelled, reason = await validator_cancel_state()
+                if cancelled:
+                    return await record_cancelled_attempt(
+                        attempt_id=attempt_id,
+                        finding_id=finding_id,
+                        finding=finding,
+                        round_index=round_index,
+                        reason=reason or "cancel_requested",
+                    )
                 await self._record_validation_attempt(
                     attempt_id=attempt_id,
                     finding_id=finding_id,
@@ -886,7 +940,7 @@ class RuntimeOrchestrator:
                     summary=f"Validator round {round_index} completed with AgentRun {agent_run_id or 'unknown'}.",
                     payload={"round": round_index, "agent_run_id": agent_run_id, "result": result},
                 )
-                return result
+                return {"status": "completed", "finding_id": finding_id, "round": round_index, "result": result}
 
         scheduled: list[asyncio.Task] = []
         await self._mark_findings_status([str(finding.get("finding_id")) for finding in findings if finding.get("finding_id")], "validating")
@@ -894,17 +948,24 @@ class RuntimeOrchestrator:
             for round_index in range(1, validator_rounds + 1):
                 scheduled.append(asyncio.create_task(run_validator(finding, round_index)))
 
-        async def drain(tasks: list[asyncio.Task]) -> None:
+        async def drain(tasks: list[asyncio.Task]) -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
             for task in asyncio.as_completed(tasks):
                 try:
-                    await task
-                except Exception:
-                    pass
+                    results.append(await task)
+                except Exception as exc:
+                    results.append({"status": "failed", "error": str(exc)})
+            return results
 
+        results: list[dict[str, Any]] = []
         if wait_for_completion:
-            await drain(scheduled)
+            results = await drain(scheduled)
         else:
             asyncio.create_task(drain(scheduled))
+        status_counts: dict[str, int] = {}
+        for result in results:
+            status = str(result.get("status") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
         return {
             "audit_run_id": audit_run_id,
             "project_id": project_id,
@@ -913,6 +974,8 @@ class RuntimeOrchestrator:
             "validator_rounds": validator_rounds,
             "max_parallel_validators": max_parallel_validators,
             "validator_agent_name": validator_agent_name,
+            "results": results if wait_for_completion else [],
+            "status_counts": status_counts,
         }
 
     async def _start_mcp(
