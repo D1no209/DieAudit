@@ -1320,7 +1320,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         body = StartAgentRunRequest(
             audit_run_id=audit_run_id,
             project_id="demo-project",
-            agent_name="orchestrator",
+            agent_name="mock-orchestrator",
             workspace_host_path=str(workspace),
             input_payload={"goal": "run demo agent and prove MCP connectivity"},
         )

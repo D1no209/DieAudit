@@ -1,24 +1,24 @@
-name: orchestrator
-image: dieaudit/opencode-agent:local
-command: ["python", "/app/opencode_acp_runner.py"]
+name: mock-orchestrator
+profile: demo
+image: dieaudit/mock-agent:local
+command: ["python", "/app/mock_agent.py"]
 env:
   AGENT_ROLE: orchestrator
-  OPENCODE_DISABLE_AUTOUPDATE: "1"
 model_profile: orchestrator-long-context
 protocol:
-  kind: agent-client-protocol
-  transport: stdio
-  stdio_command: ["opencode", "acp"]
-  runtime: opencode
+  kind: legacy-http
+  transport: http
+  port: 8000
+  runtime: mock
+acp_endpoint:
+  transport: http
+  port: 8000
 workspace_mount:
   target: /workspace
   read_only: true
 artifact_mount:
   target: /artifacts
   read_only: false
-runtime_mount:
-  target: /dieaudit/runtime
-  read_only: true
 required_mcp:
   - filesystem-mcp
   - code-search-mcp
@@ -28,6 +28,5 @@ network_policy:
   allow_external_network: false
 read_only: false
 healthcheck: null
-instruction: orchestrator.md
 output_schema:
   type: object

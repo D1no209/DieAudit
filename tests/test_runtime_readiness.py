@@ -77,6 +77,25 @@ def test_heavy_analyzer_templates_use_dedicated_images() -> None:
     assert joern["required_binaries"] == ["joern"]
 
 
+def test_bare_role_agent_templates_use_opencode_runtime() -> None:
+    for role in ["orchestrator", "recon-auditor", "sca-analyst", "validator", "judger", "poc-writer"]:
+        template = yaml.safe_load((ROOT / f"configs/agent-templates/{role}.yaml").read_text(encoding="utf-8"))
+
+        assert template["image"] == "dieaudit/opencode-agent:local"
+        assert template["protocol"]["kind"] == "agent-client-protocol"
+        assert template["protocol"]["runtime"] == "opencode"
+        assert template["command"] == ["python", "/app/opencode_acp_runner.py"]
+        assert template["instruction"] == f"{role}.md"
+
+
+def test_mock_orchestrator_is_demo_only() -> None:
+    template = yaml.safe_load((ROOT / "configs/agent-templates/mock-orchestrator.yaml").read_text(encoding="utf-8"))
+
+    assert template["profile"] == "demo"
+    assert template["image"] == "dieaudit/mock-agent:local"
+    assert template["protocol"]["runtime"] == "mock"
+
+
 def test_heavy_analyzer_readiness_warns_when_required_binaries_missing() -> None:
     checks = {
         check["id"]: check

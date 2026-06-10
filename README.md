@@ -107,7 +107,7 @@ Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/cleanu
 - Each AuditRun gets a dedicated Docker network named `dieaudit-run-{audit_run_id}`.
 - Agent templates live in `configs/agent-templates`.
 - MCP templates live in `configs/mcp-templates`.
-- Mock Agent images remain only as demo fixtures. Production OpenCode templates are in `configs/agent-templates/opencode-*.yaml`.
+- Mock Agent images remain only as demo fixtures. Production OpenCode templates are in `configs/agent-templates/opencode-*.yaml`, with bare role aliases such as `orchestrator` and `validator` also pointing at the OpenCode runtime.
 - Standard MCP templates in `configs/mcp-templates` use `dieaudit/tool-mcp:local`; heavy Joern/CodeQL templates use dedicated images built by the `tools` profile.
 
 ## Knowledge Base Embeddings
