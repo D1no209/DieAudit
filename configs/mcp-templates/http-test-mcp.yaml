@@ -5,6 +5,7 @@ port: 8001
 mcp_endpoint: /mcp
 env:
   MCP_NAME: http-test-mcp
+  HTTP_TEST_ALLOWED_HOSTS: target
   HTTP_TEST_ALLOW_HOST_GATEWAY: "false"
 mounts: []
 resources:

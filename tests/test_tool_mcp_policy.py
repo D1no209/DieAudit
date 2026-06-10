@@ -14,6 +14,38 @@ def test_http_target_blocks_host_gateway() -> None:
         tool_mcp._validate_http_target("http://host.docker.internal:8080/health")
 
 
+def test_http_target_blocks_control_plane_even_when_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tool_mcp, "HTTP_TEST_ALLOWED_HOSTS", {"docker-socket-proxy"})
+
+    with pytest.raises(ValueError, match="blocked"):
+        tool_mcp._validate_http_target("http://docker-socket-proxy:2375/version")
+
+
+def test_http_target_defaults_to_target_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tool_mcp, "HTTP_TEST_ALLOWED_HOSTS", {"target"})
+
+    assert tool_mcp._validate_http_target("http://target:8080").hostname == "target"
+    with pytest.raises(ValueError, match="not allowed"):
+        tool_mcp._validate_http_target("https://example.com")
+
+
+def test_http_target_blocks_private_ip_literals_even_when_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tool_mcp, "HTTP_TEST_ALLOWED_HOSTS", {"127.0.0.1", "10.0.0.5"})
+
+    with pytest.raises(ValueError, match="private or local"):
+        tool_mcp._validate_http_target("http://127.0.0.1:8080")
+    with pytest.raises(ValueError, match="private or local"):
+        tool_mcp._validate_http_target("http://10.0.0.5")
+
+
+def test_http_target_blocks_private_dns_without_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tool_mcp, "HTTP_TEST_ALLOWED_HOSTS", set())
+    monkeypatch.setattr(tool_mcp.socket, "getaddrinfo", lambda *_args, **_kwargs: [(None, None, None, None, ("10.0.0.5", 0))])
+
+    with pytest.raises(ValueError, match="private or local"):
+        tool_mcp._validate_http_target("https://example.test")
+
+
 def test_http_target_requires_absolute_http_url() -> None:
     with pytest.raises(ValueError, match="absolute"):
         tool_mcp._validate_http_target("/relative/path")

@@ -1,7 +1,9 @@
-import os
+import ipaddress
 import json
+import os
 import re
 import shutil
+import socket
 import subprocess
 import tomllib
 import xml.etree.ElementTree as ET
@@ -28,11 +30,11 @@ AUDIT_RUN_ID = os.environ.get("AUDIT_RUN_ID")
 ENFORCE_PROJECT_FILTER = os.environ.get("ENFORCE_PROJECT_FILTER", "false").lower() in {"1", "true", "yes"}
 HTTP_TEST_ALLOWED_HOSTS = {
     item.strip().lower()
-    for item in os.environ.get("HTTP_TEST_ALLOWED_HOSTS", "").split(",")
+    for item in os.environ.get("HTTP_TEST_ALLOWED_HOSTS", "target").split(",")
     if item.strip()
 }
 HTTP_TEST_ALLOW_HOST_GATEWAY = os.environ.get("HTTP_TEST_ALLOW_HOST_GATEWAY", "false").lower() in {"1", "true", "yes"}
-HTTP_TEST_BLOCKED_HOSTS = {"169.254.169.254", "metadata.google.internal", "docker-socket-proxy"}
+HTTP_TEST_BLOCKED_HOSTS = {"169.254.169.254", "metadata.google.internal", "docker-socket-proxy", "localhost"}
 if not HTTP_TEST_ALLOW_HOST_GATEWAY:
     HTTP_TEST_BLOCKED_HOSTS.update({"host.docker.internal", "host.containers.internal"})
 
@@ -1051,11 +1053,44 @@ def _validate_http_target(url: str):
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("url must be an absolute http(s) URL")
     host = parsed.hostname.lower()
-    if HTTP_TEST_ALLOWED_HOSTS and host not in HTTP_TEST_ALLOWED_HOSTS:
-        raise ValueError("host is not allowed by HTTP_TEST_ALLOWED_HOSTS")
     if host in HTTP_TEST_BLOCKED_HOSTS:
         raise ValueError("host is blocked by http-test-mcp policy")
+    literal_address = _ip_address_or_none(host)
+    if literal_address and _blocked_network_address(literal_address):
+        raise ValueError("host resolves to a blocked private or local address")
+    if HTTP_TEST_ALLOWED_HOSTS and host not in HTTP_TEST_ALLOWED_HOSTS:
+        raise ValueError("host is not allowed by HTTP_TEST_ALLOWED_HOSTS")
+    if not HTTP_TEST_ALLOWED_HOSTS:
+        _reject_private_http_target(host)
     return parsed
+
+
+def _ip_address_or_none(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _reject_private_http_target(host: str) -> None:
+    try:
+        addresses = [ipaddress.ip_address(item[-1][0]) for item in socket.getaddrinfo(host, None)]
+    except OSError as exc:
+        raise ValueError(f"host cannot be resolved: {host}") from exc
+    for address in addresses:
+        if _blocked_network_address(address):
+            raise ValueError("host resolves to a blocked private or local address")
+
+
+def _blocked_network_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return (
+        address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+        or address.is_private
+    )
 
 
 def _safe_response_headers(headers: httpx.Headers) -> dict[str, str]:
