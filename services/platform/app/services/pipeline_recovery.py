@@ -14,11 +14,13 @@ ACTIVE_AUDIT_STATUSES = {"queued", "running", "validating", "cancelling"}
 ACTIVE_PIPELINE_STATUSES = {"queued", "running", "validating", "cancelling"}
 
 
-def is_active_pipeline(status: str | None, config: dict[str, Any] | None) -> bool:
-    if status in ACTIVE_AUDIT_STATUSES:
+def is_active_pipeline(status: str | None, config: dict[str, Any] | None, *, include_queued: bool = True) -> bool:
+    audit_statuses = ACTIVE_AUDIT_STATUSES if include_queued else ACTIVE_AUDIT_STATUSES - {"queued"}
+    pipeline_statuses = ACTIVE_PIPELINE_STATUSES if include_queued else ACTIVE_PIPELINE_STATUSES - {"queued"}
+    if status in audit_statuses:
         return True
     pipeline_state = (config or {}).get("pipeline_state") or {}
-    return pipeline_state.get("status") in ACTIVE_PIPELINE_STATUSES
+    return pipeline_state.get("status") in pipeline_statuses
 
 
 def interrupted_pipeline_config(
@@ -50,6 +52,7 @@ async def recover_interrupted_pipelines(
     service_name: str,
     session_factory: Callable = SessionLocal,
     recovered_at: datetime | None = None,
+    include_queued: bool = True,
 ) -> dict[str, Any]:
     recovered_at = recovered_at or datetime.now(timezone.utc)
     reason = f"{service_name} restarted while pipeline was active; background execution cannot be resumed automatically"
@@ -57,7 +60,7 @@ async def recover_interrupted_pipelines(
     async with session_factory() as session:
         rows = (await session.execute(select(AuditRun))).scalars()
         for row in rows:
-            if not is_active_pipeline(row.status, row.config):
+            if not is_active_pipeline(row.status, row.config, include_queued=include_queued):
                 continue
             previous_status = row.status
             previous_state = dict((row.config or {}).get("pipeline_state") or {})

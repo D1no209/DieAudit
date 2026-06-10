@@ -19,6 +19,12 @@ def test_active_pipeline_detects_pipeline_state_even_when_audit_status_is_stale(
     assert is_active_pipeline("created", {"pipeline_state": {"status": "failed"}}) is False
 
 
+def test_active_pipeline_can_preserve_durable_queue_entries() -> None:
+    assert is_active_pipeline("queued", {}, include_queued=False) is False
+    assert is_active_pipeline("created", {"pipeline_state": {"status": "queued"}}, include_queued=False) is False
+    assert is_active_pipeline("created", {"pipeline_state": {"status": "running"}}, include_queued=False) is True
+
+
 def test_interrupted_pipeline_config_preserves_previous_state_and_clears_cancel_request() -> None:
     recovered_at = datetime(2026, 6, 10, 1, 2, 3, tzinfo=timezone.utc)
     config = {
@@ -72,6 +78,37 @@ async def test_recover_interrupted_pipelines_handles_stale_audit_status() -> Non
     assert session.committed is True
     assert len(session.added) == 1
     assert session.added[0].event_type == "pipeline_interrupted"
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_pipelines_preserves_queued_when_configured() -> None:
+    queued = AuditRun(
+        audit_run_id="run-queued",
+        project_id="project-1",
+        status="queued",
+        config={"pipeline_state": {"stage": "queued", "status": "queued"}},
+    )
+    running = AuditRun(
+        audit_run_id="run-running",
+        project_id="project-1",
+        status="running",
+        config={"pipeline_state": {"stage": "validators", "status": "running"}},
+    )
+    session = _FakeSession([queued, running])
+
+    result = await recover_interrupted_pipelines(
+        service_name="workflow-worker",
+        session_factory=lambda: session,
+        recovered_at=datetime(2026, 6, 10, 1, 2, 3, tzinfo=timezone.utc),
+        include_queued=False,
+    )
+
+    assert result["recovered"] == 1
+    assert result["runs"][0]["audit_run_id"] == "run-running"
+    assert queued.status == "queued"
+    assert queued.config["pipeline_state"]["status"] == "queued"
+    assert running.status == "failed"
+    assert len(session.added) == 1
 
 
 class _FakeScalarResult:

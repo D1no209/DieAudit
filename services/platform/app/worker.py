@@ -28,6 +28,7 @@ from app.repositories import init_db
 from app.runtime import RuntimeOrchestrator
 from app.services.pipeline_executor import PipelineExecutor
 from app.services.pipeline_queue import claim_next_queued_pipeline
+from app.services.pipeline_recovery import recover_interrupted_pipelines
 from app.services.worker_heartbeat import record_worker_heartbeat
 from app.settings import get_settings
 
@@ -75,6 +76,10 @@ async def run_worker() -> None:
             loop.add_signal_handler(signum, request_stop)
 
     await init_db()
+    if settings.pipeline_recovery_on_startup:
+        recovery = await recover_interrupted_pipelines(service_name=settings.service_name, include_queued=False)
+        if recovery.get("recovered"):
+            logger.warning("recovered interrupted worker pipelines result=%s", recovery)
     runtime = RuntimeOrchestrator(settings)
     executor = build_pipeline_executor(settings, runtime)
     heartbeat_interval = max(1.0, settings.pipeline_worker_heartbeat_interval_seconds)
