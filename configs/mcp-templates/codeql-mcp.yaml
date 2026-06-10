@@ -23,6 +23,8 @@ healthcheck:
   Retries: 10
 tools:
   - codeql_query
+required_binaries:
+  - codeql
 permissions:
   workspace: read-only
   docker_api: false

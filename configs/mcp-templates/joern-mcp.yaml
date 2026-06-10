@@ -23,6 +23,8 @@ healthcheck:
   Retries: 10
 tools:
   - joern_query
+required_binaries:
+  - joern
 permissions:
   workspace: read-only
   docker_api: false

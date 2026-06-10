@@ -47,6 +47,96 @@ class RuntimeOrchestrator:
         version = await self.docker.version()
         return {"ok": ping == "OK", "ping": ping, "version": version}
 
+    async def tool_image_capabilities(self, templates: list[dict[str, Any]]) -> dict[str, Any]:
+        probes: dict[str, set[str]] = {}
+        template_requirements: dict[str, dict[str, Any]] = {}
+        for template in templates:
+            required = [str(item) for item in template.get("required_binaries", []) if str(item).strip()]
+            if not required:
+                continue
+            image = str(template.get("image") or "")
+            name = str(template.get("name") or image)
+            template_requirements[name] = {"image": image, "required_binaries": sorted(set(required))}
+            probes.setdefault(image, set()).update(required)
+
+        image_results: dict[str, Any] = {}
+        for image, binaries in sorted(probes.items()):
+            image_results[image] = await self._probe_image_binaries(image=image, binaries=sorted(binaries))
+
+        templates_result: dict[str, Any] = {}
+        for name, requirement in template_requirements.items():
+            image = requirement["image"]
+            image_result = image_results.get(image) or {}
+            binaries_result = image_result.get("binaries") or {}
+            missing = [
+                binary
+                for binary in requirement["required_binaries"]
+                if not (binaries_result.get(binary) or {}).get("available")
+            ]
+            templates_result[name] = {
+                **requirement,
+                "available": not missing and bool(image_result.get("ok")),
+                "missing_binaries": missing,
+                "image_probe": image_result,
+            }
+
+        return {
+            "ok": all(item.get("available") for item in templates_result.values()) if templates_result else True,
+            "templates": templates_result,
+            "images": image_results,
+        }
+
+    async def _probe_image_binaries(self, *, image: str, binaries: list[str]) -> dict[str, Any]:
+        if not image:
+            return {"ok": False, "image": image, "error": "template image is empty", "binaries": {}}
+        if not await self.docker.image_exists(image):
+            return {
+                "ok": False,
+                "image": image,
+                "image_exists": False,
+                "error": "image is not available locally; build or pull it before readiness probing",
+                "binaries": {binary: {"available": False, "path": None} for binary in binaries},
+            }
+        script = (
+            "import json, shutil, sys; "
+            "tools=json.loads(sys.argv[1]); "
+            "print(json.dumps({'binaries': {tool: {'available': bool(shutil.which(tool)), 'path': shutil.which(tool)} for tool in tools}}))"
+        )
+        labels = {
+            "dieaudit.managed": "true",
+            "dieaudit.role": "tool-probe",
+            "dieaudit.ttl": utc_ttl(hours=1),
+        }
+        try:
+            result = await self.docker.run_ephemeral_container(
+                name=f"{self.settings.dynamic_container_prefix}-tool-probe-{uuid.uuid4().hex[:8]}",
+                image=image,
+                command=["python", "-c", script, json.dumps(binaries)],
+                labels=labels,
+                timeout_seconds=30,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "image": image,
+                "image_exists": True,
+                "error": str(exc),
+                "binaries": {binary: {"available": False, "path": None} for binary in binaries},
+            }
+        parsed = self._parse_probe_logs(result.get("logs") or "")
+        probe_binaries = parsed.get("binaries") if isinstance(parsed, dict) else {}
+        return {
+            "ok": result.get("exit_code") == 0 and all((probe_binaries.get(binary) or {}).get("available") for binary in binaries),
+            "image": image,
+            "image_exists": True,
+            "exit_code": result.get("exit_code"),
+            "binaries": {
+                binary: probe_binaries.get(binary, {"available": False, "path": None})
+                for binary in binaries
+            },
+            "raw": parsed,
+        }
+
     async def sandbox_capabilities(self) -> dict[str, Any]:
         try:
             ping = await self.docker.ping()
@@ -1398,6 +1488,17 @@ class RuntimeOrchestrator:
     def _safe_artifact_name(value: str) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip("/\\"))
         return cleaned.strip("-")[:96] or "container"
+
+    @staticmethod
+    def _parse_probe_logs(logs: str) -> dict[str, Any]:
+        for line in reversed([item.strip() for item in logs.splitlines() if item.strip()]):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return {"error": "probe did not emit JSON", "logs_tail": logs[-1000:]}
 
     @staticmethod
     def _bind_mount(source: str, target: str, *, read_only: bool) -> dict[str, Any]:

@@ -42,6 +42,11 @@ async def health(request):
     return JSONResponse({"ok": True, "service": MCP_NAME, "workspace_root": str(WORKSPACE_ROOT)})
 
 
+@mcp.custom_route("/tools/capabilities", methods=["GET"])
+async def capabilities_route(request):
+    return JSONResponse(tool_capabilities())
+
+
 @mcp.custom_route("/tools/semgrep_scan", methods=["POST"])
 async def semgrep_scan_route(request):
     body = await request.json()
@@ -294,6 +299,19 @@ def semgrep_scan(
         "findings": findings,
         "stdout": result.stdout[-4000:],
         "stderr": result.stderr[-4000:],
+    }
+
+
+def tool_capabilities(required: list[str] | None = None) -> dict[str, Any]:
+    tools = required or ["rg", "semgrep", "syft", "codeql", "joern"]
+    binaries: dict[str, dict[str, Any]] = {}
+    for tool in tools:
+        path = shutil.which(tool)
+        binaries[tool] = {"available": bool(path), "path": path}
+    return {
+        "ok": all(item["available"] for item in binaries.values()),
+        "service": MCP_NAME,
+        "binaries": binaries,
     }
 
 

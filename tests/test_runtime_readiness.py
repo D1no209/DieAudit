@@ -38,6 +38,54 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
     assert checks["production_mcp_templates"]["status"] == "pass"
 
 
+def test_heavy_analyzer_readiness_passes_when_required_binaries_available() -> None:
+    checks = {
+        check["id"]: check
+        for check in _template_readiness_checks(
+            [],
+            [
+                {"name": "joern-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"]},
+                {"name": "codeql-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["codeql"]},
+            ],
+            {
+                "ok": True,
+                "templates": {
+                    "joern-mcp": {"available": True, "missing_binaries": []},
+                    "codeql-mcp": {"available": True, "missing_binaries": []},
+                },
+            },
+        )
+    }
+
+    assert checks["heavy_analyzers"]["status"] == "pass"
+
+
+def test_heavy_analyzer_readiness_warns_when_required_binaries_missing() -> None:
+    checks = {
+        check["id"]: check
+        for check in _template_readiness_checks(
+            [],
+            [
+                {"name": "joern-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"]},
+                {"name": "codeql-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["codeql"]},
+            ],
+            {
+                "ok": False,
+                "templates": {
+                    "joern-mcp": {"available": False, "missing_binaries": ["joern"]},
+                    "codeql-mcp": {"available": False, "missing_binaries": ["codeql"]},
+                },
+            },
+        )
+    }
+
+    assert checks["heavy_analyzers"]["status"] == "warn"
+    assert checks["heavy_analyzers"]["detail"]["missing_binaries"] == {
+        "codeql-mcp": ["codeql"],
+        "joern-mcp": ["joern"],
+    }
+
+
 def test_template_readiness_fails_missing_or_mock_production_templates() -> None:
     checks = {
         check["id"]: check

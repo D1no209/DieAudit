@@ -139,10 +139,10 @@ class DockerClient:
     async def inspect_container(self, container_id: str) -> dict[str, Any]:
         return await self.request("GET", f"/containers/{container_id}/json")
 
-    async def logs(self, container_id: str, *, tail: int | str = 200) -> str:
+    async def logs(self, container_id: str, *, tail: int | str = 200, timestamps: bool = True) -> str:
         response = await self.client.get(
             f"/containers/{container_id}/logs",
-            params={"stdout": 1, "stderr": 1, "tail": tail, "timestamps": 1},
+            params={"stdout": 1, "stderr": 1, "tail": tail, "timestamps": 1 if timestamps else 0},
         )
         if response.status_code >= 400:
             raise DockerApiError(f"GET /containers/{container_id}/logs failed: {response.status_code} {response.text}")
@@ -181,6 +181,41 @@ class DockerClient:
             await self.request("DELETE", f"/containers/{container_id}", params={"force": 1 if force else 0, "v": 1})
         except DockerApiError:
             pass
+
+    async def run_ephemeral_container(
+        self,
+        *,
+        name: str,
+        image: str,
+        command: list[str],
+        labels: dict[str, str] | None = None,
+        timeout_seconds: int = 30,
+        network_mode: str = "none",
+    ) -> dict[str, Any]:
+        payload = {
+            "Image": image,
+            "Entrypoint": [],
+            "Cmd": command,
+            "Labels": labels or {},
+            "HostConfig": {
+                "NetworkMode": network_mode,
+                "ReadonlyRootfs": True,
+                "AutoRemove": False,
+            },
+        }
+        created = await self.create_container(name, payload)
+        container_id = created["Id"]
+        try:
+            await self.start_container(container_id)
+            try:
+                result = await asyncio.wait_for(self.wait_container(container_id), timeout=timeout_seconds)
+            except asyncio.TimeoutError as exc:
+                await self.stop_container(container_id, timeout_seconds=1)
+                raise DockerApiError(f"ephemeral container timed out after {timeout_seconds}s: {name}") from exc
+            logs = await self.logs(container_id, tail="all", timestamps=False)
+            return {"container_id": container_id, "exit_code": result.get("StatusCode"), "logs": logs}
+        finally:
+            await self.remove_container(container_id, force=True)
 
     async def wait_for_healthy(self, container_id: str, timeout_seconds: int = 45) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds

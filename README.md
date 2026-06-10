@@ -50,6 +50,14 @@ docker compose --profile core config | Select-String "DEFAULT_SANDBOX_RUNTIME|EN
 Invoke-RestMethod http://localhost:8080/gateway/runtime/sandbox/capabilities | ConvertTo-Json -Depth 10
 ```
 
+Check MCP tool image capabilities:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/gateway/runtime/tool-capabilities | ConvertTo-Json -Depth 10
+```
+
+MCP templates can declare `required_binaries`; readiness probes the configured image with a short-lived isolated container and reports missing CLIs such as `codeql` or `joern`.
+
 Create the first persisted admin key from the running Compose environment without opening an unauthenticated browser/API setup flow:
 
 ```powershell

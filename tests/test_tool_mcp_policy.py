@@ -36,3 +36,11 @@ def test_response_headers_strip_credentials() -> None:
     safe = tool_mcp._safe_response_headers(headers)
 
     assert safe == {"content-type": "text/plain"}
+
+
+def test_tool_capabilities_reports_requested_binaries() -> None:
+    result = tool_mcp.tool_capabilities(["python", "definitely-not-a-dieaudit-tool"])
+
+    assert result["binaries"]["python"]["available"] is True
+    assert result["binaries"]["definitely-not-a-dieaudit-tool"]["available"] is False
+    assert result["ok"] is False

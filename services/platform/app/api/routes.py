@@ -1008,6 +1008,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return await proxy_gateway("/runtime/sandbox/capabilities")
         return await runtime.sandbox_capabilities()
 
+    @router.get("/runtime/tool-capabilities")
+    async def tool_capabilities() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/tool-capabilities")
+        return await runtime.tool_image_capabilities(mcp_template_store().list())
+
     @router.get("/runtime/policy")
     async def runtime_policy() -> dict[str, Any]:
         return {
@@ -1110,12 +1117,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "detail": embedding,
             }
         )
-        checks.extend(
-            _template_readiness_checks(
-                agent_template_store().list(),
-                mcp_template_store().list(),
-            )
-        )
+        agent_templates = agent_template_store().list()
+        mcp_templates = mcp_template_store().list()
+        tool_capability_result: dict[str, Any] | None = None
+        try:
+            tool_capability_result = await runtime.tool_image_capabilities(mcp_templates)
+        except Exception as exc:
+            tool_capability_result = {"ok": False, "error": str(exc), "templates": {}}
+        checks.extend(_template_readiness_checks(agent_templates, mcp_templates, tool_capability_result))
         fail_count = sum(1 for check in checks if check["status"] == "fail")
         warn_count = sum(1 for check in checks if check["status"] == "warn")
         return {
@@ -1748,7 +1757,11 @@ async def _raise_if_cancelled(audit_run_id: str) -> None:
         raise PipelineCancelled(await _cancel_reason(audit_run_id) or "cancel_requested")
 
 
-def _template_readiness_checks(agent_templates: list[dict[str, Any]], mcp_templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _template_readiness_checks(
+    agent_templates: list[dict[str, Any]],
+    mcp_templates: list[dict[str, Any]],
+    tool_capabilities: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     agents = {str(item.get("name") or ""): item for item in agent_templates}
     mcps = {str(item.get("name") or ""): item for item in mcp_templates}
 
@@ -1767,6 +1780,12 @@ def _template_readiness_checks(agent_templates: list[dict[str, Any]], mcp_templa
         if "mock-mcp" in str(mcps[name].get("image") or "")
     )
     optional_heavy = sorted(OPTIONAL_HEAVY_MCP_TEMPLATES & set(mcps))
+    heavy_missing = {
+        name: (tool_capabilities.get("templates", {}).get(name) or {}).get("missing_binaries", [])
+        for name in optional_heavy
+    } if tool_capabilities else {}
+    heavy_unavailable = sorted(name for name, missing in heavy_missing.items() if missing)
+    heavy_probe_error = bool(tool_capabilities and tool_capabilities.get("error"))
     legacy_mock_agents = sorted(
         name
         for name, template in agents.items()
@@ -1796,14 +1815,25 @@ def _template_readiness_checks(agent_templates: list[dict[str, Any]], mcp_templa
         },
     ]
     if optional_heavy:
+        status = "pass"
+        message = "Heavy analyzer templates have required CLIs available in their configured tool images."
+        if tool_capabilities is None:
+            status = "warn"
+            message = "Heavy analyzer templates are present, but tool image capabilities were not probed."
+        elif heavy_probe_error or heavy_unavailable:
+            status = "warn"
+            message = "Heavy analyzer templates are present, but one or more required CLIs are unavailable in their configured images."
         checks.append(
             {
                 "id": "heavy_analyzers",
-                "title": "Heavy analyzers require dedicated tool images",
-                "status": "warn",
+                "title": "Heavy analyzers have required tool CLIs",
+                "status": status,
                 "detail": {
                     "templates": optional_heavy,
-                    "message": "Joern and CodeQL templates are present; ensure the deployed tool image includes their CLIs before relying on them.",
+                    "unavailable": heavy_unavailable,
+                    "missing_binaries": heavy_missing,
+                    "tool_capabilities": tool_capabilities,
+                    "message": message,
                 },
             }
         )
