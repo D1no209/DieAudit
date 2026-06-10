@@ -117,7 +117,13 @@ async def authenticate_api_key(settings: Settings, supplied: str | None) -> dict
         )
         if not row:
             return None
-        row.last_used_at = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        if _api_key_is_expired(row, now=now):
+            row.status = "inactive"
+            row.deactivated_at = now
+            await session.commit()
+            return None
+        row.last_used_at = now
         await session.commit()
         return api_key_principal(row)
 
@@ -160,6 +166,22 @@ def api_key_principal(row: ApiKeyRecord) -> dict[str, Any]:
         "scopes": row.scopes or [],
         "metadata": row.metadata_json or {},
     }
+
+
+def _api_key_is_expired(row: ApiKeyRecord, *, now: datetime | None = None) -> bool:
+    metadata = row.metadata_json or {}
+    if not isinstance(metadata, dict):
+        return False
+    raw_expires_at = metadata.get("expires_at")
+    if not raw_expires_at:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(str(raw_expires_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= (now or datetime.now(timezone.utc))
 
 
 def api_key_record_to_dict(row: ApiKeyRecord) -> dict[str, Any]:
