@@ -28,6 +28,16 @@ but cannot install safely by itself.
   - Keep `ALLOWED_GIT_URL_SCHEMES=https,ssh` unless a deployment explicitly
     needs another remote scheme.
   - Do not allow `file://` or local Git paths in production.
+- Configure local storage retention:
+  - Use `/runtime/storage` to review artifact and workspace storage usage.
+  - Use `/runtime/storage/cleanup` with the default `dry_run=true` before
+    destructive cleanup.
+  - Tune `RUNTIME_PACKAGE_RETENTION_DAYS`, `UPLOAD_STAGING_RETENTION_DAYS`,
+    `UNREFERENCED_WORKSPACE_RETENTION_DAYS`, and
+    `UNREFERENCED_SNAPSHOT_RETENTION_DAYS` for the deployment's evidence
+    retention policy.
+  - Project workspaces and snapshot archives still referenced by
+    `ProjectSnapshot` records are preserved by cleanup.
 - Use a strong sandbox runtime for untrusted PoC execution:
   - Install gVisor `runsc` or another strong runtime such as Kata.
   - Register the runtime in Docker Engine and restart Docker.

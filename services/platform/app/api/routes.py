@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import delete, select
 
@@ -40,6 +40,7 @@ from app.schemas import (
     RunPocRequest,
     StartAgentRunRequest,
     StartSandboxServiceRequest,
+    StorageCleanupRequest,
     TemplateBody,
     ValidatorScaleRequest,
 )
@@ -57,6 +58,7 @@ from app.services.finding_dedupe import find_existing_finding, finding_identity
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService
 from app.services.pipeline_executor import PipelineCancelled, PipelineExecutor
 from app.services.pipeline_recovery import is_active_pipeline
+from app.services.storage_cleanup import StorageCleanupService
 from app.services.templates import TemplateStore
 from app.services.worker_heartbeat import list_worker_heartbeats, workflow_worker_health
 from app.services.workspace import WorkspaceImportError, WorkspaceService
@@ -1028,6 +1030,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "retention_days": settings.platform_audit_event_retention_days,
                 "max_rows": settings.platform_audit_event_max_rows,
             },
+            "local_storage": {
+                "runtime_package_retention_days": settings.runtime_package_retention_days,
+                "upload_staging_retention_days": settings.upload_staging_retention_days,
+                "unreferenced_workspace_retention_days": settings.unreferenced_workspace_retention_days,
+                "unreferenced_snapshot_retention_days": settings.unreferenced_snapshot_retention_days,
+                "cleanup_max_entries": settings.storage_cleanup_max_entries,
+            },
             "http_guards": {
                 "max_request_body_bytes": settings.max_request_body_bytes,
                 "max_upload_bytes": settings.max_upload_bytes,
@@ -1197,6 +1206,34 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if runtime is None:
             return await proxy_gateway("/runtime/cleanup-expired", method="POST")
         return await runtime.cleanup_expired_runtime()
+
+    @router.get("/runtime/storage")
+    async def runtime_storage() -> dict[str, Any]:
+        return StorageCleanupService(settings).summary()
+
+    @router.post("/runtime/storage/cleanup")
+    async def cleanup_runtime_storage(
+        body: StorageCleanupRequest | None = Body(default=None),
+    ) -> dict[str, Any]:
+        body = body or StorageCleanupRequest()
+        service = StorageCleanupService(settings)
+        policy = service.policy(
+            runtime_package_retention_days=body.runtime_package_retention_days,
+            upload_staging_retention_days=body.upload_staging_retention_days,
+            unreferenced_workspace_retention_days=body.unreferenced_workspace_retention_days,
+            unreferenced_snapshot_retention_days=body.unreferenced_snapshot_retention_days,
+            max_entries=body.max_entries,
+        )
+        async with SessionLocal() as session:
+            snapshots = list((await session.execute(select(ProjectSnapshot))).scalars())
+            referenced_workspaces = [row.workspace_path for row in snapshots if row.workspace_path]
+            referenced_snapshot_artifacts = [row.artifact_path for row in snapshots if row.artifact_path]
+        return service.cleanup(
+            dry_run=body.dry_run,
+            policy=policy,
+            referenced_workspace_paths=referenced_workspaces,
+            referenced_snapshot_paths=referenced_snapshot_artifacts,
+        )
 
     @router.get("/runtime/tool-images")
     async def tool_images() -> dict[str, Any]:

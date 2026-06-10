@@ -8,6 +8,7 @@ from .runtime import (
     RunPocRequest,
     StartAgentRunRequest,
     StartSandboxServiceRequest,
+    StorageCleanupRequest,
     TemplateBody,
     ValidatorScaleRequest,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "RunPocRequest",
     "StartAgentRunRequest",
     "StartSandboxServiceRequest",
+    "StorageCleanupRequest",
     "TemplateBody",
     "ValidatorScaleRequest",
 ]

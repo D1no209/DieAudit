@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     default_container_tmpfs: str = "/tmp:rw,nosuid,size=128m"
     platform_audit_event_retention_days: int = 30
     platform_audit_event_max_rows: int = 10000
+    runtime_package_retention_days: int = 7
+    upload_staging_retention_days: int = 1
+    unreferenced_workspace_retention_days: int = 30
+    unreferenced_snapshot_retention_days: int = 90
+    storage_cleanup_max_entries: int = 500
     pipeline_recovery_on_startup: bool = True
     pipeline_execution_backend: str = "background-tasks"
     pipeline_worker_poll_interval_seconds: float = 2.0

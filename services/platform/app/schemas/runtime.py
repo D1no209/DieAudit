@@ -65,6 +65,15 @@ class A2AAgentCardRequest(BaseModel):
     url: str
 
 
+class StorageCleanupRequest(BaseModel):
+    dry_run: bool = True
+    runtime_package_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    upload_staging_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    unreferenced_workspace_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    unreferenced_snapshot_retention_days: int | None = Field(default=None, ge=0, le=3650)
+    max_entries: int | None = Field(default=None, ge=1, le=10000)
+
+
 class ValidatorScaleRequest(BaseModel):
     project_id: str = "demo-project"
     findings: list[dict[str, Any]] = Field(default_factory=list)
