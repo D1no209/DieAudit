@@ -270,27 +270,32 @@ def semgrep_scan(
         str(output_path),
         str(WORKSPACE_ROOT),
     ]
+    evidence = _command_evidence("semgrep", command, timeout_seconds=timeout_seconds, output_path=output_path)
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
         return {
             "ok": False,
             "available": True,
+            **evidence,
             "timeout_seconds": timeout_seconds,
             "error": "semgrep scan timed out",
             "stdout": _tail_text(exc.stdout),
             "stderr": _tail_text(exc.stderr),
             "artifact_path": str(output_path) if output_path.exists() else None,
+            "artifact": _artifact_evidence(output_path),
             "findings": [],
         }
     if result.returncode not in {0, 1}:
         return {
             "ok": False,
             "available": True,
+            **evidence,
             "exit_code": result.returncode,
             "stdout": result.stdout[-4000:],
             "stderr": result.stderr[-4000:],
             "artifact_path": str(output_path) if output_path.exists() else None,
+            "artifact": _artifact_evidence(output_path),
             "findings": [],
         }
     parsed = _load_json_artifact(output_path) if output_format == "json" else None
@@ -298,8 +303,10 @@ def semgrep_scan(
     return {
         "ok": True,
         "available": True,
+        **evidence,
         "exit_code": result.returncode,
         "artifact_path": str(output_path),
+        "artifact": _artifact_evidence(output_path),
         "findings": findings,
         "stdout": result.stdout[-4000:],
         "stderr": result.stderr[-4000:],
@@ -350,32 +357,39 @@ def generate_sbom(output_format: str = "spdx-json", timeout_seconds: int = 120) 
     artifact_dir = _artifact_dir("sbom")
     output_path = artifact_dir / f"sbom.{safe_format}.json"
     command = [syft, str(WORKSPACE_ROOT), "-o", output_format]
+    evidence = _command_evidence("syft", command, timeout_seconds=timeout_seconds, output_path=output_path)
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
         return {
             "ok": False,
             "available": True,
+            **evidence,
             "timeout_seconds": timeout_seconds,
             "error": "syft sbom generation timed out",
             "stdout": _tail_text(exc.stdout),
             "stderr": _tail_text(exc.stderr),
             "artifact_path": None,
+            "artifact": _artifact_evidence(output_path),
         }
     if result.returncode != 0:
         return {
             "ok": False,
             "available": True,
+            **evidence,
             "exit_code": result.returncode,
             "stderr": result.stderr[-4000:],
             "artifact_path": None,
+            "artifact": _artifact_evidence(output_path),
         }
     output_path.write_text(result.stdout, encoding="utf-8")
     return {
         "ok": True,
         "available": True,
+        **evidence,
         "exit_code": result.returncode,
         "artifact_path": str(output_path),
+        "artifact": _artifact_evidence(output_path),
         "bytes": output_path.stat().st_size,
     }
 
@@ -1108,31 +1122,63 @@ def _tool_unavailable(tool: str, error: str) -> dict[str, Any]:
     }
 
 
+def _command_evidence(
+    tool: str,
+    command: list[str],
+    *,
+    timeout_seconds: int | float,
+    output_path: Path | None = None,
+) -> dict[str, Any]:
+    return {
+        "tool": tool,
+        "command": [str(item) for item in command],
+        "cwd": str(WORKSPACE_ROOT),
+        "timeout_seconds": timeout_seconds,
+        "artifact": _artifact_evidence(output_path),
+    }
+
+
+def _artifact_evidence(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    if not path.exists() or not path.is_file():
+        return {"path": str(path), "exists": False}
+    stat = path.stat()
+    return {
+        "path": str(path),
+        "exists": True,
+        "size": stat.st_size,
+        "mtime": stat.st_mtime,
+    }
+
+
 def _run_tool_command(tool: str, command: list[str], output_path: Path, timeout_seconds: int) -> dict[str, Any]:
     timeout_seconds = min(max(int(timeout_seconds), 5), 1800)
+    evidence = _command_evidence(tool, command, timeout_seconds=timeout_seconds, output_path=output_path)
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
         return {
             "ok": False,
             "available": True,
-            "tool": tool,
-            "timeout_seconds": timeout_seconds,
+            **evidence,
             "error": f"{tool} command timed out",
             "stdout": _tail_text(exc.stdout),
             "stderr": _tail_text(exc.stderr),
             "artifact_path": None,
+            "artifact": _artifact_evidence(output_path),
         }
     if result.stdout:
         output_path.write_text(result.stdout, encoding="utf-8", errors="replace")
     return {
         "ok": result.returncode == 0,
         "available": True,
-        "tool": tool,
+        **evidence,
         "exit_code": result.returncode,
         "stdout": result.stdout[-4000:],
         "stderr": result.stderr[-4000:],
         "artifact_path": str(output_path) if output_path.exists() else None,
+        "artifact": _artifact_evidence(output_path),
     }
 
 

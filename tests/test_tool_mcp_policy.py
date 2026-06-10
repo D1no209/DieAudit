@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,67 @@ def test_tool_capabilities_reports_requested_binaries() -> None:
     assert result["binaries"]["python"]["available"] is True
     assert result["binaries"]["definitely-not-a-dieaudit-tool"]["available"] is False
     assert result["ok"] is False
+
+
+def test_semgrep_scan_returns_reproducible_command_and_artifact_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tool_mcp, "WORKSPACE_ROOT", tmp_path.resolve())
+    monkeypatch.setattr(tool_mcp, "ARTIFACT_ROOT", (tmp_path / "artifacts").resolve())
+    monkeypatch.setattr(tool_mcp, "MCP_NAME", "semgrep-mcp")
+    monkeypatch.setattr(tool_mcp.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool == "semgrep" else None)
+
+    def fake_run(command, **_kwargs):
+        output_path = Path(command[command.index("--output") + 1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps({"results": []}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="scan ok", stderr="")
+
+    monkeypatch.setattr(tool_mcp.subprocess, "run", fake_run)
+
+    result = tool_mcp.semgrep_scan(timeout_seconds=15)
+
+    assert result["ok"] is True
+    assert result["tool"] == "semgrep"
+    assert result["command"][:3] == ["/usr/bin/semgrep", "scan", "--config"]
+    assert result["cwd"] == str(tmp_path.resolve())
+    assert result["artifact"]["exists"] is True
+    assert result["artifact"]["size"] > 0
+
+
+def test_generate_sbom_returns_reproducible_command_and_artifact_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tool_mcp, "WORKSPACE_ROOT", tmp_path.resolve())
+    monkeypatch.setattr(tool_mcp, "ARTIFACT_ROOT", (tmp_path / "artifacts").resolve())
+    monkeypatch.setattr(tool_mcp, "MCP_NAME", "sca-mcp")
+    monkeypatch.setattr(tool_mcp.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool == "syft" else None)
+    monkeypatch.setattr(
+        tool_mcp.subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, stdout='{"sbom": true}', stderr=""),
+    )
+
+    result = tool_mcp.generate_sbom(output_format="spdx-json", timeout_seconds=15)
+
+    assert result["ok"] is True
+    assert result["tool"] == "syft"
+    assert result["command"] == ["/usr/bin/syft", str(tmp_path.resolve()), "-o", "spdx-json"]
+    assert result["artifact"]["exists"] is True
+    assert result["artifact"]["size"] == len('{"sbom": true}')
+
+
+def test_run_tool_command_returns_trace_on_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tool_mcp, "WORKSPACE_ROOT", tmp_path.resolve())
+
+    def fake_run(command, **_kwargs):
+        raise subprocess.TimeoutExpired(command, timeout=5, output="partial stdout", stderr="partial stderr")
+
+    monkeypatch.setattr(tool_mcp.subprocess, "run", fake_run)
+
+    result = tool_mcp._run_tool_command("codeql", ["codeql", "query", "run"], tmp_path / "query.bqrs", 5)
+
+    assert result["ok"] is False
+    assert result["tool"] == "codeql"
+    assert result["command"] == ["codeql", "query", "run"]
+    assert result["artifact"]["exists"] is False
+    assert "timed out" in result["error"]
 
 
 def test_detect_dependencies_covers_common_manifests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
