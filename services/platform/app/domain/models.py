@@ -71,6 +71,18 @@ class ApiKeyRecord(TimestampMixin, Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class WorkerHeartbeat(TimestampMixin, Base):
+    __tablename__ = "worker_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    service_name: Mapped[str] = mapped_column(String(128), index=True)
+    hostname: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="starting")
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    current_audit_run_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class Project(TimestampMixin, Base):
     __tablename__ = "projects"
 

@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     pipeline_recovery_on_startup: bool = True
     pipeline_execution_backend: str = "background-tasks"
     pipeline_worker_poll_interval_seconds: float = 2.0
+    pipeline_worker_heartbeat_interval_seconds: float = 5.0
+    pipeline_worker_heartbeat_ttl_seconds: float = 30.0
 
 
 @lru_cache

@@ -181,6 +181,17 @@ type RuntimeReadiness = {
   }>;
 };
 
+type WorkerHeartbeat = {
+  worker_id: string;
+  service_name: string;
+  hostname: string;
+  status: string;
+  last_seen_at: string;
+  age_seconds?: number;
+  current_audit_run_id?: string;
+  metadata?: Record<string, unknown>;
+};
+
 type SandboxCapabilities = {
   ok?: boolean;
   docker_available?: boolean;
@@ -291,6 +302,7 @@ function App() {
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
   const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy>();
   const [runtimeReadiness, setRuntimeReadiness] = useState<RuntimeReadiness>();
+  const [workerHeartbeats, setWorkerHeartbeats] = useState<WorkerHeartbeat[]>([]);
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
@@ -342,6 +354,7 @@ function App() {
       readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
       readJson("/gateway/runtime/policy").then(setRuntimePolicy).catch(() => setRuntimePolicy(undefined));
       readJson("/gateway/runtime/readiness").then(setRuntimeReadiness).catch(() => setRuntimeReadiness(undefined));
+      readJson("/gateway/runtime/workers").then((data) => setWorkerHeartbeats(data.workers || [])).catch(() => setWorkerHeartbeats([]));
       readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
       readJson("/gateway/auth/api-keys").then(setApiKeys).catch(() => setApiKeys([]));
       readJson("/gateway/platform/audit-events?limit=100").then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
@@ -866,6 +879,15 @@ function App() {
     { title: "Request ID", dataIndex: "request_id", width: 260, ellipsis: true },
   ];
 
+  const workerColumns: ColumnsType<WorkerHeartbeat> = [
+    { title: "Worker", dataIndex: "worker_id", ellipsis: true },
+    { title: "Service", dataIndex: "service_name", render: (value) => <Tag>{value}</Tag> },
+    { title: "Status", dataIndex: "status", render: (value) => <Tag color={workerStatusColor(value)}>{value}</Tag> },
+    { title: "Current Run", dataIndex: "current_audit_run_id", render: (value) => value || "-" },
+    { title: "Age", dataIndex: "age_seconds", render: (value) => `${Math.round(Number(value || 0))}s` },
+    { title: "Last Seen", dataIndex: "last_seen_at" },
+  ];
+
   const apiKeyColumns: ColumnsType<ApiKeyRecord> = [
     { title: "Name", dataIndex: "name" },
     { title: "Status", dataIndex: "status", render: (value) => <Tag color={value === "active" ? "green" : "default"}>{value}</Tag> },
@@ -1097,17 +1119,26 @@ function App() {
                 label: "Readiness",
                 children: (
                   <Card>
-                    <List
-                      dataSource={runtimeReadiness?.checks || []}
-                      renderItem={(item) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={<Space><Tag color={readinessColor(item.status)}>{item.status}</Tag><Text>{item.title}</Text></Space>}
-                            description={<pre>{JSON.stringify(item.detail || {}, null, 2)}</pre>}
-                          />
-                        </List.Item>
-                      )}
-                    />
+                    <Space direction="vertical" size={16} className="drawer-stack">
+                      <List
+                        dataSource={runtimeReadiness?.checks || []}
+                        renderItem={(item) => (
+                          <List.Item>
+                            <List.Item.Meta
+                              title={<Space><Tag color={readinessColor(item.status)}>{item.status}</Tag><Text>{item.title}</Text></Space>}
+                              description={<pre>{JSON.stringify(item.detail || {}, null, 2)}</pre>}
+                            />
+                          </List.Item>
+                        )}
+                      />
+                      <Table
+                        rowKey="worker_id"
+                        columns={workerColumns}
+                        dataSource={workerHeartbeats}
+                        pagination={false}
+                        size="small"
+                      />
+                    </Space>
                   </Card>
                 ),
               },
@@ -1342,6 +1373,12 @@ function readinessColor(value: string) {
   if (value === "fail") return "red";
   if (value === "warn") return "orange";
   return "green";
+}
+
+function workerStatusColor(value: string) {
+  if (value === "running") return "green";
+  if (value === "idle" || value === "starting") return "blue";
+  return "default";
 }
 
 function artifactUrl(artifact?: ArtifactRef, fallbackPath?: string) {

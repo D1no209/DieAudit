@@ -28,6 +28,7 @@ from app.repositories import init_db
 from app.runtime import RuntimeOrchestrator
 from app.services.pipeline_executor import PipelineExecutor
 from app.services.pipeline_queue import claim_next_queued_pipeline
+from app.services.worker_heartbeat import record_worker_heartbeat
 from app.settings import get_settings
 
 
@@ -59,8 +60,11 @@ def build_pipeline_executor(settings, runtime: RuntimeOrchestrator) -> PipelineE
 async def run_worker() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = get_settings()
-    worker_id = f"{settings.service_name}-{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+    hostname = socket.gethostname()
+    worker_id = f"{settings.service_name}-{hostname}-{uuid.uuid4().hex[:8]}"
     stop_event = asyncio.Event()
+    current_audit_run_id: str | None = None
+    worker_status = "starting"
 
     def request_stop() -> None:
         stop_event.set()
@@ -73,8 +77,31 @@ async def run_worker() -> None:
     await init_db()
     runtime = RuntimeOrchestrator(settings)
     executor = build_pipeline_executor(settings, runtime)
+    heartbeat_interval = max(1.0, settings.pipeline_worker_heartbeat_interval_seconds)
+
+    async def heartbeat_loop() -> None:
+        while not stop_event.is_set():
+            try:
+                await record_worker_heartbeat(
+                    worker_id=worker_id,
+                    service_name=settings.service_name,
+                    hostname=hostname,
+                    status=worker_status,
+                    current_audit_run_id=current_audit_run_id,
+                    metadata={
+                        "backend": settings.pipeline_execution_backend,
+                        "poll_interval_seconds": settings.pipeline_worker_poll_interval_seconds,
+                    },
+                )
+            except Exception:
+                logger.exception("failed to record worker heartbeat worker_id=%s", worker_id)
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop_event.wait(), timeout=heartbeat_interval)
+
+    heartbeat_task = asyncio.create_task(heartbeat_loop())
     logger.info("workflow worker started worker_id=%s backend=%s", worker_id, settings.pipeline_execution_backend)
     try:
+        worker_status = "idle"
         while not stop_event.is_set():
             claimed = await claim_next_queued_pipeline(worker_id=worker_id)
             if not claimed:
@@ -82,6 +109,8 @@ async def run_worker() -> None:
                     await asyncio.wait_for(stop_event.wait(), timeout=settings.pipeline_worker_poll_interval_seconds)
                 continue
             audit_run_id = claimed["audit_run_id"]
+            current_audit_run_id = audit_run_id
+            worker_status = "running"
             logger.info("claimed audit pipeline audit_run_id=%s worker_id=%s", audit_run_id, worker_id)
             try:
                 await executor.execute(audit_run_id)
@@ -90,7 +119,24 @@ async def run_worker() -> None:
                 await _mark_audit_run_status(audit_run_id, "failed")
                 await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error="workflow worker crashed")
                 await _record_audit_run_event(audit_run_id, "pipeline_failed", {"error": "workflow worker crashed"})
+            finally:
+                current_audit_run_id = None
+                worker_status = "idle"
     finally:
+        worker_status = "stopped"
+        stop_event.set()
+        with contextlib.suppress(Exception):
+            await record_worker_heartbeat(
+                worker_id=worker_id,
+                service_name=settings.service_name,
+                hostname=hostname,
+                status=worker_status,
+                current_audit_run_id=None,
+                metadata={"backend": settings.pipeline_execution_backend},
+            )
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
         await runtime.close()
         logger.info("workflow worker stopped worker_id=%s", worker_id)
 

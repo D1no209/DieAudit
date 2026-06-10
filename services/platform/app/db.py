@@ -9,6 +9,7 @@ from app.domain.models import (
     McpTemplateRecord,
     RuntimeNetwork,
     RuntimePackage,
+    WorkerHeartbeat,
 )
 from app.repositories.database import SessionLocal, engine, get_session, init_db
 
@@ -23,6 +24,7 @@ __all__ = [
     "McpTemplateRecord",
     "RuntimeNetwork",
     "RuntimePackage",
+    "WorkerHeartbeat",
     "SessionLocal",
     "engine",
     "get_session",

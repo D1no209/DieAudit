@@ -12,6 +12,7 @@ from .models import (
     McpTemplateRecord,
     RuntimeNetwork,
     RuntimePackage,
+    WorkerHeartbeat,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "McpTemplateRecord",
     "RuntimeNetwork",
     "RuntimePackage",
+    "WorkerHeartbeat",
 ]

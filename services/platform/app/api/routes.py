@@ -51,6 +51,7 @@ from app.services.knowledge import KnowledgeIndexError, KnowledgeService
 from app.services.pipeline_executor import PipelineCancelled, PipelineExecutor
 from app.services.pipeline_recovery import is_active_pipeline
 from app.services.templates import TemplateStore
+from app.services.worker_heartbeat import list_worker_heartbeats, workflow_worker_health
 from app.services.workspace import WorkspaceImportError, WorkspaceService
 from app.settings import Settings, get_settings
 
@@ -1064,7 +1065,10 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 },
             },
         ]
-        checks.append(_pipeline_backend_readiness_check(settings))
+        worker_health: dict[str, Any] | None = None
+        if _normalized_pipeline_backend(settings) == "workflow-worker":
+            worker_health = await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
+        checks.append(_pipeline_backend_readiness_check(settings, worker_health=worker_health))
         try:
             docker = await runtime.docker_health()
             checks.append(
@@ -1117,6 +1121,21 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             "summary": {"fail": fail_count, "warn": warn_count, "pass": sum(1 for check in checks if check["status"] == "pass")},
             "checks": checks,
         }
+
+    @router.get("/runtime/workers")
+    async def runtime_workers() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/workers")
+        workers = await list_worker_heartbeats(service_name=None)
+        return {"workers": workers}
+
+    @router.get("/runtime/workers/health")
+    async def runtime_workers_health() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/workers/health")
+        return await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
 
     @router.get("/runtime/managed")
     async def managed_runtime() -> dict[str, Any]:
@@ -1802,7 +1821,7 @@ def _should_finalize_cancel(audit_run: dict[str, Any], removed_container_count: 
     return removed_container_count == 0 or not is_active_pipeline(audit_run.get("status"), audit_run.get("config"))
 
 
-def _pipeline_backend_readiness_check(settings: Settings) -> dict[str, Any]:
+def _pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = _normalized_pipeline_backend(settings)
     supported_backends = {"background-tasks", "workflow-worker"}
     production_backends = {"workflow-worker"}
@@ -1810,8 +1829,15 @@ def _pipeline_backend_readiness_check(settings: Settings) -> dict[str, Any]:
         status = "fail"
         message = f"Unsupported pipeline execution backend '{backend}'. Supported backends: {sorted(supported_backends)}."
     elif backend in production_backends:
-        status = "pass"
-        message = "Audit pipelines are claimed and executed by workflow-worker instead of FastAPI request-local background tasks."
+        if worker_health and worker_health.get("ok"):
+            status = "pass"
+            message = "Audit pipelines are claimed by at least one fresh workflow-worker heartbeat."
+        elif worker_health is None:
+            status = "fail"
+            message = "Workflow-worker backend is configured, but worker heartbeat health was not checked."
+        else:
+            status = "fail"
+            message = worker_health.get("message") or "No fresh workflow-worker heartbeat is available."
     else:
         status = "fail"
         message = (
@@ -1827,6 +1853,7 @@ def _pipeline_backend_readiness_check(settings: Settings) -> dict[str, Any]:
             "production_backends": sorted(production_backends),
             "supported_backends": sorted(supported_backends),
             "recovery_on_startup": settings.pipeline_recovery_on_startup,
+            "worker_health": worker_health,
             "message": message,
         },
     }
