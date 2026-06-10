@@ -1,39 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  ApiOutlined,
-  BugOutlined,
-  CloudServerOutlined,
   DeleteOutlined,
-  FolderOpenOutlined,
   FileTextOutlined,
-  PlayCircleOutlined,
   ReloadOutlined,
-  SafetyCertificateOutlined,
-  StopOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
   Button,
-  Card,
-  Collapse,
   ConfigProvider,
-  Descriptions,
-  Drawer,
-  Flex,
   Form,
-  Input,
   Layout,
-  List,
-  Menu,
   Popconfirm,
   Space,
-  Statistic,
-  Table,
-  Tabs,
   Tag,
-  Typography,
-  Upload,
   message,
   theme,
 } from "antd";
@@ -41,14 +21,24 @@ import type { ColumnsType } from "antd/es/table";
 import type { UploadFile } from "antd/es/upload/interface";
 import "antd/dist/reset.css";
 import "./styles.css";
-import { API_KEY_HEADER, API_KEY_STORAGE_KEY, formatHttpError, readJson } from "./api";
+import { API_KEY_HEADER, API_KEY_STORAGE_KEY, formatHttpError, readJson, withAuth } from "./api";
+import { AppDrawers } from "./components/AppDrawers";
+import { AppHeader } from "./components/AppHeader";
+import { AppNavigation } from "./components/AppNavigation";
+import { navigationItems, type AppView } from "./navigation";
+import { AdminPage } from "./pages/AdminPage";
+import { FindingsPage } from "./pages/FindingsPage";
+import { KnowledgePage } from "./pages/KnowledgePage";
+import { OverviewPage } from "./pages/OverviewPage";
+import { ProjectsPage } from "./pages/ProjectsPage";
+import { RuntimePage } from "./pages/RuntimePage";
 import type { AgentRun, ApiKeyRecord, ArtifactRef, AuditRun, AuthStatus, ContainerRow, EvidenceRow, Finding, FindingDetail, KnowledgeDocument, KnowledgeMatch, ManagedRuntime, PipelineStatus, PlatformAuditEvent, Project, ReportArtifact, RuntimePolicy, RuntimeReadiness, SandboxCapabilities, StorageSummary, WorkerHeartbeat } from "./types";
+import { artifactFileName, artifactUrl, isActiveRun, parseScopes, severityColor, workerStatusColor } from "./utils/format";
 
-const { Header, Content, Sider } = Layout;
-const { Title, Text, Paragraph } = Typography;
+const { Content } = Layout;
 
 function App() {
-  const [activeView, setActiveView] = useState("overview");
+  const [activeView, setActiveView] = useState<AppView>("overview");
   const [apiHealth, setApiHealth] = useState<any>();
   const [authStatus, setAuthStatus] = useState<AuthStatus>();
   const [dockerHealth, setDockerHealth] = useState<any>();
@@ -158,14 +148,15 @@ function App() {
   }
 
   async function uploadZipProject(values: { name: string }) {
-    if (!zipFiles[0]?.originFileObj) {
+    const zipFile = zipFiles[0]?.originFileObj;
+    if (!zipFile) {
       message.error("请选择 zip 文件");
       return;
     }
     await runAction(async () => {
       const formData = new FormData();
       formData.append("name", values.name);
-      formData.append("file", zipFiles[0].originFileObj);
+      formData.append("file", zipFile);
       const result = await readJson("/gateway/projects/upload-zip", { method: "POST", body: formData });
       setLastResponse(result);
       setSelectedProjectId(result.project.project_id);
@@ -508,7 +499,8 @@ function App() {
   }
 
   async function uploadKnowledgeDocument(values: { title: string; scope?: string; project_id?: string }) {
-    if (!knowledgeFiles[0]?.originFileObj) {
+    const knowledgeFile = knowledgeFiles[0]?.originFileObj;
+    if (!knowledgeFile) {
       message.error("请选择知识库文档");
       return;
     }
@@ -520,7 +512,7 @@ function App() {
       if (scope === "project" && values.project_id) {
         formData.append("project_id", values.project_id);
       }
-      formData.append("file", knowledgeFiles[0].originFileObj);
+      formData.append("file", knowledgeFile);
       const result = await readJson("/gateway/knowledge/documents", { method: "POST", body: formData });
       setLastResponse(result);
       knowledgeUploadForm.resetFields();
@@ -715,605 +707,155 @@ function App() {
     },
   ];
 
-  const visibleTabKeys: Record<string, string[]> = {
-    projects: ["agents", "pipeline", "reports"],
-    findings: ["findings"],
-    runtime: ["readiness", "containers"],
-    knowledge: ["knowledge"],
-    admin: ["platform-audit", "api-keys"],
-  };
-  const navigationItems = [
-    { key: "overview", icon: <ApiOutlined />, label: "Overview" },
-    { key: "projects", icon: <FolderOpenOutlined />, label: "Projects & Runs" },
-    { key: "findings", icon: <BugOutlined />, label: "Findings" },
-    { key: "runtime", icon: <CloudServerOutlined />, label: "Runtime" },
-    { key: "knowledge", icon: <FileTextOutlined />, label: "Knowledge" },
-    { key: "admin", icon: <SafetyCertificateOutlined />, label: "Admin" },
-  ];
+  function renderActivePage() {
+    if (activeView === "overview") {
+      return (
+        <OverviewPage
+          apiHealth={apiHealth}
+          authStatus={authStatus}
+          dockerHealth={dockerHealth}
+          findingsCount={findings.length}
+          managedRuntime={managedRuntime}
+          projectsCount={projects.length}
+          runtimeReadiness={runtimeReadiness}
+          sandboxCapabilities={sandboxCapabilities}
+        />
+      );
+    }
+
+    if (activeView === "projects") {
+      return (
+        <ProjectsPage
+          agentColumns={agentColumns}
+          agentRuns={agentRuns}
+          auditRun={auditRun}
+          gitForm={gitForm}
+          lastResponse={lastResponse}
+          loading={loading}
+          pipelineStatus={pipelineStatus}
+          projectColumns={projectColumns}
+          projects={projects}
+          reports={reports}
+          selectedProject={selectedProject}
+          selectedProjectId={selectedProjectId}
+          zipFiles={zipFiles}
+          zipForm={zipForm}
+          onCancelAuditRun={cancelAuditRun}
+          onCreateGitProject={createGitProject}
+          onGenerateReport={generateReport}
+          onOpenArtifact={openArtifact}
+          onRunJudge={runJudge}
+          onRunPipeline={runPipeline}
+          onRunSca={runSca}
+          onSelectProject={setSelectedProjectId}
+          onSetZipFiles={setZipFiles}
+          onStartAudit={startAudit}
+          onUploadZipProject={uploadZipProject}
+        />
+      );
+    }
+
+    if (activeView === "findings") {
+      return <FindingsPage findingColumns={findingColumns} findings={findings} />;
+    }
+
+    if (activeView === "runtime") {
+      return (
+        <RuntimePage
+          containerColumns={containerColumns}
+          containers={containers}
+          loading={loading}
+          runtimeReadiness={runtimeReadiness}
+          sandboxTarget={sandboxTarget}
+          workerColumns={workerColumns}
+          workerHeartbeats={workerHeartbeats}
+          onCleanup={cleanup}
+          onCleanupExpiredRuntime={cleanupExpiredRuntime}
+          onRunPocSmoke={runPocSmoke}
+          onRunSandboxTargetPoc={runSandboxTargetPoc}
+          onStartSandboxService={startSandboxService}
+        />
+      );
+    }
+
+    if (activeView === "knowledge") {
+      return (
+        <KnowledgePage
+          knowledgeColumns={knowledgeColumns}
+          knowledgeDocuments={knowledgeDocuments}
+          knowledgeFiles={knowledgeFiles}
+          knowledgeMatches={knowledgeMatches}
+          knowledgeSearchForm={knowledgeSearchForm}
+          knowledgeUploadForm={knowledgeUploadForm}
+          loading={loading}
+          selectedProjectId={selectedProjectId}
+          onSearchKnowledge={searchKnowledge}
+          onSetKnowledgeFiles={setKnowledgeFiles}
+          onUploadKnowledgeDocument={uploadKnowledgeDocument}
+        />
+      );
+    }
+
+    return (
+      <AdminPage
+        apiKeyColumns={apiKeyColumns}
+        apiKeyForm={apiKeyForm}
+        apiKeys={apiKeys}
+        loading={loading}
+        platformAuditColumns={platformAuditColumns}
+        platformAuditEvents={platformAuditEvents}
+        runtimePolicy={runtimePolicy}
+        storageSummary={storageSummary}
+        onCleanupPlatformAuditEvents={cleanupPlatformAuditEvents}
+        onCreateManagedApiKey={createManagedApiKey}
+        onPreviewLocalStorageCleanup={previewLocalStorageCleanup}
+      />
+    );
+  }
 
   return (
     <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
       <Layout className="app-shell">
-        <Header className="app-header">
-          <Flex align="center" justify="space-between" gap={16}>
-            <Space>
-              <BugOutlined className="brand-icon" />
-              <div>
-                <Title level={3} className="brand-title">DieAudit</Title>
-                <Text className="brand-subtitle">多 Agent 代码审计运行台</Text>
-              </div>
-            </Space>
-            <Space wrap>
-              <Input.Password
-                className="api-key-input"
-                placeholder="API Key"
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                onPressEnter={saveApiKey}
-              />
-              <Button onClick={saveApiKey}>保存 Key</Button>
-              <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-            </Space>
-          </Flex>
-          <Menu
-            className="mobile-nav"
-            mode="horizontal"
-            selectedKeys={[activeView]}
-            onClick={({ key }) => setActiveView(String(key))}
-            items={navigationItems}
-          />
-        </Header>
+        <AppHeader
+          activeView={activeView}
+          apiKey={apiKey}
+          authHeaderName={authStatus?.api_key_header}
+          navigationItems={navigationItems}
+          onApiKeyChange={setApiKey}
+          onRefresh={refresh}
+          onSaveApiKey={saveApiKey}
+          onViewChange={setActiveView}
+        />
         <Layout className="main-layout">
-          <Sider className="app-sider" width={224} breakpoint="lg" collapsedWidth={0}>
-            <Menu
-              mode="inline"
-              selectedKeys={[activeView]}
-              onClick={({ key }) => setActiveView(String(key))}
-              items={navigationItems}
-            />
-          </Sider>
-        <Content className="app-content">
-          {error && <Alert type="error" showIcon message="运行错误" description={error} className="section" />}
-          {authStatus?.enabled && !apiKey.trim() && (
-            <Alert
-              type="warning"
-              showIcon
-              message="API authentication is enabled"
-              description={`Enter a key for ${authStatus.api_key_header || API_KEY_HEADER} before using runtime, project, audit, artifact, and knowledge APIs.`}
-              className="section"
-            />
-          )}
-          {activeView === "overview" && (
-          <div className="stats-grid section">
-            <Card><Statistic title="Web API" value={apiHealth?.ok ? "Healthy" : "Unknown"} prefix={<ApiOutlined />} /></Card>
-            <Card>
-              <Statistic title="API Auth" value={authStatus?.enabled ? "Enabled" : "Disabled"} prefix={<SafetyCertificateOutlined />} />
-              {!authStatus?.enabled && <Text type="danger">Set DIEAUDIT_API_KEY before production use.</Text>}
-            </Card>
-            <Card>
-              <Statistic
-                title="Production Readiness"
-                value={runtimeReadiness?.ok ? "Ready" : "Not Ready"}
-                prefix={<SafetyCertificateOutlined />}
+          <AppNavigation activeView={activeView} items={navigationItems} onViewChange={setActiveView} />
+          <Content className="app-content">
+            {error && <Alert type="error" showIcon message="运行错误" description={error} className="section" />}
+            {authStatus?.enabled && !apiKey.trim() && (
+              <Alert
+                type="warning"
+                showIcon
+                message="API authentication is enabled"
+                description={`Enter a key for ${authStatus.api_key_header || API_KEY_HEADER} before using runtime, project, audit, artifact, and knowledge APIs.`}
+                className="section"
               />
-              <Text type={runtimeReadiness?.ok ? "success" : "danger"}>
-                fail {runtimeReadiness?.summary?.fail ?? "-"} / warn {runtimeReadiness?.summary?.warn ?? "-"} / pass {runtimeReadiness?.summary?.pass ?? "-"}
-              </Text>
-              {!runtimeReadiness?.ok && runtimeReadiness?.checks?.find((item) => item.status === "fail") && (
-                <Text type="secondary">{runtimeReadiness.checks.find((item) => item.status === "fail")?.title}</Text>
-              )}
-            </Card>
-            <Card><Statistic title="Docker Runtime" value={dockerHealth?.ok ? "Ready" : "Unknown"} prefix={<CloudServerOutlined />} /></Card>
-            <Card><Statistic title="Projects" value={projects.length} prefix={<FolderOpenOutlined />} /></Card>
-            <Card><Statistic title="Findings" value={findings.length} prefix={<BugOutlined />} /></Card>
-            <Card><Statistic title="Runtime Containers" value={managedRuntime?.summary?.container_count ?? 0} prefix={<CloudServerOutlined />} /></Card>
-            <Card>
-              <Statistic
-                title={`Sandbox ${sandboxCapabilities?.requested_runtime || ""}`}
-                value={sandboxCapabilities?.sandbox_execution_available ? "Ready" : "Unavailable"}
-                prefix={<SafetyCertificateOutlined />}
-              />
-              {sandboxCapabilities?.requested_runtime === "runc" && !sandboxCapabilities?.strong_isolation_available && (
-                <Text type={sandboxCapabilities?.allow_runc_sandbox ? "warning" : "danger"}>
-                  {sandboxCapabilities?.allow_runc_sandbox ? "Weak runc isolation enabled" : "Strong isolation unavailable"}
-                </Text>
-              )}
-              {sandboxCapabilities?.warnings?.[0] && <Text type="secondary">{sandboxCapabilities.warnings[0]}</Text>}
-            </Card>
-          </div>
-          )}
-          {activeView === "projects" && (
-          <div className="action-bar section">
-            <Button type="primary" icon={<PlayCircleOutlined />} loading={loading} onClick={startAudit}>启动审计</Button>
-            <Button icon={<PlayCircleOutlined />} loading={loading} onClick={runPipeline}>一键闭环</Button>
-            <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runSca}>SCA 扫描</Button>
-            <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
-            <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
-            <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={cancelAuditRun}>取消</Button>
-          </div>
-          )}
-          {activeView === "runtime" && (
-          <div className="action-bar section">
-            <Button icon={<CloudServerOutlined />} loading={loading} onClick={startSandboxService}>Sandbox Service</Button>
-            <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!sandboxTarget} onClick={runSandboxTargetPoc}>Target PoC</Button>
-            <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runPocSmoke}>PoC Smoke</Button>
-            <Button icon={<DeleteOutlined />} loading={loading} onClick={cleanupExpiredRuntime}>清理过期运行时</Button>
-            <Button danger icon={<DeleteOutlined />} loading={loading} onClick={cleanup}>清理当前运行时</Button>
-          </div>
-          )}
-          {activeView === "projects" && (
-          <div className="workspace-grid section">
-            <Card title="Projects">
-              <Tabs
-                items={[
-                  {
-                    key: "git",
-                    label: "Git",
-                    children: (
-                      <Form form={gitForm} layout="vertical" onFinish={createGitProject}>
-                        <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name="git_url" label="Git URL" rules={[{ required: true }]}>
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name="ref" label="Ref">
-                          <Input />
-                        </Form.Item>
-                        <Button htmlType="submit" type="primary" loading={loading}>导入 Git</Button>
-                      </Form>
-                    ),
-                  },
-                  {
-                    key: "zip",
-                    label: "Zip",
-                    children: (
-                      <Form form={zipForm} layout="vertical" onFinish={uploadZipProject}>
-                        <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-                          <Input />
-                        </Form.Item>
-                        <Upload beforeUpload={() => false} maxCount={1} fileList={zipFiles} onChange={({ fileList }) => setZipFiles(fileList)}>
-                          <Button>选择 zip</Button>
-                        </Upload>
-                        <Button className="form-action" htmlType="submit" type="primary" loading={loading}>上传 Zip</Button>
-                      </Form>
-                    ),
-                  },
-                ]}
-              />
-              <Table
-                rowKey="project_id"
-                size="small"
-                columns={projectColumns}
-                dataSource={projects}
-                pagination={false}
-                rowSelection={{ type: "radio", selectedRowKeys: selectedProjectId ? [selectedProjectId] : [], onChange: ([key]) => setSelectedProjectId(String(key)) }}
-              />
-            </Card>
-            <Card title="Current AuditRun">
-              <Paragraph>
-                <Text strong>Project: </Text>{selectedProject?.name || "-"}
-              </Paragraph>
-              <Paragraph>
-                <Text strong>AuditRun: </Text>{auditRun?.audit_run_id || "-"}
-              </Paragraph>
-              <Paragraph>
-                <Text strong>Status: </Text>{auditRun?.status || "-"}
-              </Paragraph>
-              <Paragraph>
-                <Text strong>Pipeline: </Text>
-                <Tag color={pipelineStatus?.current?.status === "failed" ? "red" : pipelineStatus?.current?.status === "completed" ? "green" : "blue"}>
-                  {pipelineStatus?.current?.stage || "-"} / {pipelineStatus?.current?.status || "-"}
-                </Tag>
-              </Paragraph>
-              {pipelineStatus?.current?.error && <Alert type="error" showIcon message={pipelineStatus.current.error} />}
-              {pipelineStatus?.runtime_control?.cancel_requested && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="取消已请求"
-                  description={`${pipelineStatus.runtime_control.cancel_reason || "cancel_requested"} ${pipelineStatus.runtime_control.cancel_requested_at || ""}`}
-                />
-              )}
-              <pre>{JSON.stringify(lastResponse || { hint: "Import a project, start an audit, then run SCA." }, null, 2)}</pre>
-            </Card>
-          </div>
-          )}
-          {activeView !== "overview" && (
-          <Tabs
-            className="section"
-            items={[
-              { key: "agents", label: "AgentRuns", children: <Card><Table rowKey="agent_run_id" columns={agentColumns} dataSource={agentRuns} pagination={false} /></Card> },
-              {
-                key: "pipeline",
-                label: "Pipeline",
-                children: (
-                  <Card>
-                    <Space direction="vertical" size={16} className="drawer-stack">
-                      <Space wrap>
-                        {Object.entries(pipelineStatus?.counts?.findings || {}).map(([status, count]) => (
-                          <Tag key={status}>{status}: {count}</Tag>
-                        ))}
-                        {Object.entries(pipelineStatus?.counts?.validation_attempts || {}).map(([status, count]) => (
-                          <Tag key={`attempt-${status}`}>attempt {status}: {count}</Tag>
-                        ))}
-                        <Tag>reports: {pipelineStatus?.counts?.reports ?? 0}</Tag>
-                      </Space>
-                      <List
-                        dataSource={pipelineStatus?.events || []}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <List.Item.Meta
-                              title={<Space><Tag>{item.event_type}</Tag><Text>{item.created_at}</Text></Space>}
-                              description={<pre>{JSON.stringify(item.payload || {}, null, 2)}</pre>}
-                            />
-                          </List.Item>
-                        )}
-                      />
-                    </Space>
-                  </Card>
-                ),
-              },
-              {
-                key: "readiness",
-                label: "Readiness",
-                children: (
-                  <Card>
-                    <Space direction="vertical" size={16} className="drawer-stack">
-                      <List
-                        dataSource={runtimeReadiness?.checks || []}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <List.Item.Meta
-                              title={<Space><Tag color={readinessColor(item.status)}>{item.status}</Tag><Text>{item.title}</Text></Space>}
-                              description={renderReadinessDescription(item)}
-                            />
-                          </List.Item>
-                        )}
-                      />
-                      <Table
-                        rowKey="worker_id"
-                        columns={workerColumns}
-                        dataSource={workerHeartbeats}
-                        pagination={false}
-                        size="small"
-                      />
-                    </Space>
-                  </Card>
-                ),
-              },
-              { key: "findings", label: "Findings", children: <Card><Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 8 }} /></Card> },
-              { key: "containers", label: "Containers", children: <Card><Table rowKey="Id" columns={containerColumns} dataSource={containers} pagination={false} /></Card> },
-              {
-                key: "knowledge",
-                label: "Knowledge",
-                children: (
-                  <div className="knowledge-grid">
-                    <Card title="Knowledge Base">
-                      <Form form={knowledgeUploadForm} layout="vertical" onFinish={uploadKnowledgeDocument}>
-                        <Form.Item name="title" label="Title" rules={[{ required: true }]}>
-                          <Input />
-                        </Form.Item>
-                        <Form.Item name="scope" label="Scope" initialValue="global">
-                          <Input placeholder="global or project" />
-                        </Form.Item>
-                        <Form.Item name="project_id" label="Project ID">
-                          <Input placeholder={selectedProjectId || "optional for project scope"} />
-                        </Form.Item>
-                        <Upload
-                          beforeUpload={() => false}
-                          maxCount={1}
-                          fileList={knowledgeFiles}
-                          onChange={({ fileList }) => setKnowledgeFiles(fileList)}
-                        >
-                          <Button>选择文档</Button>
-                        </Upload>
-                        <Button className="form-action" htmlType="submit" type="primary" loading={loading}>上传并索引</Button>
-                      </Form>
-                      <Table
-                        className="table-toolbar"
-                        rowKey="document_id"
-                        columns={knowledgeColumns}
-                        dataSource={knowledgeDocuments}
-                        pagination={{ pageSize: 6 }}
-                      />
-                    </Card>
-                    <Card title="Search">
-                      <Form form={knowledgeSearchForm} layout="vertical" onFinish={searchKnowledge}>
-                        <Form.Item name="query" label="Query" rules={[{ required: true }]}>
-                          <Input.Search enterButton="检索" loading={loading} />
-                        </Form.Item>
-                        <Form.Item name="project_id" label="Project Filter">
-                          <Input placeholder={selectedProjectId || "optional"} />
-                        </Form.Item>
-                        <Form.Item name="limit" label="Limit" initialValue="8">
-                          <Input />
-                        </Form.Item>
-                      </Form>
-                      <List
-                        dataSource={knowledgeMatches}
-                        renderItem={(item) => (
-                          <List.Item>
-                            <List.Item.Meta
-                              title={<Space><Text strong>{item.title || item.source_name}</Text><Tag>{Number(item.score || 0).toFixed(3)}</Tag><Tag>{item.scope}</Tag></Space>}
-                              description={<Paragraph ellipsis={{ rows: 4, expandable: true }}>{item.text}</Paragraph>}
-                            />
-                          </List.Item>
-                        )}
-                      />
-                    </Card>
-                  </div>
-                ),
-              },
-              {
-                key: "platform-audit",
-                label: "Platform Audit",
-                children: (
-                  <Card>
-                    <Space wrap className="table-toolbar">
-                      <Tag>retention: {runtimePolicy?.platform_audit_events?.retention_days ?? "-"}d</Tag>
-                      <Tag>max rows: {runtimePolicy?.platform_audit_events?.max_rows ?? "-"}</Tag>
-                      <Tag>runtime pkg: {runtimePolicy?.local_storage?.runtime_package_retention_days ?? "-"}d</Tag>
-                      <Tag>upload staging: {runtimePolicy?.local_storage?.upload_staging_retention_days ?? "-"}d</Tag>
-                      <Tag>unref workspaces: {runtimePolicy?.local_storage?.unreferenced_workspace_retention_days ?? "-"}d</Tag>
-                      <Tag>unref snapshots: {runtimePolicy?.local_storage?.unreferenced_snapshot_retention_days ?? "-"}d</Tag>
-                      <Tag>storage: {formatBytes(totalStorageBytes(storageSummary))}</Tag>
-                      <Tag>container memory: {runtimePolicy?.default_container?.memory ?? "-"}</Tag>
-                      <Tag>cpus: {runtimePolicy?.default_container?.cpus ?? "-"}</Tag>
-                      <Tag>max body: {formatBytes(runtimePolicy?.http_guards?.max_request_body_bytes)}</Tag>
-                      <Tag>max upload: {formatBytes(runtimePolicy?.http_guards?.max_upload_bytes)}</Tag>
-                      <Tag>zip files: {runtimePolicy?.workspace_import?.max_workspace_files ?? "-"}</Tag>
-                      <Tag>zip size: {formatBytes(runtimePolicy?.workspace_import?.max_workspace_uncompressed_bytes)}</Tag>
-                      <Tag>git schemes: {(runtimePolicy?.workspace_import?.allowed_git_url_schemes || []).join(",") || "-"}</Tag>
-                      <Tag>rate: {runtimePolicy?.http_guards?.rate_limit_per_minute ?? "-"} / {runtimePolicy?.http_guards?.rate_limit_window_seconds ?? "-"}s</Tag>
-                      <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={cleanupPlatformAuditEvents}>
-                        清理审计事件
-                      </Button>
-                      <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={previewLocalStorageCleanup}>
-                        预览存储清理
-                      </Button>
-                    </Space>
-                    <Table
-                      rowKey="id"
-                      columns={platformAuditColumns}
-                      dataSource={platformAuditEvents}
-                      pagination={{ pageSize: 10 }}
-                      scroll={{ x: 1200 }}
-                    />
-                  </Card>
-                ),
-              },
-              {
-                key: "api-keys",
-                label: "API Keys",
-                children: (
-                  <Card>
-                    <Form form={apiKeyForm} layout="inline" onFinish={createManagedApiKey} className="table-toolbar">
-                      <Form.Item name="name" rules={[{ required: true }]} className="api-key-name-field">
-                        <Input placeholder="Key name" />
-                      </Form.Item>
-                      <Form.Item name="scopes" initialValue="admin">
-                        <Input placeholder="Scopes: admin,audit,runtime" />
-                      </Form.Item>
-                      <Button htmlType="submit" type="primary" loading={loading}>创建 Key</Button>
-                    </Form>
-                    <Alert
-                      type="info"
-                      showIcon
-                      className="table-toolbar"
-                      message="新 Key 原文只在创建响应中显示一次；数据库只保存哈希。"
-                    />
-                    <Table rowKey="key_id" columns={apiKeyColumns} dataSource={apiKeys} pagination={{ pageSize: 8 }} />
-                  </Card>
-                ),
-              },
-              {
-                key: "reports",
-                label: "Reports",
-                children: (
-                  <Card>
-                    <List
-                      dataSource={reports}
-                      renderItem={(item) => (
-                        <List.Item>
-                          <List.Item.Meta title={item.kind} description={item.artifact?.relative_path || item.path} />
-                          <Space>
-                            <Tag>{String(item.summary?.finding_count ?? 0)} findings</Tag>
-                            <Button size="small" icon={<FileTextOutlined />} onClick={() => openArtifact(item.artifact, item.path)}>下载</Button>
-                          </Space>
-                        </List.Item>
-                      )}
-                    />
-                  </Card>
-                ),
-              },
-            ].filter((item) => (visibleTabKeys[activeView] || []).includes(String(item.key)))}
-          />
-          )}
-          <Drawer
-            title={selectedFinding?.finding.title || "Finding"}
-            open={Boolean(selectedFinding)}
-            width={720}
-            onClose={() => setSelectedFinding(undefined)}
-          >
-            {selectedFinding && (
-              <Space direction="vertical" size={16} className="drawer-stack">
-                <Space wrap>
-                  <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runFindingPoc}>运行 PoC 验证</Button>
-                </Space>
-                <Descriptions bordered size="small" column={1}>
-                  <Descriptions.Item label="ID">{selectedFinding.finding.finding_id}</Descriptions.Item>
-                  <Descriptions.Item label="Severity"><Tag color={severityColor(selectedFinding.finding.severity)}>{selectedFinding.finding.severity}</Tag></Descriptions.Item>
-                  <Descriptions.Item label="Status"><Tag>{selectedFinding.finding.status}</Tag></Descriptions.Item>
-                  <Descriptions.Item label="Location">{selectedFinding.finding.file_path || "-"}:{selectedFinding.finding.line_start || "-"}</Descriptions.Item>
-                  <Descriptions.Item label="Source">{selectedFinding.finding.source}</Descriptions.Item>
-                  <Descriptions.Item label="Description">{selectedFinding.finding.description || "-"}</Descriptions.Item>
-                </Descriptions>
-                <Collapse
-                  items={[
-                    {
-                      key: "evidence",
-                      label: `Evidence (${selectedFinding.evidence.length})`,
-                      children: (
-                        <List
-                          dataSource={selectedFinding.evidence}
-                          renderItem={(item) => (
-                            <List.Item
-                              actions={[
-                                <Button
-                                  key="artifact"
-                                  size="small"
-                                  icon={<FileTextOutlined />}
-                                  disabled={!item.artifact && !item.artifact_path}
-                                  onClick={() => openArtifact(item.artifact, item.artifact_path)}
-                                >
-                                  下载
-                                </Button>,
-                              ]}
-                            >
-                              <List.Item.Meta
-                                title={<Space><Tag>{item.kind}</Tag><Text>{item.summary || item.artifact?.name || item.evidence_id}</Text></Space>}
-                                description={<pre>{JSON.stringify(item, null, 2)}</pre>}
-                              />
-                            </List.Item>
-                          )}
-                        />
-                      ),
-                    },
-                    {
-                      key: "attempts",
-                      label: `Validation Attempts (${selectedFinding.validation_attempts.length})`,
-                      children: <pre>{JSON.stringify(selectedFinding.validation_attempts, null, 2)}</pre>,
-                    },
-                    {
-                      key: "raw",
-                      label: "Raw",
-                      children: <pre>{JSON.stringify(selectedFinding.finding.raw || {}, null, 2)}</pre>,
-                    },
-                  ]}
-                />
-              </Space>
             )}
-          </Drawer>
-          <Drawer
-            title="Agent Events"
-            open={Boolean(agentEvents)}
-            width={720}
-            onClose={() => setAgentEvents(undefined)}
-          >
-            <pre>{JSON.stringify(agentEvents || [], null, 2)}</pre>
-          </Drawer>
-          <Drawer
-            title={`Container Logs - ${containerLogs?.title || ""}`}
-            open={Boolean(containerLogs)}
-            width={820}
-            onClose={() => setContainerLogs(undefined)}
-          >
-            <pre>{containerLogs?.body || ""}</pre>
-          </Drawer>
-        </Content>
+            {renderActivePage()}
+            <AppDrawers
+              agentEvents={agentEvents}
+              containerLogs={containerLogs}
+              loading={loading}
+              selectedFinding={selectedFinding}
+              onCloseAgentEvents={() => setAgentEvents(undefined)}
+              onCloseContainerLogs={() => setContainerLogs(undefined)}
+              onCloseFinding={() => setSelectedFinding(undefined)}
+              onOpenArtifact={openArtifact}
+              onRunFindingPoc={runFindingPoc}
+            />
+          </Content>
         </Layout>
       </Layout>
     </ConfigProvider>
   );
-}
-
-function severityColor(value: string) {
-  if (value === "critical" || value === "high") return "red";
-  if (value === "medium") return "orange";
-  if (value === "low") return "blue";
-  return "default";
-}
-
-function readinessColor(value: string) {
-  if (value === "fail") return "red";
-  if (value === "warn") return "orange";
-  return "green";
-}
-
-function formatBytes(value?: number) {
-  if (!value || value <= 0) {
-    return "-";
-  }
-  if (value >= 1024 * 1024) {
-    return `${Math.round(value / (1024 * 1024))} MiB`;
-  }
-  if (value >= 1024) {
-    return `${Math.round(value / 1024)} KiB`;
-  }
-  return `${value} B`;
-}
-
-function totalStorageBytes(summary?: StorageSummary) {
-  if (!summary?.managed_prefixes) {
-    return undefined;
-  }
-  return Object.values(summary.managed_prefixes).reduce((total, item) => total + (item.bytes || 0), 0);
-}
-
-function renderReadinessDescription(item: NonNullable<RuntimeReadiness["checks"]>[number]) {
-  const remediation = item.remediation || [];
-  return (
-    <Space direction="vertical" size={8} className="drawer-stack">
-      {remediation.length > 0 && item.status !== "pass" ? (
-        <Alert
-          type={item.status === "fail" ? "error" : "warning"}
-          showIcon
-          message="Remediation"
-          description={
-            <ul className="readiness-remediation">
-              {remediation.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          }
-        />
-      ) : null}
-      <pre>{JSON.stringify(item.detail || {}, null, 2)}</pre>
-    </Space>
-  );
-}
-
-function workerStatusColor(value: string) {
-  if (value === "running") return "green";
-  if (value === "idle" || value === "starting") return "blue";
-  return "default";
-}
-
-function artifactUrl(artifact?: ArtifactRef, fallbackPath?: string) {
-  const path = artifact?.download_url || (fallbackPath ? `/artifacts/download?path=${encodeURIComponent(fallbackPath)}` : "");
-  if (!path) {
-    return "";
-  }
-  if (path.startsWith("/gateway/")) {
-    return path;
-  }
-  if (path.startsWith("/")) {
-    return `/gateway${path}`;
-  }
-  return `/gateway/artifacts/download?path=${encodeURIComponent(path)}`;
-}
-
-function artifactFileName(artifact?: ArtifactRef, fallbackPath?: string) {
-  if (artifact?.name) {
-    return artifact.name;
-  }
-  const source = artifact?.relative_path || fallbackPath || "artifact";
-  const clean = source.split(/[\\/]/).filter(Boolean).pop();
-  return clean || "artifact";
-}
-
-function isActiveRun(auditStatus?: string, pipelineStatus?: string) {
-  const activeStatuses = ["queued", "running", "validating", "cancelling"];
-  return activeStatuses.includes(auditStatus || "") || activeStatuses.includes(pipelineStatus || "");
-}
-
-function parseScopes(value?: string) {
-  const scopes = (value || "admin")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
-  return Array.from(new Set(scopes.length ? scopes : ["admin"]));
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
