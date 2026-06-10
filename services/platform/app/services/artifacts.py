@@ -41,6 +41,15 @@ def artifact_metadata(settings: Settings, path: str | Path) -> dict[str, Any]:
     }
 
 
+def artifact_path_matches(settings: Settings, stored_path: str | Path | None, requested_path: Path) -> bool:
+    if not stored_path:
+        return False
+    try:
+        return resolve_artifact_path(settings, stored_path) == requested_path.resolve()
+    except (ArtifactAccessError, FileNotFoundError, OSError):
+        return False
+
+
 def secure_artifact_headers() -> dict[str, str]:
     return {
         "Cache-Control": "private, no-store, max-age=0",

@@ -17,6 +17,7 @@ from app.domain.models import (
     ApiKeyRecord,
     AuditRun,
     AuditRunEvent,
+    ContainerRun,
     DependencyRecord,
     Evidence,
     Finding,
@@ -45,7 +46,13 @@ from app.schemas import (
     TemplateBody,
     ValidatorScaleRequest,
 )
-from app.services.artifacts import ArtifactAccessError, artifact_metadata, resolve_artifact_path, secure_artifact_headers
+from app.services.artifacts import (
+    ArtifactAccessError,
+    artifact_metadata,
+    artifact_path_matches,
+    resolve_artifact_path,
+    secure_artifact_headers,
+)
 from app.services.auth import (
     api_key_record_to_dict,
     auth_is_enabled,
@@ -771,11 +778,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.get("/artifacts/metadata")
     async def artifact_metadata_endpoint(path: str = Query(...)) -> dict[str, Any]:
         try:
-            return artifact_metadata(settings, path)
+            artifact_path = resolve_artifact_path(settings, path)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ArtifactAccessError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not await _artifact_is_referenced(settings, artifact_path):
+            raise HTTPException(status_code=403, detail="artifact is not referenced by a platform record")
+        return artifact_metadata(settings, artifact_path)
 
     @router.get("/artifacts/download")
     async def download_artifact(path: str = Query(...)) -> FileResponse:
@@ -785,6 +795,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ArtifactAccessError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not await _artifact_is_referenced(settings, artifact_path):
+            raise HTTPException(status_code=403, detail="artifact is not referenced by a platform record")
         return FileResponse(artifact_path, filename=artifact_path.name, headers=secure_artifact_headers())
 
     @router.get("/reports/{report_id}/download")
@@ -1776,6 +1788,29 @@ def _artifact_metadata_or_none(path: str | None) -> dict[str, Any] | None:
         return artifact_metadata(get_settings(), path)
     except (ArtifactAccessError, FileNotFoundError, OSError):
         return None
+
+
+async def _artifact_is_referenced(settings: Settings, artifact_path: Path) -> bool:
+    reference_columns = (
+        ProjectSnapshot.artifact_path,
+        ContainerRun.log_artifact,
+        AgentRun.artifact_path,
+        Evidence.artifact_path,
+        KnowledgeDocument.artifact_path,
+        ReportArtifact.path,
+    )
+    async with SessionLocal() as session:
+        for column in reference_columns:
+            rows = (await session.execute(select(column).where(column.is_not(None)))).scalars()
+            for stored_path in rows:
+                if artifact_path_matches(settings, stored_path, artifact_path):
+                    return True
+
+        report_summaries = (await session.execute(select(ReportArtifact.summary))).scalars()
+        for summary in report_summaries:
+            if isinstance(summary, dict) and artifact_path_matches(settings, summary.get("json_path"), artifact_path):
+                return True
+    return False
 
 
 async def _record_snapshot(snapshot: dict[str, Any]) -> None:
