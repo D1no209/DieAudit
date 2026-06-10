@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.domain.models import WorkerHeartbeat
 from app.repositories import SessionLocal
@@ -64,6 +64,12 @@ def summarize_worker_health(
     }
 
 
+def worker_heartbeat_retention_cutoff(*, now: datetime, retention_seconds: float | None) -> datetime | None:
+    if retention_seconds is None or retention_seconds <= 0:
+        return None
+    return now - timedelta(seconds=retention_seconds)
+
+
 async def record_worker_heartbeat(
     *,
     worker_id: str,
@@ -73,6 +79,7 @@ async def record_worker_heartbeat(
     current_audit_run_id: str | None = None,
     metadata: dict[str, Any] | None = None,
     seen_at: datetime | None = None,
+    retention_seconds: float | None = None,
     session_factory: Callable = SessionLocal,
 ) -> dict[str, Any]:
     seen_at = seen_at or utc_now()
@@ -96,6 +103,14 @@ async def record_worker_heartbeat(
             row.last_seen_at = seen_at
             row.current_audit_run_id = current_audit_run_id
             row.metadata_json = metadata or {}
+        cutoff = worker_heartbeat_retention_cutoff(now=seen_at, retention_seconds=retention_seconds)
+        if cutoff is not None:
+            await session.execute(
+                delete(WorkerHeartbeat).where(
+                    WorkerHeartbeat.worker_id != worker_id,
+                    WorkerHeartbeat.last_seen_at < cutoff,
+                )
+            )
         await session.commit()
         return worker_heartbeat_to_dict(row, now=seen_at)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.domain.models import WorkerHeartbeat
-from app.services.worker_heartbeat import summarize_worker_health, worker_heartbeat_to_dict
+from app.services.worker_heartbeat import summarize_worker_health, worker_heartbeat_retention_cutoff, worker_heartbeat_to_dict
 
 
 def test_worker_health_passes_with_fresh_active_worker() -> None:
@@ -72,3 +72,18 @@ def test_worker_heartbeat_to_dict_normalizes_naive_datetimes() -> None:
 
     assert result["last_seen_at"].endswith("+00:00")
     assert result["age_seconds"] == 5
+
+
+def test_worker_heartbeat_retention_cutoff_uses_configured_seconds() -> None:
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+
+    cutoff = worker_heartbeat_retention_cutoff(now=now, retention_seconds=3600)
+
+    assert cutoff == now - timedelta(seconds=3600)
+
+
+def test_worker_heartbeat_retention_cutoff_disabled_for_non_positive_values() -> None:
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+
+    assert worker_heartbeat_retention_cutoff(now=now, retention_seconds=0) is None
+    assert worker_heartbeat_retention_cutoff(now=now, retention_seconds=None) is None

@@ -101,6 +101,7 @@ async def run_worker() -> None:
                         "backend": settings.pipeline_execution_backend,
                         "poll_interval_seconds": settings.pipeline_worker_poll_interval_seconds,
                     },
+                    retention_seconds=settings.pipeline_worker_heartbeat_retention_seconds,
                 )
             except Exception:
                 logger.exception("failed to record worker heartbeat worker_id=%s", worker_id)
@@ -142,6 +143,7 @@ async def run_worker() -> None:
                 status=worker_status,
                 current_audit_run_id=None,
                 metadata={"backend": settings.pipeline_execution_backend},
+                retention_seconds=settings.pipeline_worker_heartbeat_retention_seconds,
             )
         heartbeat_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

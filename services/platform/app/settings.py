@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     pipeline_worker_poll_interval_seconds: float = 2.0
     pipeline_worker_heartbeat_interval_seconds: float = 5.0
     pipeline_worker_heartbeat_ttl_seconds: float = 30.0
+    pipeline_worker_heartbeat_retention_seconds: float = 3600.0
     enable_demo_templates: bool = False
 
 
