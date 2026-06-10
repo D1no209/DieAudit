@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import delete, select
 
 from app.api.readiness import (
+    active_pipeline_readiness_check as _active_pipeline_readiness_check,
     embedding_readiness_remediation as _embedding_readiness_remediation,
     http_guardrails_readiness_check as _http_guardrails_readiness_check,
     normalized_pipeline_backend as _normalized_pipeline_backend,
@@ -55,6 +56,7 @@ from app.domain.models import (
     ProjectSnapshot,
     ReportArtifact,
     ValidationAttempt,
+    WorkerHeartbeat,
 )
 from app.integrations.docker import DockerApiError
 from app.integrations.protocols import classify_agent_protocol, fetch_a2a_agent_card, serialize_capabilities
@@ -1255,6 +1257,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if _normalized_pipeline_backend(settings) == "workflow-worker":
             worker_health = await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
         checks.append(_pipeline_backend_readiness_check(settings, worker_health=worker_health))
+        async with SessionLocal() as session:
+            audit_runs = list((await session.execute(select(AuditRun))).scalars())
+            worker_heartbeats = list((await session.execute(select(WorkerHeartbeat))).scalars())
+        checks.append(
+            _active_pipeline_readiness_check(
+                audit_runs,
+                worker_heartbeats,
+                max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds,
+            )
+        )
         try:
             docker = await runtime.docker_health()
             checks.append(

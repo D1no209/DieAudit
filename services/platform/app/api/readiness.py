@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from app.settings import Settings
+from app.services.pipeline_recovery import is_active_pipeline
+from app.services.worker_heartbeat import ACTIVE_WORKER_STATUSES, ensure_aware
 
 
 PRODUCTION_AGENT_TEMPLATES = {
@@ -86,8 +89,88 @@ def workspace_import_readiness_check(settings: Settings) -> dict[str, Any]:
     }
 
 
+def active_pipeline_readiness_check(
+    audit_runs: list[Any],
+    worker_heartbeats: list[Any],
+    *,
+    max_age_seconds: float,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
+    active_runs = [
+        row
+        for row in audit_runs
+        if is_active_pipeline(getattr(row, "status", None), getattr(row, "config", None), include_queued=False)
+    ]
+    stuck_runs = [
+        _pipeline_readiness_run_detail(row)
+        for row in active_runs
+        if not _fresh_pipeline_worker(row, worker_heartbeats, now=now, max_age_seconds=max_age_seconds)
+    ]
+
+    return {
+        "id": "active_pipeline_ownership",
+        "title": "Active audit pipelines have fresh worker ownership",
+        "status": "fail" if stuck_runs else "pass",
+        "detail": {
+            "active_pipeline_count": len(active_runs),
+            "stuck_pipeline_count": len(stuck_runs),
+            "max_worker_age_seconds": max_age_seconds,
+            "stuck_runs": stuck_runs,
+        },
+        "remediation": [] if not stuck_runs else [
+            "Verify workflow-worker is running and publishing fresh heartbeats for active AuditRun ownership.",
+            "Restart workflow-worker with PIPELINE_RECOVERY_ON_STARTUP=true so interrupted active runs are marked failed.",
+            "Cancel or retry stuck AuditRuns after preserving any retained runtime evidence needed for debugging.",
+        ],
+    }
+
+
 def _csv_values(value: str) -> list[str]:
     return [item.strip().lower() for item in (value or "").split(",") if item.strip()]
+
+
+def _fresh_pipeline_worker(
+    audit_run: Any,
+    worker_heartbeats: list[Any],
+    *,
+    now: datetime,
+    max_age_seconds: float,
+) -> bool:
+    audit_run_id = getattr(audit_run, "audit_run_id", None)
+    worker_id = _pipeline_worker_id(getattr(audit_run, "config", None))
+    for worker in worker_heartbeats:
+        if getattr(worker, "status", None) not in ACTIVE_WORKER_STATUSES:
+            continue
+        if getattr(worker, "current_audit_run_id", None) != audit_run_id:
+            continue
+        if worker_id and getattr(worker, "worker_id", None) != worker_id:
+            continue
+        last_seen_at = getattr(worker, "last_seen_at", None)
+        if last_seen_at is None:
+            continue
+        if (now - ensure_aware(last_seen_at)).total_seconds() <= max_age_seconds:
+            return True
+    return False
+
+
+def _pipeline_worker_id(config: dict[str, Any] | None) -> str | None:
+    runtime_control = (config or {}).get("runtime_control") or {}
+    pipeline_state = (config or {}).get("pipeline_state") or {}
+    worker_id = runtime_control.get("worker_id") or pipeline_state.get("worker_id")
+    return str(worker_id) if worker_id else None
+
+
+def _pipeline_readiness_run_detail(audit_run: Any) -> dict[str, Any]:
+    config = getattr(audit_run, "config", None) or {}
+    pipeline_state = config.get("pipeline_state") or {}
+    return {
+        "audit_run_id": getattr(audit_run, "audit_run_id", None),
+        "status": getattr(audit_run, "status", None),
+        "stage": pipeline_state.get("stage"),
+        "pipeline_status": pipeline_state.get("status"),
+        "worker_id": _pipeline_worker_id(config),
+    }
 
 
 def sandbox_readiness_remediation(detail: dict[str, Any]) -> list[str]:

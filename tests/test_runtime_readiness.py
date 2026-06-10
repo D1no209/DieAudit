@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
 
 from app.api.routes import (
+    _active_pipeline_readiness_check,
     _embedding_readiness_remediation,
     _http_guardrails_readiness_check,
     _sandbox_readiness_remediation,
@@ -272,3 +274,67 @@ def test_workspace_import_readiness_passes_for_https_and_ssh_with_limits() -> No
     assert check["status"] == "pass"
     assert check["detail"]["allowed_git_url_schemes"] == ["https", "ssh"]
     assert check["detail"]["unsafe_schemes"] == []
+
+
+def test_active_pipeline_readiness_passes_without_active_runs() -> None:
+    check = _active_pipeline_readiness_check([], [], max_age_seconds=30, now=datetime(2026, 6, 10, tzinfo=timezone.utc))
+
+    assert check["status"] == "pass"
+    assert check["detail"]["active_pipeline_count"] == 0
+
+
+def test_active_pipeline_readiness_fails_running_run_without_fresh_worker() -> None:
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    audit_run = SimpleNamespace(
+        audit_run_id="run-1",
+        status="running",
+        config={"pipeline_state": {"stage": "validators", "status": "running", "worker_id": "worker-1"}},
+    )
+    stale_worker = SimpleNamespace(
+        worker_id="worker-1",
+        status="running",
+        current_audit_run_id="run-1",
+        last_seen_at=now - timedelta(seconds=31),
+    )
+
+    check = _active_pipeline_readiness_check([audit_run], [stale_worker], max_age_seconds=30, now=now)
+
+    assert check["status"] == "fail"
+    assert check["detail"]["stuck_pipeline_count"] == 1
+    assert check["detail"]["stuck_runs"][0]["audit_run_id"] == "run-1"
+    assert any("workflow-worker" in item for item in check["remediation"])
+
+
+def test_active_pipeline_readiness_passes_running_run_with_fresh_owner() -> None:
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    audit_run = SimpleNamespace(
+        audit_run_id="run-1",
+        status="created",
+        config={"pipeline_state": {"stage": "validators", "status": "running", "worker_id": "worker-1"}},
+    )
+    fresh_worker = SimpleNamespace(
+        worker_id="worker-1",
+        status="running",
+        current_audit_run_id="run-1",
+        last_seen_at=now - timedelta(seconds=5),
+    )
+
+    check = _active_pipeline_readiness_check([audit_run], [fresh_worker], max_age_seconds=30, now=now)
+
+    assert check["status"] == "pass"
+    assert check["detail"]["active_pipeline_count"] == 1
+    assert check["detail"]["stuck_pipeline_count"] == 0
+
+
+def test_active_pipeline_readiness_ignores_durable_queued_runs() -> None:
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
+    audit_run = SimpleNamespace(
+        audit_run_id="run-queued",
+        status="queued",
+        config={"pipeline_state": {"stage": "queued", "status": "queued"}},
+    )
+
+    check = _active_pipeline_readiness_check([audit_run], [], max_age_seconds=30, now=now)
+
+    assert check["status"] == "pass"
+    assert check["detail"]["active_pipeline_count"] == 0
