@@ -1,12 +1,7 @@
 import { useEffect } from "react";
 import { message } from "antd";
-import {
-  API_KEY_STORAGE_KEY,
-  formatHttpError,
-  readJson,
-  rememberApiKeyHeaderName,
-  withAuth,
-} from "../api";
+import { API_KEY_STORAGE_KEY, rememberApiKeyHeaderName } from "../api";
+import * as dashboardApi from "../client/dashboardApi";
 import type {
   ArtifactRef,
   ContainerRow,
@@ -92,31 +87,20 @@ export function useDashboardController() {
   } = dashboardState;
 
   async function refreshAuditRun(auditRunId: string) {
-    const [run, agents, findingRows, dependencyRows, containerRows, reportRows, pipeline] = await Promise.all([
-      readJson(`/gateway/audit-runs/${auditRunId}`),
-      readJson(`/gateway/audit-runs/${auditRunId}/agent-runs`),
-      readJson(`/gateway/audit-runs/${auditRunId}/findings`),
-      readJson(`/gateway/audit-runs/${auditRunId}/dependencies`).catch(() => undefined),
-      readJson(`/gateway/audit-runs/${auditRunId}/containers`),
-      readJson(`/gateway/audit-runs/${auditRunId}/reports`),
-      readJson(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
-    ]);
-    setAuditRun(run);
-    setAgentRuns(agents);
-    setFindings(findingRows);
-    setDependencies(dependencyRows);
-    setContainers(containerRows);
-    setReports(reportRows);
-    setPipelineStatus(pipeline);
+    const bundle = await dashboardApi.getAuditRunBundle(auditRunId);
+    setAuditRun(bundle.run);
+    setAgentRuns(bundle.agents);
+    setFindings(bundle.findings);
+    setDependencies(bundle.dependencies);
+    setContainers(bundle.containers);
+    setReports(bundle.reports);
+    setPipelineStatus(bundle.pipeline);
   }
 
   async function refresh() {
     setError(undefined);
     try {
-      const [api, auth] = await Promise.all([
-        readJson("/api/health"),
-        readJson("/api/auth/status"),
-      ]);
+      const [api, auth] = await dashboardApi.getPlatformBootstrap();
       setApiHealth(api);
       setAuthStatus(auth);
       rememberApiKeyHeaderName(auth?.api_key_header);
@@ -125,20 +109,17 @@ export function useDashboardController() {
         clearProtectedState();
         return;
       }
-      const [docker, projectRows] = await Promise.all([
-        readJson("/gateway/runtime/docker/health"),
-        readJson("/gateway/projects"),
-      ]);
+      const [docker, projectRows] = await dashboardApi.getDashboardProjects();
       setDockerHealth(docker);
-      readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
-      readJson("/gateway/runtime/storage").then(setStorageSummary).catch(() => setStorageSummary(undefined));
-      readJson("/gateway/runtime/policy").then(setRuntimePolicy).catch(() => setRuntimePolicy(undefined));
-      readJson("/gateway/runtime/readiness").then(setRuntimeReadiness).catch(() => setRuntimeReadiness(undefined));
-      readJson("/gateway/runtime/workers").then((data) => setWorkerHeartbeats(data.workers || [])).catch(() => setWorkerHeartbeats([]));
-      readJson("/gateway/runtime/sandbox/capabilities").then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
-      readJson("/gateway/auth/api-keys").then(setApiKeys).catch(() => setApiKeys([]));
-      readJson("/gateway/platform/audit-events?limit=100").then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
-      readJson("/gateway/knowledge/documents").then(setKnowledgeDocuments).catch(() => setKnowledgeDocuments([]));
+      dashboardApi.getManagedRuntime().then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
+      dashboardApi.getStorageSummary().then(setStorageSummary).catch(() => setStorageSummary(undefined));
+      dashboardApi.getRuntimePolicy().then(setRuntimePolicy).catch(() => setRuntimePolicy(undefined));
+      dashboardApi.getRuntimeReadiness().then(setRuntimeReadiness).catch(() => setRuntimeReadiness(undefined));
+      dashboardApi.getWorkerHeartbeats().then((data) => setWorkerHeartbeats(data.workers || [])).catch(() => setWorkerHeartbeats([]));
+      dashboardApi.getSandboxCapabilities().then(setSandboxCapabilities).catch(() => setSandboxCapabilities(undefined));
+      dashboardApi.listApiKeys().then(setApiKeys).catch(() => setApiKeys([]));
+      dashboardApi.listPlatformAuditEvents().then(setPlatformAuditEvents).catch(() => setPlatformAuditEvents([]));
+      dashboardApi.listKnowledgeDocuments().then(setKnowledgeDocuments).catch(() => setKnowledgeDocuments([]));
       setProjects(projectRows);
       if (!selectedProjectId && projectRows.length > 0) {
         setSelectedProjectId(projectRows[0].project_id);
@@ -165,11 +146,7 @@ export function useDashboardController() {
 
   async function createGitProject(values: { name: string; git_url: string; ref?: string }) {
     await runAction(async () => {
-      const result = await readJson("/gateway/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
-      });
+      const result = await dashboardApi.createGitProject(values);
       setLastResponse(result);
       setSelectedProjectId(result.project.project_id);
       gitForm.resetFields();
@@ -187,7 +164,7 @@ export function useDashboardController() {
       const formData = new FormData();
       formData.append("name", values.name);
       formData.append("file", zipFile);
-      const result = await readJson("/gateway/projects/upload-zip", { method: "POST", body: formData });
+      const result = await dashboardApi.uploadZipProject(formData);
       setLastResponse(result);
       setSelectedProjectId(result.project.project_id);
       zipForm.resetFields();
@@ -202,17 +179,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/projects/${selectedProjectId}/audit-runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          agent_name: "opencode-orchestrator",
-          allow_external_network: false,
-          input_payload: {
-            goal: "Run an initial security audit. Inspect the mounted source and report vulnerability candidates with file paths.",
-          },
-        }),
-      });
+      const result = await dashboardApi.createAuditRun(selectedProjectId);
       setLastResponse(result);
       await refreshAuditRun(result.audit_run.audit_run_id);
     });
@@ -224,7 +191,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sca`, { method: "POST" });
+      const result = await dashboardApi.runSca(auditRun.audit_run_id);
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
     });
@@ -236,7 +203,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/run-pipeline`, { method: "POST" });
+      const result = await dashboardApi.runPipeline(auditRun.audit_run_id);
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
     });
@@ -248,7 +215,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/judge`, { method: "POST" });
+      const result = await dashboardApi.runJudge(auditRun.audit_run_id);
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
     });
@@ -260,7 +227,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/report`, { method: "POST" });
+      const result = await dashboardApi.generateReport(auditRun.audit_run_id);
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
     });
@@ -291,24 +258,20 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/poc`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: "python:3.12-slim",
-          command: [
-            "python",
-            "-c",
-            "import os, json; print('dieaudit poc smoke'); print(json.dumps(os.listdir('/workspace')[:20] if os.path.exists('/workspace') else []))",
-          ],
-          allow_external_network: false,
-          timeout_seconds: 120,
-          allow_weak_isolation: false,
-        }),
+      const result = await dashboardApi.runSandboxPoc(auditRun.audit_run_id, {
+        image: "python:3.12-slim",
+        command: [
+          "python",
+          "-c",
+          "import os, json; print('dieaudit poc smoke'); print(json.dumps(os.listdir('/workspace')[:20] if os.path.exists('/workspace') else []))",
+        ],
+        allow_external_network: false,
+        timeout_seconds: 120,
+        allow_weak_isolation: false,
       });
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
-      const managed = await readJson("/gateway/runtime/managed");
+      const managed = await dashboardApi.getManagedRuntime();
       setManagedRuntime(managed);
     });
   }
@@ -322,24 +285,20 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/service`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: "python:3.12-slim",
-          command: ["python", "-m", "http.server", "8080", "--directory", "/workspace"],
-          service_name: "target",
-          port: 8080,
-          allow_external_network: false,
-          retain_runtime_on_failure: true,
-          startup_timeout_seconds: 30,
-          allow_weak_isolation: false,
-        }),
+      const result = await dashboardApi.startSandboxService(auditRun.audit_run_id, {
+        image: "python:3.12-slim",
+        command: ["python", "-m", "http.server", "8080", "--directory", "/workspace"],
+        service_name: "target",
+        port: 8080,
+        allow_external_network: false,
+        retain_runtime_on_failure: true,
+        startup_timeout_seconds: 30,
+        allow_weak_isolation: false,
       });
       setSandboxTarget({ network: result.network, target_url: result.target_url });
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
-      const managed = await readJson("/gateway/runtime/managed");
+      const managed = await dashboardApi.getManagedRuntime();
       setManagedRuntime(managed);
     });
   }
@@ -357,27 +316,23 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/poc`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: "python:3.12-slim",
-          command: [
-            "python",
-            "-c",
-            "import os, urllib.request; url=os.environ['TARGET_URL']; r=urllib.request.urlopen(url, timeout=5); print(url); print(r.status); print(r.read(120).decode('utf-8', 'replace'))",
-          ],
-          network_name: sandboxTarget.network,
-          target_url: sandboxTarget.target_url,
-          allow_external_network: false,
-          timeout_seconds: 120,
-          expected_exit_code: 0,
-          allow_weak_isolation: false,
-        }),
+      const result = await dashboardApi.runSandboxPoc(auditRun.audit_run_id, {
+        image: "python:3.12-slim",
+        command: [
+          "python",
+          "-c",
+          "import os, urllib.request; url=os.environ['TARGET_URL']; r=urllib.request.urlopen(url, timeout=5); print(url); print(r.status); print(r.read(120).decode('utf-8', 'replace'))",
+        ],
+        network_name: sandboxTarget.network,
+        target_url: sandboxTarget.target_url,
+        allow_external_network: false,
+        timeout_seconds: 120,
+        expected_exit_code: 0,
+        allow_weak_isolation: false,
       });
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
-      const managed = await readJson("/gateway/runtime/managed");
+      const managed = await dashboardApi.getManagedRuntime();
       setManagedRuntime(managed);
     });
   }
@@ -389,12 +344,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const response = await fetch(url, withAuth());
-      const text = response.ok ? undefined : await response.text();
-      if (!response.ok) {
-        throw new Error(formatHttpError(text || "", response.statusText));
-      }
-      const blob = await response.blob();
+      const blob = await dashboardApi.fetchArtifactBlob(url);
       const objectUrl = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
@@ -409,7 +359,7 @@ export function useDashboardController() {
 
   async function openFinding(findingId: string) {
     await runAction(async () => {
-      const result = await readJson(`/gateway/findings/${findingId}`);
+      const result = await dashboardApi.getFinding(findingId);
       setSelectedFinding(result);
     });
   }
@@ -423,26 +373,22 @@ export function useDashboardController() {
     }
     const findingId = selectedFinding.finding.finding_id;
     await runAction(async () => {
-      const result = await readJson(`/gateway/findings/${findingId}/poc`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image: "python:3.12-slim",
-          command: [
-            "python",
-            "-c",
-            "import os, json; print('dieaudit finding poc smoke'); print(json.dumps({'workspace': os.listdir('/workspace')[:20] if os.path.exists('/workspace') else [], 'artifact_dir': os.environ.get('ARTIFACT_DIR')}))",
-          ],
-          allow_external_network: false,
-          timeout_seconds: 120,
-          expected_exit_code: 0,
-          allow_weak_isolation: false,
-        }),
+      const result = await dashboardApi.runFindingPoc(findingId, {
+        image: "python:3.12-slim",
+        command: [
+          "python",
+          "-c",
+          "import os, json; print('dieaudit finding poc smoke'); print(json.dumps({'workspace': os.listdir('/workspace')[:20] if os.path.exists('/workspace') else [], 'artifact_dir': os.environ.get('ARTIFACT_DIR')}))",
+        ],
+        allow_external_network: false,
+        timeout_seconds: 120,
+        expected_exit_code: 0,
+        allow_weak_isolation: false,
       });
       setLastResponse(result);
       setSelectedFinding(result.finding);
       await refreshAuditRun(auditRun.audit_run_id);
-      const managed = await readJson("/gateway/runtime/managed");
+      const managed = await dashboardApi.getManagedRuntime();
       setManagedRuntime(managed);
     });
   }
@@ -452,7 +398,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/agent-runs/${agentRunId}/events`);
+      const result = await dashboardApi.getAgentEvents(auditRun.audit_run_id, agentRunId);
       setAgentEvents(result);
     });
   }
@@ -462,14 +408,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const response = await fetch(
-        `/gateway/audit-runs/${auditRun.audit_run_id}/containers/${encodeURIComponent(row.Id)}/logs`,
-        withAuth(),
-      );
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(formatHttpError(text, response.statusText));
-      }
+      const text = await dashboardApi.getContainerLogs(auditRun.audit_run_id, row.Id);
       setContainerLogs({ title: row.container_name || row.Names?.[0]?.replace("/", "") || row.Id.slice(0, 12), body: text });
     });
   }
@@ -479,7 +418,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/cleanup`, { method: "POST" });
+      const result = await dashboardApi.cleanupAuditRun(auditRun.audit_run_id);
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
     });
@@ -490,7 +429,7 @@ export function useDashboardController() {
       return;
     }
     await runAction(async () => {
-      const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/cancel`, { method: "POST" });
+      const result = await dashboardApi.cancelAuditRun(auditRun.audit_run_id);
       setLastResponse(result);
       await refreshAuditRun(auditRun.audit_run_id);
     });
@@ -498,9 +437,9 @@ export function useDashboardController() {
 
   async function cleanupExpiredRuntime() {
     await runAction(async () => {
-      const result = await readJson("/gateway/runtime/cleanup-expired", { method: "POST" });
+      const result = await dashboardApi.cleanupExpiredRuntime();
       setLastResponse(result);
-      const managed = await readJson("/gateway/runtime/managed");
+      const managed = await dashboardApi.getManagedRuntime();
       setManagedRuntime(managed);
       if (auditRun) {
         await refreshAuditRun(auditRun.audit_run_id);
@@ -510,22 +449,18 @@ export function useDashboardController() {
 
   async function previewLocalStorageCleanup() {
     await runAction(async () => {
-      const result = await readJson("/gateway/runtime/storage/cleanup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dry_run: true }),
-      });
+      const result = await dashboardApi.previewLocalStorageCleanup();
       setLastResponse(result);
-      const summary = await readJson("/gateway/runtime/storage");
+      const summary = await dashboardApi.getStorageSummary();
       setStorageSummary(summary);
     });
   }
 
   async function cleanupPlatformAuditEvents() {
     await runAction(async () => {
-      const result = await readJson("/gateway/platform/audit-events", { method: "DELETE" });
+      const result = await dashboardApi.cleanupPlatformAuditEvents();
       setLastResponse(result);
-      const rows = await readJson("/gateway/platform/audit-events?limit=100");
+      const rows = await dashboardApi.listPlatformAuditEvents();
       setPlatformAuditEvents(rows);
     });
   }
@@ -534,30 +469,26 @@ export function useDashboardController() {
     await runAction(async () => {
       const projectIds = parseCsvList(values.project_ids);
       const auditRunIds = parseCsvList(values.audit_run_ids);
-      const result = await readJson("/gateway/auth/api-keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: values.name,
-          scopes: parseScopes(values.scopes),
-          metadata: {
-            ...(projectIds.length ? { project_ids: projectIds } : {}),
-            ...(auditRunIds.length ? { audit_run_ids: auditRunIds } : {}),
-          },
-        }),
+      const result = await dashboardApi.createManagedApiKey({
+        name: values.name,
+        scopes: parseScopes(values.scopes),
+        metadata: {
+          ...(projectIds.length ? { project_ids: projectIds } : {}),
+          ...(auditRunIds.length ? { audit_run_ids: auditRunIds } : {}),
+        },
       });
       setLastResponse(result);
       apiKeyForm.resetFields();
-      const rows = await readJson("/gateway/auth/api-keys");
+      const rows = await dashboardApi.listApiKeys();
       setApiKeys(rows);
     });
   }
 
   async function deactivateManagedApiKey(keyId: string) {
     await runAction(async () => {
-      const result = await readJson(`/gateway/auth/api-keys/${keyId}/deactivate`, { method: "POST" });
+      const result = await dashboardApi.deactivateManagedApiKey(keyId);
       setLastResponse(result);
-      const rows = await readJson("/gateway/auth/api-keys");
+      const rows = await dashboardApi.listApiKeys();
       setApiKeys(rows);
     });
   }
@@ -577,26 +508,22 @@ export function useDashboardController() {
         formData.append("project_id", values.project_id);
       }
       formData.append("file", knowledgeFile);
-      const result = await readJson("/gateway/knowledge/documents", { method: "POST", body: formData });
+      const result = await dashboardApi.uploadKnowledgeDocument(formData);
       setLastResponse(result);
       knowledgeUploadForm.resetFields();
       setKnowledgeFiles([]);
-      const rows = await readJson("/gateway/knowledge/documents");
+      const rows = await dashboardApi.listKnowledgeDocuments();
       setKnowledgeDocuments(rows);
     });
   }
 
   async function searchKnowledge(values: { query: string; project_id?: string; limit?: string }) {
     await runAction(async () => {
-      const result = await readJson("/gateway/knowledge/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: values.query,
-          project_id: values.project_id || selectedProjectId || undefined,
-          include_global: true,
-          limit: Number(values.limit || 8),
-        }),
+      const result = await dashboardApi.searchKnowledge({
+        query: values.query,
+        project_id: values.project_id || selectedProjectId || undefined,
+        include_global: true,
+        limit: Number(values.limit || 8),
       });
       setLastResponse(result);
       setKnowledgeMatches(result.matches || []);
@@ -605,18 +532,18 @@ export function useDashboardController() {
 
   async function reindexKnowledgeDocument(documentId: string) {
     await runAction(async () => {
-      const result = await readJson(`/gateway/knowledge/documents/${documentId}/reindex`, { method: "POST" });
+      const result = await dashboardApi.reindexKnowledgeDocument(documentId);
       setLastResponse(result);
-      const rows = await readJson("/gateway/knowledge/documents");
+      const rows = await dashboardApi.listKnowledgeDocuments();
       setKnowledgeDocuments(rows);
     });
   }
 
   async function deleteKnowledgeDocument(documentId: string) {
     await runAction(async () => {
-      const result = await readJson(`/gateway/knowledge/documents/${documentId}`, { method: "DELETE" });
+      const result = await dashboardApi.deleteKnowledgeDocument(documentId);
       setLastResponse(result);
-      const rows = await readJson("/gateway/knowledge/documents");
+      const rows = await dashboardApi.listKnowledgeDocuments();
       setKnowledgeDocuments(rows);
       setKnowledgeMatches((items) => items.filter((item) => item.document_id !== documentId));
     });
