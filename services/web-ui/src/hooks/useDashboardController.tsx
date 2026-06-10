@@ -31,7 +31,7 @@ import type {
   StorageSummary,
   WorkerHeartbeat,
 } from "../types";
-import { artifactFileName, artifactUrl, isActiveRun, parseScopes } from "../utils/format";
+import { artifactFileName, artifactUrl, isActiveRun, parseCsvList, parseScopes } from "../utils/format";
 import { useDashboardColumns } from "./useDashboardColumns";
 
 export function useDashboardController() {
@@ -544,14 +544,20 @@ export function useDashboardController() {
     });
   }
 
-  async function createManagedApiKey(values: { name: string; scopes?: string }) {
+  async function createManagedApiKey(values: { name: string; scopes?: string; project_ids?: string; audit_run_ids?: string }) {
     await runAction(async () => {
+      const projectIds = parseCsvList(values.project_ids);
+      const auditRunIds = parseCsvList(values.audit_run_ids);
       const result = await readJson("/gateway/auth/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: values.name,
           scopes: parseScopes(values.scopes),
+          metadata: {
+            ...(projectIds.length ? { project_ids: projectIds } : {}),
+            ...(auditRunIds.length ? { audit_run_ids: auditRunIds } : {}),
+          },
         }),
       });
       setLastResponse(result);

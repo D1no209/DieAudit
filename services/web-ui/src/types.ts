@@ -224,6 +224,7 @@ export type ApiKeyRecord = {
   status: string;
   last_used_at?: string;
   deactivated_at?: string;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 

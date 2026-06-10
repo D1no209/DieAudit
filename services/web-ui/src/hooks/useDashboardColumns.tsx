@@ -92,6 +92,22 @@ export function useDashboardColumns({
     { title: "Name", dataIndex: "name" },
     { title: "Status", dataIndex: "status", render: (value) => <Tag color={value === "active" ? "green" : "default"}>{value}</Tag> },
     { title: "Scopes", dataIndex: "scopes", render: (value: string[]) => <Space wrap>{value.map((item) => <Tag key={item}>{item}</Tag>)}</Space> },
+    {
+      title: "Limits",
+      render: (_, row) => {
+        const projectIds = metadataList(row.metadata?.project_ids);
+        const auditRunIds = metadataList(row.metadata?.audit_run_ids);
+        if (!projectIds.length && !auditRunIds.length) {
+          return <Tag>global</Tag>;
+        }
+        return (
+          <Space wrap>
+            {projectIds.map((item) => <Tag key={`project-${item}`}>project:{item}</Tag>)}
+            {auditRunIds.map((item) => <Tag key={`audit-${item}`}>run:{item}</Tag>)}
+          </Space>
+        );
+      },
+    },
     { title: "Last Used", dataIndex: "last_used_at", render: (value) => value || "-" },
     { title: "Created", dataIndex: "created_at" },
     {
@@ -141,3 +157,13 @@ export function useDashboardColumns({
 }
 
 export type DashboardColumns = ReturnType<typeof useDashboardColumns>;
+
+function metadataList(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}

@@ -98,3 +98,11 @@ export function parseScopes(value?: string) {
     .filter(Boolean);
   return Array.from(new Set(scopes.length ? scopes : ["admin"]));
 }
+
+export function parseCsvList(value?: string) {
+  const items = (value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return Array.from(new Set(items));
+}
