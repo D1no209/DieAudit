@@ -1,10 +1,11 @@
 import { FileTextOutlined, PlayCircleOutlined, SafetyCertificateOutlined, StopOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Form, Input, List, Space, Table, Tabs, Tag, Typography, Upload } from "antd";
+import { Alert, Button, Card, Collapse, Form, Input, List, Space, Table, Tabs, Tag, Typography, Upload } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { FormInstance } from "antd/es/form";
 import type { UploadFile } from "antd/es/upload/interface";
 import type { AgentRun, ArtifactRef, AuditRun, PipelineStatus, Project, ReportArtifact } from "../types";
 import { isActiveRun } from "../utils/format";
+import { PageHeader } from "../components/PageHeader";
 
 const { Paragraph, Text } = Typography;
 
@@ -63,16 +64,20 @@ export function ProjectsPage({
   onStartAudit,
   onUploadZipProject,
 }: Props) {
+  const pageActions = (
+    <div className="action-bar">
+      <Button type="primary" icon={<PlayCircleOutlined />} loading={loading} onClick={onStartAudit}>启动审计</Button>
+      <Button icon={<PlayCircleOutlined />} loading={loading} onClick={onRunPipeline}>一键闭环</Button>
+      <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={onRunSca}>SCA 扫描</Button>
+      <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={onRunJudge}>研判</Button>
+      <Button icon={<FileTextOutlined />} loading={loading} onClick={onGenerateReport}>报告</Button>
+      <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={onCancelAuditRun}>取消</Button>
+    </div>
+  );
+
   return (
     <>
-      <div className="action-bar section">
-        <Button type="primary" icon={<PlayCircleOutlined />} loading={loading} onClick={onStartAudit}>启动审计</Button>
-        <Button icon={<PlayCircleOutlined />} loading={loading} onClick={onRunPipeline}>一键闭环</Button>
-        <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={onRunSca}>SCA 扫描</Button>
-        <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={onRunJudge}>研判</Button>
-        <Button icon={<FileTextOutlined />} loading={loading} onClick={onGenerateReport}>报告</Button>
-        <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={onCancelAuditRun}>取消</Button>
-      </div>
+      <PageHeader title="Projects & Audit Runs" actions={pageActions} />
 
       <div className="workspace-grid section">
         <Card title="Projects">
@@ -147,7 +152,18 @@ export function ProjectsPage({
               description={`${pipelineStatus.runtime_control.cancel_reason || "cancel_requested"} ${pipelineStatus.runtime_control.cancel_requested_at || ""}`}
             />
           )}
-          <pre>{JSON.stringify(lastResponse || { hint: "Import a project, start an audit, then run SCA." }, null, 2)}</pre>
+          {lastResponse && (
+            <Collapse
+              size="small"
+              items={[
+                {
+                  key: "last-response",
+                  label: "Last Response",
+                  children: <pre>{JSON.stringify(lastResponse, null, 2)}</pre>,
+                },
+              ]}
+            />
+          )}
         </Card>
       </div>
 

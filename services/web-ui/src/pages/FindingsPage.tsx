@@ -2,6 +2,7 @@ import { Badge, Button, Card, Space, Statistic, Table, Tabs, Tag, Typography } f
 import type { ColumnsType } from "antd/es/table";
 import type { DependencyRecord, DependencyInventory, Finding } from "../types";
 import { severityColor } from "../utils/format";
+import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
 
@@ -44,48 +45,51 @@ export function FindingsPage({ dependencies, findings, onOpenFinding }: Props) {
   const byEcosystem = Object.entries(dependencies?.summary.by_ecosystem || {});
 
   return (
-    <Tabs
-      className="section"
-      items={[
-        {
-          key: "findings",
-          label: `Findings (${findings.length})`,
-          children: (
-            <Card>
-              <Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 8 }} />
-            </Card>
-          ),
-        },
-        {
-          key: "dependencies",
-          label: `Dependencies (${dependencies?.summary.total ?? 0})`,
-          children: (
-            <Space direction="vertical" size={16} className="drawer-stack">
-              <div className="stats-grid">
-                <Card><Statistic title="Packages" value={dependencies?.summary.total ?? 0} /></Card>
-                <Card><Statistic title="Vulnerable" value={dependencies?.summary.vulnerable ?? 0} /></Card>
-                <Card>
-                  <Statistic title="Ecosystems" value={byEcosystem.length} />
-                  <Space wrap>
-                    {byEcosystem.map(([name, count]) => (
-                      <Tag key={name}>{name}: {count}</Tag>
-                    ))}
-                    {byEcosystem.length === 0 && <Text type="secondary">No dependency inventory yet</Text>}
-                  </Space>
-                </Card>
-              </div>
+    <>
+      <PageHeader title="Findings" />
+      <Tabs
+        className="section"
+        items={[
+          {
+            key: "findings",
+            label: `Findings (${findings.length})`,
+            children: (
               <Card>
-                <Table
-                  rowKey="dependency_id"
-                  columns={dependencyColumns}
-                  dataSource={dependencies?.packages || []}
-                  pagination={{ pageSize: 10 }}
-                />
+                <Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 8 }} />
               </Card>
-            </Space>
-          ),
-        },
-      ]}
-    />
+            ),
+          },
+          {
+            key: "dependencies",
+            label: `Dependencies (${dependencies?.summary.total ?? 0})`,
+            children: (
+              <Space direction="vertical" size={16} className="drawer-stack">
+                <div className="stats-grid">
+                  <Card><Statistic title="Packages" value={dependencies?.summary.total ?? 0} /></Card>
+                  <Card><Statistic title="Vulnerable" value={dependencies?.summary.vulnerable ?? 0} /></Card>
+                  <Card>
+                    <Statistic title="Ecosystems" value={byEcosystem.length} />
+                    <Space wrap>
+                      {byEcosystem.map(([name, count]) => (
+                        <Tag key={name}>{name}: {count}</Tag>
+                      ))}
+                      {byEcosystem.length === 0 && <Text type="secondary">No dependency inventory yet</Text>}
+                    </Space>
+                  </Card>
+                </div>
+                <Card>
+                  <Table
+                    rowKey="dependency_id"
+                    columns={dependencyColumns}
+                    dataSource={dependencies?.packages || []}
+                    pagination={{ pageSize: 10 }}
+                  />
+                </Card>
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </>
   );
 }

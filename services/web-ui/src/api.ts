@@ -1,4 +1,5 @@
 export const API_KEY_STORAGE_KEY = "dieaudit.apiKey";
+export const API_KEY_HEADER_STORAGE_KEY = "dieaudit.apiKeyHeader";
 export const API_KEY_HEADER = "X-DieAudit-Api-Key";
 
 export async function readJson(path: string, options?: RequestInit) {
@@ -14,9 +15,36 @@ export function withAuth(options?: RequestInit): RequestInit {
   const headers = new Headers(options?.headers);
   const apiKey = window.localStorage.getItem(API_KEY_STORAGE_KEY);
   if (apiKey) {
-    headers.set(API_KEY_HEADER, apiKey);
+    headers.set(apiKeyHeaderName(), apiKey);
   }
   return { ...options, headers };
+}
+
+export function apiKeyHeaderName() {
+  const stored = window.localStorage.getItem(API_KEY_HEADER_STORAGE_KEY);
+  if (stored && isValidHeaderName(stored)) {
+    return stored;
+  }
+  if (stored) {
+    window.localStorage.removeItem(API_KEY_HEADER_STORAGE_KEY);
+  }
+  return API_KEY_HEADER;
+}
+
+export function rememberApiKeyHeaderName(headerName?: string) {
+  const normalized = (headerName || "").trim();
+  if (normalized && isValidHeaderName(normalized)) {
+    window.localStorage.setItem(API_KEY_HEADER_STORAGE_KEY, normalized);
+  }
+}
+
+function isValidHeaderName(headerName: string) {
+  try {
+    new Headers({ [headerName]: "probe" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function formatHttpError(body: string, fallback: string) {

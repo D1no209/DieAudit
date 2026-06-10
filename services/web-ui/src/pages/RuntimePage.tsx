@@ -3,6 +3,7 @@ import { Button, Card, List, Space, Table, Tabs, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { ContainerRow, RuntimeReadiness, WorkerHeartbeat } from "../types";
 import { readinessColor, renderReadinessDescription } from "../utils/format";
+import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
 
@@ -35,15 +36,19 @@ export function RuntimePage({
   onRunSandboxTargetPoc,
   onStartSandboxService,
 }: Props) {
+  const pageActions = (
+    <div className="action-bar">
+      <Button icon={<CloudServerOutlined />} loading={loading} onClick={onStartSandboxService}>Sandbox Service</Button>
+      <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!sandboxTarget} onClick={onRunSandboxTargetPoc}>Target PoC</Button>
+      <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={onRunPocSmoke}>PoC Smoke</Button>
+      <Button icon={<DeleteOutlined />} loading={loading} onClick={onCleanupExpiredRuntime}>清理过期运行时</Button>
+      <Button danger icon={<DeleteOutlined />} loading={loading} onClick={onCleanup}>清理当前运行时</Button>
+    </div>
+  );
+
   return (
     <>
-      <div className="action-bar section">
-        <Button icon={<CloudServerOutlined />} loading={loading} onClick={onStartSandboxService}>Sandbox Service</Button>
-        <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!sandboxTarget} onClick={onRunSandboxTargetPoc}>Target PoC</Button>
-        <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={onRunPocSmoke}>PoC Smoke</Button>
-        <Button icon={<DeleteOutlined />} loading={loading} onClick={onCleanupExpiredRuntime}>清理过期运行时</Button>
-        <Button danger icon={<DeleteOutlined />} loading={loading} onClick={onCleanup}>清理当前运行时</Button>
-      </div>
+      <PageHeader title="Runtime" actions={pageActions} />
       <Tabs
         className="section"
         items={[

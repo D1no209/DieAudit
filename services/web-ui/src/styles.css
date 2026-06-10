@@ -72,6 +72,15 @@ body {
   margin-bottom: 16px;
 }
 
+.page-header {
+  min-height: 40px;
+}
+
+.page-title {
+  margin: 0 !important;
+  letter-spacing: 0 !important;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
