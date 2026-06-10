@@ -11,6 +11,29 @@ from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException,
 from fastapi.responses import FileResponse
 from sqlalchemy import delete, select
 
+from app.api.readiness import (
+    embedding_readiness_remediation as _embedding_readiness_remediation,
+    normalized_pipeline_backend as _normalized_pipeline_backend,
+    pipeline_backend_readiness_check as _pipeline_backend_readiness_check,
+    sandbox_readiness_remediation as _sandbox_readiness_remediation,
+    template_readiness_checks as _template_readiness_checks,
+)
+from app.api.serializers import (
+    agent_run_to_dict as _agent_run_to_dict,
+    artifact_metadata_or_none as _artifact_metadata_or_none,
+    attempt_to_dict as _attempt_to_dict,
+    audit_run_to_dict as _audit_run_to_dict,
+    dependency_record_to_dict as _dependency_record_to_dict,
+    evidence_to_dict as _evidence_to_dict,
+    finding_to_dict as _finding_to_dict,
+    knowledge_chunk_from_row as _knowledge_chunk_from_row,
+    knowledge_chunk_to_dict as _knowledge_chunk_to_dict,
+    knowledge_document_to_dict as _knowledge_document_to_dict,
+    platform_audit_event_to_dict as _platform_audit_event_to_dict,
+    project_to_dict as _project_to_dict,
+    report_to_dict as _report_to_dict,
+    snapshot_to_dict as _snapshot_to_dict,
+)
 from app.domain.models import (
     AgentRun,
     AgentRunEvent,
@@ -74,26 +97,6 @@ from app.settings import Settings, get_settings
 
 
 router = APIRouter()
-
-
-PRODUCTION_AGENT_TEMPLATES = {
-    "opencode-orchestrator",
-    "opencode-recon-auditor",
-    "opencode-sca-analyst",
-    "opencode-validator",
-    "opencode-judger",
-    "opencode-poc-writer",
-}
-PRODUCTION_MCP_TEMPLATES = {
-    "filesystem-mcp",
-    "code-search-mcp",
-    "semgrep-mcp",
-    "sca-mcp",
-    "kb-mcp",
-    "http-test-mcp",
-    "sandbox-mcp",
-}
-OPTIONAL_HEAVY_MCP_TEMPLATES = {"joern-mcp", "codeql-mcp"}
 
 
 def register_runtime_routes(settings: Settings, runtime_provider: callable) -> APIRouter:
@@ -1662,175 +1665,6 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     return router
 
 
-def _agent_run_to_dict(row: AgentRun) -> dict[str, Any]:
-    return {
-        "agent_run_id": row.agent_run_id,
-        "audit_run_id": row.audit_run_id,
-        "project_id": row.project_id,
-        "agent_name": row.agent_name,
-        "template_name": row.template_name,
-        "protocol_kind": row.protocol_kind,
-        "status": row.status,
-        "input_summary": row.input_summary,
-        "output_summary": row.output_summary,
-        "artifact_path": row.artifact_path,
-        "error": row.error,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _platform_audit_event_to_dict(row: PlatformAuditEvent) -> dict[str, Any]:
-    return {
-        "id": row.id,
-        "service": row.service,
-        "method": row.method,
-        "path": row.path,
-        "status_code": row.status_code,
-        "client_host": row.client_host,
-        "user_agent": row.user_agent,
-        "auth_enabled": row.auth_enabled,
-        "auth_result": row.auth_result,
-        "request_id": row.request_id,
-        "metadata": row.metadata_json,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _project_to_dict(row: Project) -> dict[str, Any]:
-    return {
-        "project_id": row.project_id,
-        "name": row.name,
-        "source_type": row.source_type,
-        "source_uri": row.source_uri,
-        "default_branch": row.default_branch,
-        "status": row.status,
-        "metadata": row.metadata_json,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _snapshot_to_dict(row: ProjectSnapshot) -> dict[str, Any]:
-    return {
-        "snapshot_id": row.snapshot_id,
-        "project_id": row.project_id,
-        "source_type": row.source_type,
-        "source_ref": row.source_ref,
-        "workspace_path": row.workspace_path,
-        "artifact_path": row.artifact_path,
-        "artifact": _artifact_metadata_or_none(row.artifact_path),
-        "content_hash": row.content_hash,
-        "status": row.status,
-        "metadata": row.metadata_json,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _audit_run_to_dict(row: AuditRun) -> dict[str, Any]:
-    return {
-        "audit_run_id": row.audit_run_id,
-        "project_id": row.project_id,
-        "snapshot_id": row.snapshot_id,
-        "status": row.status,
-        "validator_rounds": row.validator_rounds,
-        "max_parallel_validators": row.max_parallel_validators,
-        "allow_external_network": row.allow_external_network,
-        "retain_runtime_on_failure": row.retain_runtime_on_failure,
-        "config": row.config,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _finding_to_dict(row: Finding) -> dict[str, Any]:
-    return {
-        "finding_id": row.finding_id,
-        "audit_run_id": row.audit_run_id,
-        "project_id": row.project_id,
-        "title": row.title,
-        "severity": row.severity,
-        "status": row.status,
-        "file_path": row.file_path,
-        "line_start": row.line_start,
-        "line_end": row.line_end,
-        "rule_id": row.rule_id,
-        "description": row.description,
-        "source": row.source,
-        "raw": row.raw,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _evidence_to_dict(row: Evidence) -> dict[str, Any]:
-    return {
-        "evidence_id": row.evidence_id,
-        "finding_id": row.finding_id,
-        "audit_run_id": row.audit_run_id,
-        "kind": row.kind,
-        "summary": row.summary,
-        "artifact_path": row.artifact_path,
-        "artifact": _artifact_metadata_or_none(row.artifact_path),
-        "payload": row.payload,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _knowledge_document_to_dict(row: KnowledgeDocument) -> dict[str, Any]:
-    return {
-        "document_id": row.document_id,
-        "title": row.title,
-        "source_name": row.source_name,
-        "content_type": row.content_type,
-        "scope": row.scope,
-        "project_id": row.project_id,
-        "status": row.status,
-        "chunk_count": row.chunk_count,
-        "artifact_path": row.artifact_path,
-        "artifact": _artifact_metadata_or_none(row.artifact_path),
-        "metadata": row.metadata_json or {},
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _knowledge_chunk_to_dict(row: KnowledgeChunk) -> dict[str, Any]:
-    return {
-        "chunk_id": row.chunk_id,
-        "document_id": row.document_id,
-        "scope": row.scope,
-        "project_id": row.project_id,
-        "chunk_index": row.chunk_index,
-        "text": row.text,
-        "token_count": row.token_count,
-        "vector_id": row.vector_id,
-        "metadata": row.metadata_json or {},
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _knowledge_chunk_from_row(row: dict[str, Any]) -> KnowledgeChunk:
-    return KnowledgeChunk(
-        chunk_id=row["chunk_id"],
-        document_id=row["document_id"],
-        scope=row["scope"],
-        project_id=row["project_id"],
-        chunk_index=row["chunk_index"],
-        text=row["text"],
-        token_count=row["token_count"],
-        vector_id=row["vector_id"],
-        metadata_json={
-            "title": row["title"],
-            "source_name": row["source_name"],
-        },
-    )
-
-
 def _delete_knowledge_artifact(settings: Settings, artifact_path: Path) -> bool:
     knowledge_root = (settings.artifact_root / "knowledge").resolve()
     try:
@@ -1846,20 +1680,6 @@ def _delete_knowledge_artifact(settings: Settings, artifact_path: Path) -> bool:
         return True
     except OSError:
         return False
-
-
-def _attempt_to_dict(row: ValidationAttempt) -> dict[str, Any]:
-    return {
-        "attempt_id": row.attempt_id,
-        "finding_id": row.finding_id,
-        "audit_run_id": row.audit_run_id,
-        "agent_run_id": row.agent_run_id,
-        "round_index": row.round_index,
-        "status": row.status,
-        "result": row.result,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
 
 
 async def _get_finding_detail(finding_id: str) -> dict[str, Any] | None:
@@ -1882,29 +1702,6 @@ async def _get_finding_detail(finding_id: str) -> dict[str, Any] | None:
             "evidence": [_evidence_to_dict(row) for row in evidence_rows],
             "validation_attempts": [_attempt_to_dict(row) for row in attempt_rows],
         }
-
-
-def _report_to_dict(row: ReportArtifact) -> dict[str, Any]:
-    return {
-        "report_id": row.report_id,
-        "audit_run_id": row.audit_run_id,
-        "project_id": row.project_id,
-        "kind": row.kind,
-        "path": row.path,
-        "artifact": _artifact_metadata_or_none(row.path),
-        "summary": row.summary,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
-
-
-def _artifact_metadata_or_none(path: str | None) -> dict[str, Any] | None:
-    if not path:
-        return None
-    try:
-        return artifact_metadata(get_settings(), path)
-    except (ArtifactAccessError, FileNotFoundError, OSError):
-        return None
 
 
 async def _artifact_is_referenced(settings: Settings, artifact_path: Path) -> bool:
@@ -2227,188 +2024,8 @@ async def _raise_if_cancelled(audit_run_id: str) -> None:
         raise PipelineCancelled(await _cancel_reason(audit_run_id) or "cancel_requested")
 
 
-def _sandbox_readiness_remediation(detail: dict[str, Any]) -> list[str]:
-    requested_runtime = str(detail.get("requested_runtime") or "runc")
-    runtimes = detail.get("docker_runtimes") or []
-    remediation: list[str] = []
-    if not detail.get("strong_isolation_available"):
-        remediation.append("Install a strong container runtime on the Docker host, preferably gVisor runsc for the first production target.")
-        if "runsc" not in runtimes:
-            remediation.append("After installing gVisor, register runsc in Docker daemon.json and restart Docker Engine.")
-        remediation.append("Set ENABLE_GVISOR=true and DEFAULT_SANDBOX_RUNTIME=runsc, then restart the core Compose services.")
-    if requested_runtime == "runc":
-        remediation.append("Keep ALLOW_RUNC_SANDBOX=false for production; runc is acceptable only for explicit local testing with trusted PoCs.")
-    elif not detail.get("requested_runtime_available"):
-        remediation.append(f"Install or register the configured Docker runtime '{requested_runtime}', or change DEFAULT_SANDBOX_RUNTIME to an available strong runtime.")
-    return remediation
-
-
-def _embedding_readiness_remediation(status: dict[str, Any]) -> list[str]:
-    provider = str(status.get("provider") or "hash")
-    if provider in {"hash", "local-hash", ""}:
-        return [
-            "Configure KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible for production RAG quality.",
-            "Set KNOWLEDGE_EMBEDDING_BASE_URL to an endpoint exposing /embeddings, KNOWLEDGE_EMBEDDING_MODEL to a real embedding model, and KNOWLEDGE_VECTOR_SIZE to the model dimension.",
-            "Set KNOWLEDGE_EMBEDDING_API_KEY when the embedding endpoint requires authentication.",
-        ]
-    if provider not in {"openai", "openai-compatible"}:
-        return ["Use KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible or add a tested provider implementation before enabling production RAG."]
-    remediation: list[str] = []
-    if not status.get("base_url_configured"):
-        remediation.append("Set KNOWLEDGE_EMBEDDING_BASE_URL to the OpenAI-compatible embedding API base URL.")
-    if not status.get("model"):
-        remediation.append("Set KNOWLEDGE_EMBEDDING_MODEL to the embedding model name.")
-    probe = status.get("probe") if isinstance(status.get("probe"), dict) else {}
-    if probe.get("attempted") and not probe.get("ok"):
-        remediation.append("Fix embedding endpoint reachability, credentials, or vector dimension mismatch shown in the readiness detail.")
-    if not remediation and status.get("status") != "pass":
-        remediation.append("Review the embedding readiness detail and configure a semantic embedding provider before production RAG use.")
-    return remediation
-
-
-def _template_readiness_checks(
-    agent_templates: list[dict[str, Any]],
-    mcp_templates: list[dict[str, Any]],
-    tool_capabilities: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    agents = {str(item.get("name") or ""): item for item in agent_templates}
-    mcps = {str(item.get("name") or ""): item for item in mcp_templates}
-
-    missing_agents = sorted(PRODUCTION_AGENT_TEMPLATES - set(agents))
-    invalid_agents = sorted(
-        name
-        for name in PRODUCTION_AGENT_TEMPLATES & set(agents)
-        if (agents[name].get("protocol") or {}).get("kind") != "agent-client-protocol"
-        or (agents[name].get("protocol") or {}).get("runtime") != "opencode"
-        or "mock-agent" in str(agents[name].get("image") or "")
-    )
-    missing_mcps = sorted(PRODUCTION_MCP_TEMPLATES - set(mcps))
-    mock_mcps = sorted(
-        name
-        for name in PRODUCTION_MCP_TEMPLATES & set(mcps)
-        if "mock-mcp" in str(mcps[name].get("image") or "")
-    )
-    optional_heavy = sorted(OPTIONAL_HEAVY_MCP_TEMPLATES & set(mcps))
-    heavy_missing = {
-        name: (tool_capabilities.get("templates", {}).get(name) or {}).get("missing_binaries", [])
-        for name in optional_heavy
-    } if tool_capabilities else {}
-    heavy_unavailable = sorted(name for name, missing in heavy_missing.items() if missing)
-    heavy_probe_error = bool(tool_capabilities and tool_capabilities.get("error"))
-    legacy_mock_agents = sorted(
-        name
-        for name, template in agents.items()
-        if name and name not in PRODUCTION_AGENT_TEMPLATES and "mock-agent" in str(template.get("image") or "")
-    )
-
-    checks = [
-        {
-            "id": "opencode_agent_templates",
-            "title": "OpenCode ACP agent templates are configured",
-            "status": "fail" if missing_agents or invalid_agents else "pass",
-            "detail": {
-                "required": sorted(PRODUCTION_AGENT_TEMPLATES),
-                "missing": missing_agents,
-                "invalid": invalid_agents,
-            },
-        },
-        {
-            "id": "production_mcp_templates",
-            "title": "Production MCP templates are configured",
-            "status": "fail" if missing_mcps or mock_mcps else "pass",
-            "detail": {
-                "required": sorted(PRODUCTION_MCP_TEMPLATES),
-                "missing": missing_mcps,
-                "mock_images": mock_mcps,
-            },
-        },
-    ]
-    if optional_heavy:
-        status = "pass"
-        message = "Heavy analyzer templates have required CLIs available in their configured tool images."
-        if tool_capabilities is None:
-            status = "warn"
-            message = "Heavy analyzer templates are present, but tool image capabilities were not probed."
-        elif heavy_probe_error or heavy_unavailable:
-            status = "warn"
-            message = "Heavy analyzer templates are present, but one or more required CLIs are unavailable in their configured images."
-        checks.append(
-            {
-                "id": "heavy_analyzers",
-                "title": "Heavy analyzers have required tool CLIs",
-                "status": status,
-                "detail": {
-                    "templates": optional_heavy,
-                    "unavailable": heavy_unavailable,
-                    "missing_binaries": heavy_missing,
-                    "tool_capabilities": tool_capabilities,
-                    "message": message,
-                },
-            }
-        )
-    if legacy_mock_agents:
-        checks.append(
-            {
-                "id": "legacy_mock_templates",
-                "title": "Legacy mock templates are still available",
-                "status": "warn",
-                "detail": {
-                    "templates": legacy_mock_agents,
-                    "message": "Keep mock templates for demo only; production audit runs should use opencode-* templates.",
-                },
-            }
-        )
-    return checks
-
-
 def _should_finalize_cancel(audit_run: dict[str, Any], removed_container_count: int) -> bool:
     return removed_container_count == 0 or not is_active_pipeline(audit_run.get("status"), audit_run.get("config"))
-
-
-def _pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str, Any] | None = None) -> dict[str, Any]:
-    backend = _normalized_pipeline_backend(settings)
-    supported_backends = {"background-tasks", "workflow-worker"}
-    production_backends = {"workflow-worker"}
-    if backend not in supported_backends:
-        status = "fail"
-        message = f"Unsupported pipeline execution backend '{backend}'. Supported backends: {sorted(supported_backends)}."
-    elif backend in production_backends:
-        if worker_health and worker_health.get("ok"):
-            status = "pass"
-            message = "Audit pipelines are claimed by at least one fresh workflow-worker heartbeat."
-        elif worker_health is None:
-            status = "fail"
-            message = "Workflow-worker backend is configured, but worker heartbeat health was not checked."
-        else:
-            status = "fail"
-            message = worker_health.get("message") or "No fresh workflow-worker heartbeat is available."
-    else:
-        status = "fail"
-        message = (
-            "FastAPI background task execution can lose in-flight work on restart. "
-            "Use workflow-worker before treating this deployment as production-ready."
-        )
-    return {
-        "id": "pipeline_execution_backend",
-        "title": "Audit pipeline execution is not tied to FastAPI background tasks",
-        "status": status,
-        "detail": {
-            "backend": backend,
-            "production_backends": sorted(production_backends),
-            "supported_backends": sorted(supported_backends),
-            "recovery_on_startup": settings.pipeline_recovery_on_startup,
-            "worker_health": worker_health,
-            "message": message,
-        },
-        "remediation": [] if status == "pass" else [
-            "Set PIPELINE_EXECUTION_BACKEND=workflow-worker and keep workflow-worker enabled in the core Compose profile.",
-            "Verify /runtime/workers reports at least one fresh running worker heartbeat.",
-        ],
-    }
-
-
-def _normalized_pipeline_backend(settings: Settings) -> str:
-    return (settings.pipeline_execution_backend or "workflow-worker").strip().lower()
 
 
 async def _get_project(project_id: str) -> dict[str, Any] | None:
@@ -2473,22 +2090,6 @@ async def _list_reports(audit_run_id: str) -> list[dict[str, Any]]:
             )
         ).scalars()
         return [_report_to_dict(row) for row in rows]
-
-
-def _dependency_record_to_dict(row: DependencyRecord) -> dict[str, Any]:
-    return {
-        "dependency_id": row.dependency_id,
-        "audit_run_id": row.audit_run_id,
-        "project_id": row.project_id,
-        "ecosystem": row.ecosystem,
-        "name": row.name,
-        "version": row.version,
-        "manifest": row.manifest,
-        "vulnerability_count": row.vulnerability_count,
-        "vulnerabilities": row.vulnerabilities or [],
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-    }
 
 
 async def _replace_dependency_records(
