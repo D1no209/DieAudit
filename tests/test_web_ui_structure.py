@@ -10,11 +10,11 @@ def read_source(relative_path: str) -> str:
 
 def test_audit_result_surfaces_have_dedicated_routes() -> None:
     navigation = read_source("services/web-ui/src/navigation.tsx")
-    routes = read_source("services/web-ui/src/routes/AppRoutes.tsx")
+    routes = read_source("services/web-ui/src/routes/routeRegistry.tsx")
 
     for view in ("agent-runs", "dependencies", "reports"):
         assert f'"{view}"' in navigation
-        assert f'activeView === "{view}"' in routes
+        assert f'"{view}":' in routes or f"{view}:" in routes
 
 
 def test_audit_runs_page_does_not_embed_result_tables() -> None:
