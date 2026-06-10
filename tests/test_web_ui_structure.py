@@ -76,6 +76,23 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
         assert (ROOT / path).is_file()
 
 
+def test_knowledge_page_uses_focused_subcomponents() -> None:
+    knowledge_page = read_source("services/web-ui/src/pages/KnowledgePage.tsx")
+
+    assert "Form.Item" not in knowledge_page
+    assert "List.Item.Meta" not in knowledge_page
+    assert "<Upload" not in knowledge_page
+    for component in ("KnowledgeUploadPanel", "KnowledgeDocumentsPanel", "KnowledgeSearchPanel"):
+        assert component in knowledge_page
+
+    for path in (
+        "services/web-ui/src/pages/knowledge/KnowledgeUploadPanel.tsx",
+        "services/web-ui/src/pages/knowledge/KnowledgeDocumentsPanel.tsx",
+        "services/web-ui/src/pages/knowledge/KnowledgeSearchPanel.tsx",
+    ):
+        assert (ROOT / path).is_file()
+
+
 def test_admin_page_uses_focused_subcomponents() -> None:
     admin_page = read_source("services/web-ui/src/pages/AdminPage.tsx")
 
@@ -189,8 +206,33 @@ def test_dashboard_api_client_uses_typed_json_boundaries() -> None:
 
 def test_routes_use_dashboard_controller_instead_of_flat_prop_surface() -> None:
     routes = read_source("services/web-ui/src/routes/AppRoutes.tsx")
+    registry = read_source("services/web-ui/src/routes/routeRegistry.tsx")
+    renderers = read_source("services/web-ui/src/routes/routeRenderers.tsx")
 
     assert "DashboardController" in routes
     assert "dashboard: DashboardController" in routes
     assert "onCreateGitProject:" not in routes
     assert "apiKeyForm: FormInstance" not in routes
+    assert "routeRenderers" in registry
+    assert "OverviewPage" not in registry
+    assert "ProjectsPage" not in registry
+    assert "RuntimePage" not in registry
+    assert "renderProjectsRoute" in renderers
+    assert "renderRuntimeRoute" in renderers
+
+
+def test_app_drawers_delegate_to_focused_drawers() -> None:
+    app_drawers = read_source("services/web-ui/src/components/AppDrawers.tsx")
+
+    assert "Descriptions.Item" not in app_drawers
+    assert "List.Item.Meta" not in app_drawers
+    assert "FindingDrawer" in app_drawers
+    assert "AgentEventsDrawer" in app_drawers
+    assert "ContainerLogsDrawer" in app_drawers
+
+    for path in (
+        "services/web-ui/src/components/drawers/FindingDrawer.tsx",
+        "services/web-ui/src/components/drawers/AgentEventsDrawer.tsx",
+        "services/web-ui/src/components/drawers/ContainerLogsDrawer.tsx",
+    ):
+        assert (ROOT / path).is_file()

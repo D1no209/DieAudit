@@ -146,6 +146,12 @@ body {
   gap: 16px;
 }
 
+.panel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .form-action {
   margin-top: 16px;
 }
