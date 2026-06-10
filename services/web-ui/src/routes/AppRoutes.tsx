@@ -6,9 +6,10 @@ import { routeRegistry } from "./routeRegistry";
 type Props = {
   activeView: AppView;
   dashboard: DashboardController;
+  onViewChange: (view: AppView) => void;
 };
 
-export function AppRoutes({ activeView, dashboard }: Props) {
+export function AppRoutes({ activeView, dashboard, onViewChange }: Props) {
   const route = routeRegistry[activeView] || routeRegistry[DEFAULT_VIEW];
-  return <>{route.render(dashboard)}</>;
+  return <>{route.render(dashboard, onViewChange)}</>;
 }

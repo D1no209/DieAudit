@@ -154,6 +154,12 @@ body {
   gap: 16px;
 }
 
+.runtime-route-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
 .panel-stack {
   display: flex;
   flex-direction: column;

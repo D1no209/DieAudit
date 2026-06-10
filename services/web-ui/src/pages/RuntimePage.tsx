@@ -1,51 +1,33 @@
-import { Alert, Tabs } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import type { ContainerRow, RuntimeReadiness, SandboxCapabilities, WorkerHeartbeat } from "../types";
+import { ClusterOutlined, PlayCircleOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
+import { Button, Card, Statistic } from "antd";
+import type { AppView } from "../navigation";
+import type { AuditRun, ContainerRow, RuntimeReadiness, SandboxCapabilities, WorkerHeartbeat } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { RuntimeActionBar } from "./runtime/RuntimeActionBar";
-import { RuntimeContainersPanel } from "./runtime/RuntimeContainersPanel";
-import { RuntimeReadinessPanel } from "./runtime/RuntimeReadinessPanel";
-import { RuntimeSandboxPanel } from "./runtime/RuntimeSandboxPanel";
-import type { AuditRun, SandboxPocFormValues, SandboxServiceFormValues } from "../types";
 
 type Props = {
   auditRun?: AuditRun;
-  containerColumns: ColumnsType<ContainerRow>;
   containers: ContainerRow[];
   loading: boolean;
   runtimeReadiness?: RuntimeReadiness;
   sandboxCapabilities?: SandboxCapabilities;
-  sandboxTarget?: { network: string; target_url: string };
-  workerColumns: ColumnsType<WorkerHeartbeat>;
   workerHeartbeats: WorkerHeartbeat[];
   onCleanup: () => void;
   onCleanupExpiredRuntime: () => void;
-  onRunSandboxPoc: (values: SandboxPocFormValues) => void;
-  onRunSandboxTargetPoc: (values: SandboxPocFormValues) => void;
-  onStartSandboxService: (values: SandboxServiceFormValues) => void;
+  onViewChange: (view: AppView) => void;
 };
 
 export function RuntimePage({
   auditRun,
-  containerColumns,
   containers,
   loading,
   runtimeReadiness,
   sandboxCapabilities,
-  sandboxTarget,
-  workerColumns,
   workerHeartbeats,
   onCleanup,
   onCleanupExpiredRuntime,
-  onRunSandboxTargetPoc,
-  onRunSandboxPoc,
-  onStartSandboxService,
+  onViewChange,
 }: Props) {
-  const sandboxExecutionAvailable = Boolean(sandboxCapabilities?.sandbox_execution_available);
-  const sandboxUnavailableReason =
-    sandboxCapabilities?.reason ||
-    sandboxCapabilities?.warnings?.[0] ||
-    "Sandbox execution is not available. Configure gVisor/Kata or another approved runtime before running PoC containers.";
   const pageActions = (
     <RuntimeActionBar
       loading={loading}
@@ -57,52 +39,44 @@ export function RuntimePage({
   return (
     <>
       <PageHeader title="Runtime" actions={pageActions} />
-      {!sandboxExecutionAvailable && (
-        <Alert
-          className="section"
-          type="warning"
-          showIcon
-          message="Sandbox execution is unavailable"
-          description={sandboxUnavailableReason}
-        />
-      )}
-      <Tabs
-        className="section"
-        items={[
-          {
-            key: "readiness",
-            label: "Readiness",
-            children: (
-              <RuntimeReadinessPanel
-                runtimeReadiness={runtimeReadiness}
-                workerColumns={workerColumns}
-                workerHeartbeats={workerHeartbeats}
-              />
-            ),
-          },
-          {
-            key: "containers",
-            label: "Containers",
-            children: <RuntimeContainersPanel containerColumns={containerColumns} containers={containers} />,
-          },
-          {
-            key: "sandbox",
-            label: "Sandbox",
-            children: (
-              <RuntimeSandboxPanel
-                auditRun={auditRun}
-                loading={loading}
-                sandboxCapabilities={sandboxCapabilities}
-                sandboxTarget={sandboxTarget}
-                sandboxUnavailableReason={sandboxUnavailableReason}
-                onRunSandboxPoc={onRunSandboxPoc}
-                onRunSandboxTargetPoc={onRunSandboxTargetPoc}
-                onStartSandboxService={onStartSandboxService}
-              />
-            ),
-          },
-        ]}
-      />
+      <div className="runtime-route-grid section">
+        <Card
+          title="Readiness"
+          actions={[
+            <Button key="open" type="link" icon={<SafetyCertificateOutlined />} onClick={() => onViewChange("runtime-readiness")}>
+              打开
+            </Button>,
+          ]}
+        >
+          <Statistic title="Blocking Checks" value={runtimeReadiness?.summary?.fail ?? 0} />
+        </Card>
+        <Card
+          title="Containers"
+          actions={[
+            <Button key="open" type="link" icon={<ClusterOutlined />} onClick={() => onViewChange("runtime-containers")}>
+              打开
+            </Button>,
+          ]}
+        >
+          <Statistic title="Managed Containers" value={containers.length} />
+        </Card>
+        <Card
+          title="Sandbox"
+          actions={[
+            <Button key="open" type="link" icon={<PlayCircleOutlined />} onClick={() => onViewChange("runtime-sandbox")}>
+              打开
+            </Button>,
+          ]}
+        >
+          <Statistic title="Execution Available" value={sandboxCapabilities?.sandbox_execution_available ? "Yes" : "No"} />
+        </Card>
+        <Card title="Workers">
+          <Statistic title="Heartbeats" value={workerHeartbeats.length} />
+        </Card>
+        <Card title="Active AuditRun">
+          <Statistic title="Status" value={auditRun?.status || "None"} />
+        </Card>
+      </div>
     </>
   );
 }

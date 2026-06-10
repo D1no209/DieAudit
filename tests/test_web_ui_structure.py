@@ -13,7 +13,15 @@ def test_audit_result_surfaces_have_dedicated_routes() -> None:
     navigation = read_source("services/web-ui/src/navigation.tsx")
     routes = read_source("services/web-ui/src/routes/routeRegistry.tsx")
 
-    for view in ("agent-runs", "dependencies", "reports"):
+    for view in (
+        "agent-runs",
+        "finding-review",
+        "dependencies",
+        "reports",
+        "runtime-readiness",
+        "runtime-containers",
+        "runtime-sandbox",
+    ):
         assert f'"{view}"' in navigation
         assert f'"{view}":' in routes or f"{view}:" in routes
 
@@ -62,6 +70,9 @@ def test_projects_page_uses_focused_subcomponents() -> None:
 
 def test_runtime_page_uses_focused_subcomponents() -> None:
     runtime_page = read_source("services/web-ui/src/pages/RuntimePage.tsx")
+    runtime_readiness_page = read_source("services/web-ui/src/pages/RuntimeReadinessPage.tsx")
+    runtime_containers_page = read_source("services/web-ui/src/pages/RuntimeContainersPage.tsx")
+    runtime_sandbox_page = read_source("services/web-ui/src/pages/RuntimeSandboxPage.tsx")
     readiness_panel = read_source("services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx")
     readiness_overview = read_source("services/web-ui/src/pages/runtime/ReadinessOverviewPanel.tsx")
     readiness_actions = read_source("services/web-ui/src/pages/runtime/ReadinessNextActionsPanel.tsx")
@@ -69,9 +80,16 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
 
     assert "List.Item.Meta" not in runtime_page
     assert "rowKey=\"Id\"" not in runtime_page
-    for component in ("RuntimeActionBar", "RuntimeReadinessPanel", "RuntimeContainersPanel", "RuntimeSandboxPanel"):
+    assert "<Tabs" not in runtime_page
+    assert 'onViewChange("runtime-readiness")' in runtime_page
+    assert 'onViewChange("runtime-containers")' in runtime_page
+    assert 'onViewChange("runtime-sandbox")' in runtime_page
+    for component in ("RuntimeActionBar",):
         assert component in runtime_page
-    assert 'label: "Sandbox"' in runtime_page
+
+    assert "RuntimeReadinessPanel" in runtime_readiness_page
+    assert "RuntimeContainersPanel" in runtime_containers_page
+    assert "RuntimeSandboxPanel" in runtime_sandbox_page
 
     assert "List.Item.Meta" not in readiness_panel
     assert "rowKey=\"worker_id\"" not in readiness_panel
@@ -92,6 +110,9 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
 
     for path in (
         "services/web-ui/src/pages/runtime/RuntimeActionBar.tsx",
+        "services/web-ui/src/pages/RuntimeReadinessPage.tsx",
+        "services/web-ui/src/pages/RuntimeContainersPage.tsx",
+        "services/web-ui/src/pages/RuntimeSandboxPage.tsx",
         "services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx",
         "services/web-ui/src/pages/runtime/RuntimeContainersPanel.tsx",
         "services/web-ui/src/pages/runtime/RuntimeSandboxPanel.tsx",
@@ -143,6 +164,20 @@ def test_findings_page_does_not_embed_dependency_inventory() -> None:
     assert "Tabs" not in findings_page
 
 
+def test_finding_review_has_dedicated_page_not_global_drawer() -> None:
+    app_drawers = read_source("services/web-ui/src/components/AppDrawers.tsx")
+    review_page = read_source("services/web-ui/src/pages/FindingReviewPage.tsx")
+    detail_panel = read_source("services/web-ui/src/pages/findings/FindingDetailPanel.tsx")
+    renderers = read_source("services/web-ui/src/routes/routeRenderers.tsx")
+
+    assert "FindingDrawer" not in app_drawers
+    assert "FindingDetailPanel" in review_page
+    assert "PoC Execution" in detail_panel
+    assert "onRunFindingPoc" in detail_panel
+    assert "renderFindingReviewRoute" in renderers
+    assert 'onViewChange("findings")' in renderers
+
+
 def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
     app = read_source("services/web-ui/src/App.tsx")
     controller = read_source("services/web-ui/src/hooks/useDashboardController.tsx")
@@ -151,7 +186,7 @@ def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
     assert "AuditContextBar" in app
     assert "readJson(" not in app
     assert app.count("useState") == 0
-    assert "<AppRoutes activeView={activeView} dashboard={dashboard} />" in app
+    assert "<AppRoutes activeView={activeView} dashboard={dashboard} onViewChange={setActiveView} />" in app
     assert "useDashboardRefresh" in controller
     assert "useAuditRunActions" in controller
     assert "dashboardApi." not in controller
@@ -205,7 +240,15 @@ def test_dashboard_refresh_is_scoped_to_active_view() -> None:
     assert "useDashboardController(activeView: AppView)" in controller
     assert "refreshCurrentView(activeView)" in controller
     assert "async function refreshCurrentView(view: AppView)" in refresh
-    for branch in ('case "projects"', 'case "runtime"', 'case "knowledge"', 'case "admin"'):
+    for branch in (
+        'case "projects"',
+        'case "runtime"',
+        'case "runtime-readiness"',
+        'case "runtime-containers"',
+        'case "runtime-sandbox"',
+        'case "knowledge"',
+        'case "admin"',
+    ):
         assert branch in refresh
     assert "getDashboardProjects" not in api
     assert "getDashboardProjects" not in refresh
@@ -265,18 +308,18 @@ def test_routes_use_dashboard_controller_instead_of_flat_prop_surface() -> None:
 
 def test_app_drawers_delegate_to_focused_drawers() -> None:
     app_drawers = read_source("services/web-ui/src/components/AppDrawers.tsx")
-    finding_drawer = read_source("services/web-ui/src/components/drawers/FindingDrawer.tsx")
+    finding_detail = read_source("services/web-ui/src/pages/findings/FindingDetailPanel.tsx")
 
     assert "Descriptions.Item" not in app_drawers
     assert "List.Item.Meta" not in app_drawers
-    assert "FindingDrawer" in app_drawers
+    assert "FindingDrawer" not in app_drawers
     assert "AgentEventsDrawer" in app_drawers
     assert "ContainerLogsDrawer" in app_drawers
-    assert 'label: "PoC Execution"' in finding_drawer
-    assert 'name="command"' in finding_drawer
+    assert 'label: "PoC Execution"' in finding_detail
+    assert 'name="command"' in finding_detail
 
     for path in (
-        "services/web-ui/src/components/drawers/FindingDrawer.tsx",
+        "services/web-ui/src/pages/findings/FindingDetailPanel.tsx",
         "services/web-ui/src/components/drawers/AgentEventsDrawer.tsx",
         "services/web-ui/src/components/drawers/ContainerLogsDrawer.tsx",
     ):

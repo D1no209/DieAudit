@@ -144,6 +144,9 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
           await refreshProjects();
           return;
         case "runtime":
+        case "runtime-readiness":
+        case "runtime-containers":
+        case "runtime-sandbox":
           await refreshRuntime();
           return;
         case "knowledge":
@@ -155,6 +158,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
         case "audit-runs":
         case "agent-runs":
         case "findings":
+        case "finding-review":
         case "dependencies":
         case "reports":
           await refreshAuditWorkspace();

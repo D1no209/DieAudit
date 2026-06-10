@@ -2,6 +2,7 @@ import {
   ApiOutlined,
   BugOutlined,
   CloudServerOutlined,
+  ClusterOutlined,
   DatabaseOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
@@ -17,9 +18,13 @@ export type AppView =
   | "audit-runs"
   | "agent-runs"
   | "findings"
+  | "finding-review"
   | "dependencies"
   | "reports"
   | "runtime"
+  | "runtime-readiness"
+  | "runtime-containers"
+  | "runtime-sandbox"
   | "knowledge"
   | "admin";
 
@@ -31,9 +36,13 @@ export const APP_VIEW_PATHS: Record<AppView, string> = {
   "audit-runs": "/audit-runs",
   "agent-runs": "/agent-runs",
   findings: "/findings",
+  "finding-review": "/findings/review",
   dependencies: "/dependencies",
   reports: "/reports",
   runtime: "/runtime",
+  "runtime-readiness": "/runtime/readiness",
+  "runtime-containers": "/runtime/containers",
+  "runtime-sandbox": "/runtime/sandbox",
   knowledge: "/knowledge",
   admin: "/admin",
 };
@@ -83,6 +92,7 @@ export const navigationGroups: NavigationGroup[] = [
       { key: "audit-runs", icon: <PlayCircleOutlined />, label: "Audit Runs" },
       { key: "agent-runs", icon: <RobotOutlined />, label: "Agent Runs" },
       { key: "findings", icon: <BugOutlined />, label: "Findings" },
+      { key: "finding-review", icon: <SafetyCertificateOutlined />, label: "Finding Review" },
       { key: "dependencies", icon: <DatabaseOutlined />, label: "Dependencies" },
       { key: "reports", icon: <FileTextOutlined />, label: "Reports" },
     ],
@@ -92,6 +102,9 @@ export const navigationGroups: NavigationGroup[] = [
     label: "Operations",
     items: [
       { key: "runtime", icon: <CloudServerOutlined />, label: "Runtime" },
+      { key: "runtime-readiness", icon: <SafetyCertificateOutlined />, label: "Readiness" },
+      { key: "runtime-containers", icon: <ClusterOutlined />, label: "Containers" },
+      { key: "runtime-sandbox", icon: <PlayCircleOutlined />, label: "Sandbox" },
       { key: "knowledge", icon: <FileTextOutlined />, label: "Knowledge" },
       { key: "admin", icon: <SafetyCertificateOutlined />, label: "Admin" },
     ],

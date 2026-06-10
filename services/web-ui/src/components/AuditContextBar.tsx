@@ -87,6 +87,9 @@ export function AuditContextBar({
           <Button size="small" icon={<BugOutlined />} onClick={() => onViewChange("findings")}>
             Findings
           </Button>
+          <Button size="small" icon={<BugOutlined />} onClick={() => onViewChange("finding-review")}>
+            Review
+          </Button>
           <Button size="small" icon={<FileTextOutlined />} onClick={() => onViewChange("reports")}>
             Reports
           </Button>

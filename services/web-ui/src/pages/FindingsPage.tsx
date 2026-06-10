@@ -21,7 +21,7 @@ export function FindingsPage({ findings, onOpenFinding }: Props) {
       title: "Detail",
       width: 100,
       render: (_, row) => (
-        <Button size="small" type="link" onClick={() => onOpenFinding(row.finding_id)}>研判</Button>
+        <Button size="small" type="link" onClick={() => onOpenFinding(row.finding_id)}>打开研判</Button>
       ),
     },
   ];

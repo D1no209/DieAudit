@@ -36,19 +36,12 @@ export function App() {
           selectedProject={state.selectedProject}
           onViewChange={setActiveView}
         />
-        <AppRoutes activeView={activeView} dashboard={dashboard} />
+        <AppRoutes activeView={activeView} dashboard={dashboard} onViewChange={setActiveView} />
         <AppDrawers
           agentEvents={state.agentEvents}
           containerLogs={state.containerLogs}
-          loading={state.loading}
-          sandboxExecutionAvailable={state.sandboxExecutionAvailable}
-          sandboxUnavailableReason={state.sandboxUnavailableReason}
-          selectedFinding={state.selectedFinding}
           onCloseAgentEvents={() => actions.setAgentEvents(undefined)}
           onCloseContainerLogs={() => actions.setContainerLogs(undefined)}
-          onCloseFinding={() => actions.setSelectedFinding(undefined)}
-          onOpenArtifact={actions.openArtifact}
-          onRunFindingPoc={actions.runFindingPoc}
         />
       </AppShell>
     </ConfigProvider>

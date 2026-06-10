@@ -1,5 +1,6 @@
 import { message } from "antd";
 import * as dashboardApi from "../../client/dashboardApi";
+import { hashFromAppView } from "../../navigation";
 import type { ArtifactRef, ContainerRow } from "../../types";
 import { artifactFileName, artifactUrl } from "../../utils/format";
 import type { DashboardStateController } from "../useDashboardState";
@@ -90,6 +91,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     await runner.runAction(async () => {
       const result = await dashboardApi.getFinding(findingId);
       setSelectedFinding(result);
+      window.location.hash = hashFromAppView("finding-review");
     });
   }
 
