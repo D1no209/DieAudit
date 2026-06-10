@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,6 +134,29 @@ def test_dashboard_controller_uses_domain_action_hooks() -> None:
         "services/web-ui/src/hooks/dashboard/useRuntimeActions.ts",
     ):
         assert (ROOT / path).is_file()
+
+
+def test_dashboard_refresh_is_scoped_to_active_view() -> None:
+    app = read_source("services/web-ui/src/App.tsx")
+    controller = read_source("services/web-ui/src/hooks/useDashboardController.tsx")
+    refresh = read_source("services/web-ui/src/hooks/dashboard/useDashboardRefresh.ts")
+    api = read_source("services/web-ui/src/client/dashboardApi.ts")
+
+    assert "useDashboardController(activeView)" in app
+    assert "useDashboardController(activeView: AppView)" in controller
+    assert "refreshCurrentView(activeView)" in controller
+    assert "async function refreshCurrentView(view: AppView)" in refresh
+    for branch in ('case "projects"', 'case "runtime"', 'case "knowledge"', 'case "admin"'):
+        assert branch in refresh
+    assert "getDashboardProjects" not in api
+    assert "getDashboardProjects" not in refresh
+
+
+def test_web_ui_build_runs_typecheck() -> None:
+    package_json = json.loads(read_source("services/web-ui/package.json"))
+
+    assert "typecheck" in package_json["scripts"]
+    assert "npm run typecheck" in package_json["scripts"]["build"]
 
 
 def test_routes_use_dashboard_controller_instead_of_flat_prop_surface() -> None:

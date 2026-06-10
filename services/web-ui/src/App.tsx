@@ -9,7 +9,7 @@ import { AppRoutes } from "./routes/AppRoutes";
 
 export function App() {
   const [activeView, setActiveView] = useAppRoute();
-  const dashboard = useDashboardController();
+  const dashboard = useDashboardController(activeView);
   const { actions, state } = dashboard;
 
   return (

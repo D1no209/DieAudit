@@ -12,8 +12,12 @@ export function getPlatformBootstrap() {
   return Promise.all([readJson("/api/health"), readJson("/api/auth/status")]);
 }
 
-export function getDashboardProjects() {
-  return Promise.all([readJson("/gateway/runtime/docker/health"), readJson("/gateway/projects")]);
+export function getDockerHealth() {
+  return readJson("/gateway/runtime/docker/health");
+}
+
+export function listProjects() {
+  return readJson("/gateway/projects");
 }
 
 export function getManagedRuntime() {

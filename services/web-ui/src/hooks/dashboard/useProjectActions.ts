@@ -3,7 +3,7 @@ import * as dashboardApi from "../../client/dashboardApi";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
-  refresh: () => Promise<void>;
+  refreshProjects: (preferredProjectId?: string) => Promise<void>;
   refreshAuditRun: (auditRunId: string) => Promise<void>;
   runAction: (action: () => Promise<void>) => Promise<void>;
 };
@@ -25,7 +25,7 @@ export function useProjectActions(dashboardState: DashboardStateController, runn
       setLastResponse(result);
       setSelectedProjectId(result.project.project_id);
       gitForm.resetFields();
-      await runner.refresh();
+      await runner.refreshProjects(result.project.project_id);
     });
   }
 
@@ -44,7 +44,7 @@ export function useProjectActions(dashboardState: DashboardStateController, runn
       setSelectedProjectId(result.project.project_id);
       zipForm.resetFields();
       setZipFiles([]);
-      await runner.refresh();
+      await runner.refreshProjects(result.project.project_id);
     });
   }
 

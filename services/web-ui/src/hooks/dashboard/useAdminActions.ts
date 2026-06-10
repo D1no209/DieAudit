@@ -1,15 +1,16 @@
 import { message } from "antd";
 import { API_KEY_STORAGE_KEY } from "../../api";
 import * as dashboardApi from "../../client/dashboardApi";
+import type { AppView } from "../../navigation";
 import { parseCsvList, parseScopes } from "../../utils/format";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
-  refresh: () => Promise<void>;
+  refreshCurrentView: (view: AppView) => Promise<void>;
   runAction: (action: () => Promise<void>) => Promise<void>;
 };
 
-export function useAdminActions(dashboardState: DashboardStateController, runner: DashboardRunner) {
+export function useAdminActions(dashboardState: DashboardStateController, runner: DashboardRunner, activeView: AppView) {
   const {
     apiKey,
     apiKeyForm,
@@ -64,7 +65,7 @@ export function useAdminActions(dashboardState: DashboardStateController, runner
       window.localStorage.removeItem(API_KEY_STORAGE_KEY);
       message.warning("API Key removed");
     }
-    runner.refresh();
+    runner.refreshCurrentView(activeView);
   }
 
   return { cleanupPlatformAuditEvents, createManagedApiKey, deactivateManagedApiKey, saveApiKey };

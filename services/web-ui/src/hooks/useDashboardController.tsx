@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import type { AppView } from "../navigation";
 import { isActiveRun } from "../utils/format";
 import { useAdminActions } from "./dashboard/useAdminActions";
 import { useAuditRunActions } from "./dashboard/useAuditRunActions";
@@ -9,7 +10,7 @@ import { useRuntimeActions } from "./dashboard/useRuntimeActions";
 import { useDashboardColumns } from "./useDashboardColumns";
 import { useDashboardState } from "./useDashboardState";
 
-export function useDashboardController() {
+export function useDashboardController(activeView: AppView) {
   const dashboardState = useDashboardState();
   const {
     agentEvents,
@@ -65,11 +66,11 @@ export function useDashboardController() {
   const auditRunActions = useAuditRunActions(dashboardState, runner);
   const runtimeActions = useRuntimeActions(dashboardState, runner);
   const knowledgeActions = useKnowledgeActions(dashboardState, runner);
-  const adminActions = useAdminActions(dashboardState, runner);
+  const adminActions = useAdminActions(dashboardState, runner, activeView);
 
   useEffect(() => {
-    runner.refresh();
-  }, []);
+    runner.refreshCurrentView(activeView);
+  }, [activeView]);
 
   useEffect(() => {
     if (!auditRun?.audit_run_id || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)) {
@@ -99,7 +100,7 @@ export function useDashboardController() {
       ...knowledgeActions,
       ...projectActions,
       ...runtimeActions,
-      refresh: runner.refresh,
+      refresh: () => runner.refreshCurrentView(activeView),
       setAgentEvents,
       setApiKey,
       setContainerLogs,
