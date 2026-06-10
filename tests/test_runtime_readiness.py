@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from app.api.routes import _template_readiness_checks
+from app.api.routes import _embedding_readiness_remediation, _sandbox_readiness_remediation, _template_readiness_checks
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,3 +124,24 @@ def test_template_readiness_fails_missing_or_mock_production_templates() -> None
     assert checks["production_mcp_templates"]["status"] == "fail"
     assert "filesystem-mcp" in checks["production_mcp_templates"]["detail"]["mock_images"]
     assert "code-search-mcp" in checks["production_mcp_templates"]["detail"]["missing"]
+
+
+def test_sandbox_readiness_remediation_points_to_runsc_when_only_runc_exists() -> None:
+    remediation = _sandbox_readiness_remediation(
+        {
+            "requested_runtime": "runc",
+            "docker_runtimes": ["runc", "io.containerd.runc.v2"],
+            "strong_isolation_available": False,
+            "requested_runtime_available": True,
+        }
+    )
+
+    assert any("runsc" in item for item in remediation)
+    assert any("ALLOW_RUNC_SANDBOX=false" in item for item in remediation)
+
+
+def test_embedding_readiness_remediation_rejects_hash_for_production() -> None:
+    remediation = _embedding_readiness_remediation({"provider": "hash", "status": "warn"})
+
+    assert any("openai-compatible" in item for item in remediation)
+    assert any("embedding model" in item for item in remediation)

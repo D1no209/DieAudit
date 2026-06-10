@@ -1054,12 +1054,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "bootstrap_key_enabled": bool(settings.dieaudit_api_key),
                     "message": "Configure DIEAUDIT_API_KEY or create at least one active persisted API key before exposing the platform.",
                 },
+                "remediation": [
+                    "Set DIEAUDIT_API_KEY for a bootstrap deployment, or create a persisted API key and remove the bootstrap key before production exposure.",
+                ],
             },
             {
                 "id": "metrics_private",
                 "title": "Metrics are protected",
                 "status": "pass" if not settings.public_metrics else "fail",
                 "detail": "PUBLIC_METRICS=false keeps /metrics behind the API key gate.",
+                "remediation": ["Set PUBLIC_METRICS=false unless metrics are exposed only on a trusted internal network."],
             },
             {
                 "id": "resource_limits",
@@ -1093,26 +1097,36 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             checks.append({"id": "docker", "title": "Docker runtime is reachable", "status": "fail", "detail": str(exc)})
         try:
             sandbox = await runtime.sandbox_capabilities()
+            sandbox_detail = {
+                "docker_default_runtime": sandbox.get("docker_default_runtime"),
+                "docker_runtimes": sandbox.get("docker_runtimes"),
+                "requested_runtime": sandbox.get("requested_runtime"),
+                "requested_runtime_available": sandbox.get("requested_runtime_available"),
+                "gvisor_available": sandbox.get("gvisor_available"),
+                "strong_isolation_available": sandbox.get("strong_isolation_available"),
+                "sandbox_execution_available": sandbox.get("sandbox_execution_available"),
+                "reason": sandbox.get("reason"),
+                "warnings": sandbox.get("warnings"),
+            }
             checks.append(
                 {
                     "id": "sandbox_isolation",
                     "title": "Sandbox has strong isolation",
                     "status": "pass" if sandbox.get("strong_isolation_available") else "fail",
-                    "detail": {
-                        "docker_default_runtime": sandbox.get("docker_default_runtime"),
-                        "docker_runtimes": sandbox.get("docker_runtimes"),
-                        "requested_runtime": sandbox.get("requested_runtime"),
-                        "requested_runtime_available": sandbox.get("requested_runtime_available"),
-                        "gvisor_available": sandbox.get("gvisor_available"),
-                        "strong_isolation_available": sandbox.get("strong_isolation_available"),
-                        "sandbox_execution_available": sandbox.get("sandbox_execution_available"),
-                        "reason": sandbox.get("reason"),
-                        "warnings": sandbox.get("warnings"),
-                    },
+                    "detail": sandbox_detail,
+                    "remediation": _sandbox_readiness_remediation(sandbox_detail),
                 }
             )
         except Exception as exc:
-            checks.append({"id": "sandbox_isolation", "title": "Sandbox has strong isolation", "status": "fail", "detail": str(exc)})
+            checks.append({
+                "id": "sandbox_isolation",
+                "title": "Sandbox has strong isolation",
+                "status": "fail",
+                "detail": str(exc),
+                "remediation": [
+                    "Verify Docker Engine is reachable through docker-socket-proxy, then install and configure a strong runtime such as gVisor runsc.",
+                ],
+            })
         embedding = await KnowledgeService(settings).embedding_health(probe=settings.knowledge_embedding_probe_on_readiness)
         checks.append(
             {
@@ -1120,6 +1134,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "title": "Knowledge embedding provider is production-ready",
                 "status": embedding.get("status", "fail"),
                 "detail": embedding,
+                "remediation": _embedding_readiness_remediation(embedding),
             }
         )
         agent_templates = agent_template_store().list()
@@ -1762,6 +1777,45 @@ async def _raise_if_cancelled(audit_run_id: str) -> None:
         raise PipelineCancelled(await _cancel_reason(audit_run_id) or "cancel_requested")
 
 
+def _sandbox_readiness_remediation(detail: dict[str, Any]) -> list[str]:
+    requested_runtime = str(detail.get("requested_runtime") or "runc")
+    runtimes = detail.get("docker_runtimes") or []
+    remediation: list[str] = []
+    if not detail.get("strong_isolation_available"):
+        remediation.append("Install a strong container runtime on the Docker host, preferably gVisor runsc for the first production target.")
+        if "runsc" not in runtimes:
+            remediation.append("After installing gVisor, register runsc in Docker daemon.json and restart Docker Engine.")
+        remediation.append("Set ENABLE_GVISOR=true and DEFAULT_SANDBOX_RUNTIME=runsc, then restart the core Compose services.")
+    if requested_runtime == "runc":
+        remediation.append("Keep ALLOW_RUNC_SANDBOX=false for production; runc is acceptable only for explicit local testing with trusted PoCs.")
+    elif not detail.get("requested_runtime_available"):
+        remediation.append(f"Install or register the configured Docker runtime '{requested_runtime}', or change DEFAULT_SANDBOX_RUNTIME to an available strong runtime.")
+    return remediation
+
+
+def _embedding_readiness_remediation(status: dict[str, Any]) -> list[str]:
+    provider = str(status.get("provider") or "hash")
+    if provider in {"hash", "local-hash", ""}:
+        return [
+            "Configure KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible for production RAG quality.",
+            "Set KNOWLEDGE_EMBEDDING_BASE_URL to an endpoint exposing /embeddings, KNOWLEDGE_EMBEDDING_MODEL to a real embedding model, and KNOWLEDGE_VECTOR_SIZE to the model dimension.",
+            "Set KNOWLEDGE_EMBEDDING_API_KEY when the embedding endpoint requires authentication.",
+        ]
+    if provider not in {"openai", "openai-compatible"}:
+        return ["Use KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible or add a tested provider implementation before enabling production RAG."]
+    remediation: list[str] = []
+    if not status.get("base_url_configured"):
+        remediation.append("Set KNOWLEDGE_EMBEDDING_BASE_URL to the OpenAI-compatible embedding API base URL.")
+    if not status.get("model"):
+        remediation.append("Set KNOWLEDGE_EMBEDDING_MODEL to the embedding model name.")
+    probe = status.get("probe") if isinstance(status.get("probe"), dict) else {}
+    if probe.get("attempted") and not probe.get("ok"):
+        remediation.append("Fix embedding endpoint reachability, credentials, or vector dimension mismatch shown in the readiness detail.")
+    if not remediation and status.get("status") != "pass":
+        remediation.append("Review the embedding readiness detail and configure a semantic embedding provider before production RAG use.")
+    return remediation
+
+
 def _template_readiness_checks(
     agent_templates: list[dict[str, Any]],
     mcp_templates: list[dict[str, Any]],
@@ -1896,6 +1950,10 @@ def _pipeline_backend_readiness_check(settings: Settings, worker_health: dict[st
             "worker_health": worker_health,
             "message": message,
         },
+        "remediation": [] if status == "pass" else [
+            "Set PIPELINE_EXECUTION_BACKEND=workflow-worker and keep workflow-worker enabled in the core Compose profile.",
+            "Verify /runtime/workers reports at least one fresh running worker heartbeat.",
+        ],
     }
 
 

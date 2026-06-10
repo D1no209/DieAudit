@@ -178,6 +178,7 @@ type RuntimeReadiness = {
     title: string;
     status: "pass" | "warn" | "fail";
     detail?: unknown;
+    remediation?: string[];
   }>;
 };
 
@@ -1153,7 +1154,7 @@ function App() {
                           <List.Item>
                             <List.Item.Meta
                               title={<Space><Tag color={readinessColor(item.status)}>{item.status}</Tag><Text>{item.title}</Text></Space>}
-                              description={<pre>{JSON.stringify(item.detail || {}, null, 2)}</pre>}
+                              description={renderReadinessDescription(item)}
                             />
                           </List.Item>
                         )}
@@ -1400,6 +1401,29 @@ function readinessColor(value: string) {
   if (value === "fail") return "red";
   if (value === "warn") return "orange";
   return "green";
+}
+
+function renderReadinessDescription(item: NonNullable<RuntimeReadiness["checks"]>[number]) {
+  const remediation = item.remediation || [];
+  return (
+    <Space direction="vertical" size={8} className="drawer-stack">
+      {remediation.length > 0 && item.status !== "pass" ? (
+        <Alert
+          type={item.status === "fail" ? "error" : "warning"}
+          showIcon
+          message="Remediation"
+          description={
+            <ul className="readiness-remediation">
+              {remediation.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          }
+        />
+      ) : null}
+      <pre>{JSON.stringify(item.detail || {}, null, 2)}</pre>
+    </Space>
+  );
 }
 
 function workerStatusColor(value: string) {

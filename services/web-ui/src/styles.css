@@ -73,6 +73,11 @@ body {
   width: 100%;
 }
 
+.readiness-remediation {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .table-toolbar {
   margin-bottom: 12px;
 }
