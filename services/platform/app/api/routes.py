@@ -1398,6 +1398,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         audit_run = await _get_audit_run(audit_run_id)
         if audit_run:
             _require_audit_run_access(principal, audit_run)
+            if body.project_id != audit_run["project_id"]:
+                raise HTTPException(status_code=400, detail="agent run project_id does not match audit run")
         else:
             allowed_audit_run_ids = _principal_allowed_audit_run_ids(principal)
             if allowed_audit_run_ids and audit_run_id not in allowed_audit_run_ids:
