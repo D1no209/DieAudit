@@ -32,8 +32,8 @@ import { KnowledgePage } from "./pages/KnowledgePage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { RuntimePage } from "./pages/RuntimePage";
-import type { AgentRun, ApiKeyRecord, ArtifactRef, AuditRun, AuthStatus, ContainerRow, EvidenceRow, Finding, FindingDetail, KnowledgeDocument, KnowledgeMatch, ManagedRuntime, PipelineStatus, PlatformAuditEvent, Project, ReportArtifact, RuntimePolicy, RuntimeReadiness, SandboxCapabilities, StorageSummary, WorkerHeartbeat } from "./types";
-import { artifactFileName, artifactUrl, isActiveRun, parseScopes, severityColor, workerStatusColor } from "./utils/format";
+import type { AgentRun, ApiKeyRecord, ArtifactRef, AuditRun, AuthStatus, ContainerRow, DependencyInventory, EvidenceRow, Finding, FindingDetail, KnowledgeDocument, KnowledgeMatch, ManagedRuntime, PipelineStatus, PlatformAuditEvent, Project, ReportArtifact, RuntimePolicy, RuntimeReadiness, SandboxCapabilities, StorageSummary, WorkerHeartbeat } from "./types";
+import { artifactFileName, artifactUrl, isActiveRun, parseScopes, workerStatusColor } from "./utils/format";
 
 const { Content } = Layout;
 
@@ -58,6 +58,7 @@ function App() {
   const [auditRun, setAuditRun] = useState<AuditRun>();
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [dependencies, setDependencies] = useState<DependencyInventory>();
   const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [reports, setReports] = useState<ReportArtifact[]>([]);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>();
@@ -117,10 +118,11 @@ function App() {
   }
 
   async function refreshAuditRun(auditRunId: string) {
-    const [run, agents, findingRows, containerRows, reportRows, pipeline] = await Promise.all([
+    const [run, agents, findingRows, dependencyRows, containerRows, reportRows, pipeline] = await Promise.all([
       readJson(`/gateway/audit-runs/${auditRunId}`),
       readJson(`/gateway/audit-runs/${auditRunId}/agent-runs`),
       readJson(`/gateway/audit-runs/${auditRunId}/findings`),
+      readJson(`/gateway/audit-runs/${auditRunId}/dependencies`).catch(() => undefined),
       readJson(`/gateway/audit-runs/${auditRunId}/containers`),
       readJson(`/gateway/audit-runs/${auditRunId}/reports`),
       readJson(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
@@ -128,6 +130,7 @@ function App() {
     setAuditRun(run);
     setAgentRuns(agents);
     setFindings(findingRows);
+    setDependencies(dependencyRows);
     setContainers(containerRows);
     setReports(reportRows);
     setPipelineStatus(pipeline);
@@ -612,16 +615,6 @@ function App() {
     { title: "Events", render: (_, row) => <Button size="small" onClick={() => openAgentEvents(row.agent_run_id)}>查看</Button> },
   ];
 
-  const findingColumns: ColumnsType<Finding> = [
-    { title: "Title", dataIndex: "title" },
-    { title: "Severity", dataIndex: "severity", render: (value) => <Tag color={severityColor(value)}>{value}</Tag> },
-    { title: "Status", dataIndex: "status" },
-    { title: "Path", dataIndex: "file_path", render: (value) => value || "-" },
-    { title: "Rule", dataIndex: "rule_id", render: (value) => value || "-" },
-    { title: "Source", dataIndex: "source" },
-    { title: "Detail", render: (_, row) => <Button size="small" onClick={() => openFinding(row.finding_id)}>研判</Button> },
-  ];
-
   const containerColumns: ColumnsType<ContainerRow> = [
     { title: "Role", render: (_, row) => <Tag>{row.role || row.Labels?.["dieaudit.role"] || "unknown"}</Tag> },
     { title: "Name", render: (_, row) => row.container_name || row.Names?.[0]?.replace("/", "") || "-" },
@@ -756,7 +749,7 @@ function App() {
     }
 
     if (activeView === "findings") {
-      return <FindingsPage findingColumns={findingColumns} findings={findings} />;
+      return <FindingsPage dependencies={dependencies} findings={findings} onOpenFinding={openFinding} />;
     }
 
     if (activeView === "runtime") {

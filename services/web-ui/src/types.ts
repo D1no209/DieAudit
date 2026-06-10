@@ -36,6 +36,32 @@ export type Finding = {
   raw?: Record<string, unknown>;
 };
 
+export type DependencyRecord = {
+  dependency_id: string;
+  audit_run_id: string;
+  project_id: string;
+  ecosystem: string;
+  name: string;
+  version?: string;
+  manifest?: string;
+  vulnerability_count: number;
+  vulnerabilities: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DependencySummary = {
+  total: number;
+  vulnerable: number;
+  by_ecosystem: Record<string, number>;
+};
+
+export type DependencyInventory = {
+  audit_run_id: string;
+  packages: DependencyRecord[];
+  summary: DependencySummary;
+};
+
 export type ArtifactRef = {
   path: string;
   relative_path: string;

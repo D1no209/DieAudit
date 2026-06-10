@@ -204,6 +204,20 @@ class Evidence(TimestampMixin, Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class DependencyRecord(TimestampMixin, Base):
+    __tablename__ = "dependency_records"
+
+    dependency_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    ecosystem: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(Text)
+    version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    manifest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vulnerability_count: Mapped[int] = mapped_column(Integer, default=0)
+    vulnerabilities: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+
+
 class KnowledgeDocument(TimestampMixin, Base):
     __tablename__ = "knowledge_documents"
 

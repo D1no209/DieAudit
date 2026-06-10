@@ -17,6 +17,7 @@ from app.domain.models import (
     ApiKeyRecord,
     AuditRun,
     AuditRunEvent,
+    DependencyRecord,
     Evidence,
     Finding,
     KnowledgeChunk,
@@ -586,8 +587,17 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         created = []
+        packages = result.get("packages", [])
+        vulnerabilities = result.get("vulnerabilities", [])
         async with SessionLocal() as session:
-            for item in result["findings"]:
+            dependency_records = await _replace_dependency_records(
+                session=session,
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                packages=packages,
+                vulnerabilities=vulnerabilities,
+            )
+            for item in result.get("findings", []):
                 finding = Finding(
                     finding_id=str(uuid.uuid4()),
                     audit_run_id=audit_run_id,
@@ -608,10 +618,34 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             await session.commit()
             return {
                 "audit_run_id": audit_run_id,
-                "packages": result["packages"],
-                "vulnerabilities": result["vulnerabilities"],
+                "packages": packages,
+                "vulnerabilities": vulnerabilities,
+                "dependency_records": dependency_records,
                 "findings": [_finding_to_dict(row) for row in created],
             }
+
+    @router.get("/audit-runs/{audit_run_id}/dependencies")
+    async def audit_run_dependencies(audit_run_id: str) -> dict[str, Any]:
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        rows = await _list_dependency_records(audit_run_id)
+        by_ecosystem: dict[str, int] = {}
+        vulnerable = 0
+        for row in rows:
+            ecosystem = row["ecosystem"] or "unknown"
+            by_ecosystem[ecosystem] = by_ecosystem.get(ecosystem, 0) + 1
+            if row["vulnerability_count"] > 0:
+                vulnerable += 1
+        return {
+            "audit_run_id": audit_run_id,
+            "packages": rows,
+            "summary": {
+                "total": len(rows),
+                "vulnerable": vulnerable,
+                "by_ecosystem": by_ecosystem,
+            },
+        }
 
     @router.post("/audit-runs/{audit_run_id}/run-pipeline")
     async def run_pipeline(audit_run_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
@@ -2041,6 +2075,18 @@ async def _list_evidence(audit_run_id: str) -> list[dict[str, Any]]:
         return [_evidence_to_dict(row) for row in rows]
 
 
+async def _list_dependency_records(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(DependencyRecord)
+                .where(DependencyRecord.audit_run_id == audit_run_id)
+                .order_by(DependencyRecord.ecosystem.asc(), DependencyRecord.name.asc(), DependencyRecord.version.asc())
+            )
+        ).scalars()
+        return [_dependency_record_to_dict(row) for row in rows]
+
+
 async def _list_validation_attempts(audit_run_id: str) -> list[dict[str, Any]]:
     async with SessionLocal() as session:
         rows = (
@@ -2063,6 +2109,84 @@ async def _list_reports(audit_run_id: str) -> list[dict[str, Any]]:
             )
         ).scalars()
         return [_report_to_dict(row) for row in rows]
+
+
+def _dependency_record_to_dict(row: DependencyRecord) -> dict[str, Any]:
+    return {
+        "dependency_id": row.dependency_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "ecosystem": row.ecosystem,
+        "name": row.name,
+        "version": row.version,
+        "manifest": row.manifest,
+        "vulnerability_count": row.vulnerability_count,
+        "vulnerabilities": row.vulnerabilities or [],
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+async def _replace_dependency_records(
+    *,
+    session: Any,
+    audit_run_id: str,
+    project_id: str,
+    packages: list[Any],
+    vulnerabilities: list[Any],
+) -> int:
+    vulnerability_map = _dependency_vulnerability_map(vulnerabilities)
+    await session.execute(delete(DependencyRecord).where(DependencyRecord.audit_run_id == audit_run_id))
+    created = 0
+    seen: set[tuple[str, str, str | None, str | None]] = set()
+    for item in packages:
+        if not isinstance(item, dict):
+            continue
+        ecosystem = str(item.get("ecosystem") or "unknown").strip() or "unknown"
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        version = str(item.get("version")).strip() if item.get("version") is not None else None
+        manifest = str(item.get("manifest")).strip() if item.get("manifest") is not None else None
+        dedupe_key = (ecosystem.lower(), name.lower(), version, manifest)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        vulns = vulnerability_map.get(_dependency_key(item), [])
+        session.add(
+            DependencyRecord(
+                dependency_id=str(uuid.uuid4()),
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                ecosystem=ecosystem,
+                name=name,
+                version=version,
+                manifest=manifest,
+                vulnerability_count=len(vulns),
+                vulnerabilities=vulns,
+            )
+        )
+        created += 1
+    return created
+
+
+def _dependency_vulnerability_map(vulnerabilities: list[Any]) -> dict[tuple[str, str, str | None], list[dict[str, Any]]]:
+    result: dict[tuple[str, str, str | None], list[dict[str, Any]]] = {}
+    for item in vulnerabilities:
+        if not isinstance(item, dict):
+            continue
+        package = item.get("package")
+        if not isinstance(package, dict):
+            continue
+        result.setdefault(_dependency_key(package), []).append(item)
+    return result
+
+
+def _dependency_key(package: dict[str, Any]) -> tuple[str, str, str | None]:
+    ecosystem = str(package.get("ecosystem") or "unknown").strip().lower()
+    name = str(package.get("name") or "").strip().lower()
+    version = str(package.get("version")).strip() if package.get("version") is not None else None
+    return ecosystem, name, version
 
 
 async def _list_audit_run_events(audit_run_id: str, limit: int = 200) -> list[dict[str, Any]]:
@@ -2195,6 +2319,17 @@ async def _run_sca_mcp(
     artifact_path = None
     if isinstance(sbom_result, dict):
         artifact_path = ((sbom_result.get("result") or {}).get("artifact_path") if sbom_result.get("result") else None)
+    packages = result.get("packages", []) if isinstance(result, dict) else []
+    vulnerabilities = result.get("vulnerabilities", []) if isinstance(result, dict) else []
+    async with SessionLocal() as session:
+        dependency_records = await _replace_dependency_records(
+            session=session,
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            packages=packages,
+            vulnerabilities=vulnerabilities,
+        )
+        await session.commit()
     created = await _ingest_tool_findings(
         audit_run_id=audit_run_id,
         project_id=project_id,
@@ -2205,8 +2340,9 @@ async def _run_sca_mcp(
     )
     summary = {
         "ok": bool(osv_result.get("ok")),
-        "packages": len(result.get("packages", [])) if isinstance(result, dict) else 0,
-        "vulnerabilities": len(result.get("vulnerabilities", [])) if isinstance(result, dict) else 0,
+        "packages": len(packages),
+        "vulnerabilities": len(vulnerabilities),
+        "dependency_records": dependency_records,
         "findings_created": created,
         "sbom": sbom_result,
     }
