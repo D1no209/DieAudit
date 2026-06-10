@@ -162,3 +162,32 @@ def test_poc_api_rejects_runtime_network_policy_violation(monkeypatch) -> None:
     assert runtime.last_poc_kwargs["project_id"] == "project-1"
     assert runtime.last_poc_kwargs["network_name"] == "dieaudit-run-other-sandbox"
     assert runtime.last_poc_kwargs["allow_external_network"] is True
+
+
+def test_opencode_demo_is_disabled_by_default(monkeypatch, tmp_path) -> None:
+    runtime = _RecordingRuntime()
+    monkeypatch.setattr(main_module, "runtime", runtime)
+    monkeypatch.setattr(settings, "enable_demo_templates", False)
+    monkeypatch.setattr(settings, "workspace_root", tmp_path)
+
+    client = TestClient(app)
+    response = client.post("/audit-runs/demo/opencode-demo", headers=_auth_headers())
+
+    assert response.status_code == 403
+    assert "demo templates are disabled" in response.json()["detail"]
+    assert not hasattr(runtime, "last_agent_kwargs")
+
+
+def test_opencode_demo_keeps_runtime_network_internal_when_enabled(monkeypatch, tmp_path) -> None:
+    runtime = _RecordingRuntime()
+    monkeypatch.setattr(main_module, "runtime", runtime)
+    monkeypatch.setattr(settings, "enable_demo_templates", True)
+    monkeypatch.setattr(settings, "workspace_root", tmp_path)
+
+    client = TestClient(app)
+    response = client.post("/audit-runs/demo/opencode-demo", headers=_auth_headers())
+
+    assert response.status_code == 200
+    assert runtime.last_agent_kwargs["project_id"] == "opencode-demo-project"
+    assert runtime.last_agent_kwargs["agent_name"] == "opencode-orchestrator"
+    assert runtime.last_agent_kwargs["allow_external_network"] is False

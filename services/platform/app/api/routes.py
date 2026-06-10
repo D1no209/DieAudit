@@ -1474,6 +1474,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.post("/audit-runs/{audit_run_id}/opencode-demo")
     async def start_opencode_demo(request: Request, audit_run_id: str = "opencode-demo-run") -> dict[str, Any]:
         _require_unrestricted_resource_scope(getattr(request.state, "auth_principal", None), "demo audit run")
+        if not settings.enable_demo_templates:
+            raise HTTPException(status_code=403, detail="demo templates are disabled; set ENABLE_DEMO_TEMPLATES=true to run OpenCode demos")
         workspace = settings.workspace_root / "opencode-demo-project"
         workspace.mkdir(parents=True, exist_ok=True)
         demo_file = workspace / "app.py"
@@ -1490,7 +1492,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             project_id="opencode-demo-project",
             agent_name="opencode-orchestrator",
             workspace_host_path=str(workspace),
-            allow_external_network=True,
+            allow_external_network=False,
             input_payload={
                 "goal": (
                     "Run a minimal code-audit pass over the demo project. Confirm you can inspect "
