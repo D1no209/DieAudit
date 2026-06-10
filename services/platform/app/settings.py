@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     max_workspace_files: int = 20000
     max_workspace_uncompressed_bytes: int = 536870912
     allowed_git_url_schemes: str = "https,ssh"
+    allowed_git_hosts: str = ""
     rate_limit_per_minute: int = 120
     rate_limit_window_seconds: int = 60
     default_sandbox_runtime: str = "runc"

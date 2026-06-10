@@ -1085,6 +1085,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     for item in settings.allowed_git_url_schemes.split(",")
                     if item.strip()
                 ],
+                "allowed_git_hosts": [
+                    item.strip().lower()
+                    for item in settings.allowed_git_hosts.split(",")
+                    if item.strip()
+                ],
             },
             "pipeline": {
                 "execution_backend": settings.pipeline_execution_backend,

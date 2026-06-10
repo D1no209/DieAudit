@@ -25,3 +25,29 @@ def test_platform_services_receive_sandbox_runtime_environment() -> None:
         environment = services[service_name]["environment"]
         missing = required.difference(environment)
         assert not missing, f"{service_name} missing sandbox env vars: {sorted(missing)}"
+
+
+def test_platform_services_receive_workspace_import_policy_environment() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+    platform_services = [
+        "web-api",
+        "workflow-worker",
+        "agent-gateway",
+        "workspace-engine",
+        "sandbox-runner",
+        "kb-indexer",
+    ]
+    required = {
+        "MAX_REQUEST_BODY_BYTES",
+        "MAX_UPLOAD_BYTES",
+        "MAX_WORKSPACE_FILES",
+        "MAX_WORKSPACE_UNCOMPRESSED_BYTES",
+        "ALLOWED_GIT_URL_SCHEMES",
+        "ALLOWED_GIT_HOSTS",
+    }
+
+    for service_name in platform_services:
+        environment = services[service_name]["environment"]
+        missing = required.difference(environment)
+        assert not missing, f"{service_name} missing workspace import env vars: {sorted(missing)}"

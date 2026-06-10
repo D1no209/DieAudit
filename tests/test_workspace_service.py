@@ -18,6 +18,7 @@ def _settings(tmp_path: Path, **overrides):
         "max_workspace_files": 10,
         "max_workspace_uncompressed_bytes": 1024 * 1024,
         "allowed_git_url_schemes": "https,ssh",
+        "allowed_git_hosts": "",
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -90,3 +91,27 @@ def test_git_url_validation_allows_https_and_scp_like_ssh(tmp_path: Path) -> Non
 
     service._validate_git_url("https://github.com/example/repo.git")
     service._validate_git_url("git@github.com:example/repo.git")
+
+
+def test_git_url_validation_blocks_localhost_and_private_ips(tmp_path: Path) -> None:
+    service = WorkspaceService(_settings(tmp_path))
+
+    for url in (
+        "https://localhost/example/repo.git",
+        "https://repo.localhost/example/repo.git",
+        "https://127.0.0.1/example/repo.git",
+        "https://10.0.0.5/example/repo.git",
+        "https://172.16.1.10/example/repo.git",
+        "https://192.168.1.10/example/repo.git",
+        "ssh://git@[::1]/example/repo.git",
+        "git@127.0.0.1:example/repo.git",
+    ):
+        with pytest.raises(WorkspaceImportError, match="Git URL host is not allowed"):
+            service._validate_git_url(url)
+
+
+def test_git_url_validation_allows_explicit_host_allowlist(tmp_path: Path) -> None:
+    service = WorkspaceService(_settings(tmp_path, allowed_git_hosts="127.0.0.1, git.internal.local"))
+
+    service._validate_git_url("https://127.0.0.1/example/repo.git")
+    service._validate_git_url("git@git.internal.local:example/repo.git")

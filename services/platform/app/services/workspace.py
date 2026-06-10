@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import shutil
 import subprocess
 import uuid
@@ -161,6 +162,7 @@ class WorkspaceService:
         if self._is_scp_like_git_url(value):
             if "ssh" not in allowed:
                 raise WorkspaceImportError("scp-like Git SSH URLs are not allowed by ALLOWED_GIT_URL_SCHEMES")
+            self._validate_git_host(self._scp_like_git_host(value))
             return
         parsed = urlparse(value)
         scheme = parsed.scheme.lower()
@@ -172,16 +174,52 @@ class WorkspaceService:
             raise WorkspaceImportError(f"Git URL scheme '{scheme}' is not allowed")
         if scheme in {"http", "https", "ssh", "git"} and not parsed.netloc:
             raise WorkspaceImportError("Git URL host is required")
+        self._validate_git_host(parsed.hostname)
 
     def _allowed_git_url_schemes(self) -> set[str]:
         raw = str(getattr(self.settings, "allowed_git_url_schemes", "https,ssh") or "")
         return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+    def _allowed_git_hosts(self) -> set[str]:
+        raw = str(getattr(self.settings, "allowed_git_hosts", "") or "")
+        return {self._normalize_host(item) for item in raw.split(",") if item.strip()}
+
+    def _validate_git_host(self, host: str | None) -> None:
+        normalized = self._normalize_host(host or "")
+        if not normalized:
+            raise WorkspaceImportError("Git URL host is required")
+        if normalized in self._allowed_git_hosts():
+            return
+        if normalized == "localhost" or normalized.endswith(".localhost"):
+            raise WorkspaceImportError("Git URL host is not allowed: localhost")
+        try:
+            ip = ipaddress.ip_address(normalized)
+        except ValueError:
+            return
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise WorkspaceImportError(f"Git URL host is not allowed: {normalized}")
 
     @staticmethod
     def _is_scp_like_git_url(value: str) -> bool:
         if "://" in value or value.startswith(("/", ".")):
             return False
         return "@" in value and ":" in value.split("@", 1)[1]
+
+    @staticmethod
+    def _scp_like_git_host(value: str) -> str:
+        after_user = value.split("@", 1)[1] if "@" in value else value
+        return after_user.split(":", 1)[0]
+
+    @staticmethod
+    def _normalize_host(host: str) -> str:
+        return host.strip().strip("[]").rstrip(".").lower()
 
     @staticmethod
     def _is_zip_symlink(item: zipfile.ZipInfo) -> bool:

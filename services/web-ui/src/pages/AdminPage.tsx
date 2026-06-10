@@ -59,6 +59,7 @@ export function AdminPage({
                   <Tag>zip files: {runtimePolicy?.workspace_import?.max_workspace_files ?? "-"}</Tag>
                   <Tag>zip size: {formatBytes(runtimePolicy?.workspace_import?.max_workspace_uncompressed_bytes)}</Tag>
                   <Tag>git schemes: {(runtimePolicy?.workspace_import?.allowed_git_url_schemes || []).join(",") || "-"}</Tag>
+                  <Tag>git hosts: {(runtimePolicy?.workspace_import?.allowed_git_hosts || []).join(",") || "public-only"}</Tag>
                   <Tag>rate: {runtimePolicy?.http_guards?.rate_limit_per_minute ?? "-"} / {runtimePolicy?.http_guards?.rate_limit_window_seconds ?? "-"}s</Tag>
                   <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={onCleanupPlatformAuditEvents}>
                     清理审计事件

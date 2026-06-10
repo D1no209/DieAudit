@@ -158,6 +158,7 @@ export type RuntimePolicy = {
     max_workspace_files?: number;
     max_workspace_uncompressed_bytes?: number;
     allowed_git_url_schemes?: string[];
+    allowed_git_hosts?: string[];
   };
 };
 
