@@ -76,6 +76,11 @@ export function App() {
       setApiHealth(api);
       setAuthStatus(auth);
       rememberApiKeyHeaderName(auth?.api_key_header);
+      const hasLocalApiKey = Boolean((window.localStorage.getItem(API_KEY_STORAGE_KEY) || "").trim());
+      if (auth?.enabled && !hasLocalApiKey) {
+        clearProtectedState();
+        return;
+      }
       const [docker, projectRows] = await Promise.all([
         readJson("/gateway/runtime/docker/health"),
         readJson("/gateway/projects"),
@@ -100,6 +105,33 @@ export function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  function clearProtectedState() {
+    setDockerHealth(undefined);
+    setManagedRuntime(undefined);
+    setStorageSummary(undefined);
+    setRuntimePolicy(undefined);
+    setRuntimeReadiness(undefined);
+    setWorkerHeartbeats([]);
+    setSandboxCapabilities(undefined);
+    setApiKeys([]);
+    setPlatformAuditEvents([]);
+    setKnowledgeDocuments([]);
+    setKnowledgeMatches([]);
+    setProjects([]);
+    setSelectedProjectId(undefined);
+    setAuditRun(undefined);
+    setAgentRuns([]);
+    setFindings([]);
+    setDependencies(undefined);
+    setContainers([]);
+    setReports([]);
+    setPipelineStatus(undefined);
+    setSelectedFinding(undefined);
+    setAgentEvents(undefined);
+    setContainerLogs(undefined);
+    setSandboxTarget(undefined);
   }
 
   async function refreshAuditRun(auditRunId: string) {
