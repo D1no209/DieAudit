@@ -210,9 +210,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.get("/knowledge/documents")
     async def list_knowledge_documents(
+        request: Request,
         scope: str | None = Query(default=None),
         project_id: str | None = Query(default=None),
     ) -> list[dict[str, Any]]:
+        principal = getattr(request.state, "auth_principal", None)
+        if project_id:
+            await _require_project_access(principal, project_id)
         async with SessionLocal() as session:
             query = select(KnowledgeDocument).order_by(KnowledgeDocument.created_at.desc())
             if scope:
@@ -220,7 +224,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             if project_id:
                 query = query.where(KnowledgeDocument.project_id == project_id)
             rows = (await session.execute(query)).scalars()
-            return [_knowledge_document_to_dict(row) for row in rows]
+            rows_list = list(rows)
+        allowed = []
+        for row in rows_list:
+            if row.project_id and not await _principal_can_access_project(principal, row.project_id):
+                continue
+            allowed.append(row)
+        return [_knowledge_document_to_dict(row) for row in allowed]
 
     @router.get("/knowledge/status")
     async def knowledge_status() -> dict[str, Any]:
@@ -229,6 +239,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.post("/knowledge/documents")
     async def upload_knowledge_document(
+        request: Request,
         title: str = Form(...),
         scope: str = Form("global"),
         project_id: str | None = Form(None),
@@ -237,6 +248,10 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         normalized_scope = _normalize_knowledge_scope(scope)
         if normalized_scope == "project" and not project_id:
             raise HTTPException(status_code=400, detail="project_id is required for project-scoped knowledge")
+        if normalized_scope == "project" and project_id:
+            await _require_project_access(getattr(request.state, "auth_principal", None), project_id)
+        elif _principal_has_resource_limits(getattr(request.state, "auth_principal", None)):
+            raise HTTPException(status_code=403, detail="global knowledge upload requires unrestricted API key scope")
         document_id = str(uuid.uuid4())
         service = KnowledgeService(settings)
         artifact_path = service.save_upload(
@@ -298,20 +313,28 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return {"document": _knowledge_document_to_dict(document), "chunks_indexed": len(chunk_rows)}
 
     @router.get("/knowledge/documents/{document_id}")
-    async def get_knowledge_document(document_id: str) -> dict[str, Any]:
+    async def get_knowledge_document(request: Request, document_id: str) -> dict[str, Any]:
         async with SessionLocal() as session:
             row = await session.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id))
             if not row:
                 raise HTTPException(status_code=404, detail="knowledge document not found")
+            if row.project_id:
+                await _require_project_access(getattr(request.state, "auth_principal", None), row.project_id)
+            elif _principal_has_resource_limits(getattr(request.state, "auth_principal", None)):
+                raise HTTPException(status_code=403, detail="global knowledge document is outside API key project or audit run scope")
             return _knowledge_document_to_dict(row)
 
     @router.post("/knowledge/documents/{document_id}/reindex")
-    async def reindex_knowledge_document(document_id: str) -> dict[str, Any]:
+    async def reindex_knowledge_document(request: Request, document_id: str) -> dict[str, Any]:
         service = KnowledgeService(settings)
         async with SessionLocal() as session:
             document = await session.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id))
             if not document:
                 raise HTTPException(status_code=404, detail="knowledge document not found")
+            if document.project_id:
+                await _require_project_access(getattr(request.state, "auth_principal", None), document.project_id)
+            elif _principal_has_resource_limits(getattr(request.state, "auth_principal", None)):
+                raise HTTPException(status_code=403, detail="global knowledge document is outside API key project or audit run scope")
             artifact_path = Path(document.artifact_path or "")
             if not artifact_path.is_file():
                 with contextlib.suppress(KnowledgeIndexError):
@@ -355,12 +378,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return {"document": _knowledge_document_to_dict(document), "chunks_indexed": len(chunk_rows)}
 
     @router.delete("/knowledge/documents/{document_id}")
-    async def delete_knowledge_document(document_id: str) -> dict[str, Any]:
+    async def delete_knowledge_document(request: Request, document_id: str) -> dict[str, Any]:
         service = KnowledgeService(settings)
         async with SessionLocal() as session:
             document = await session.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id))
             if not document:
                 raise HTTPException(status_code=404, detail="knowledge document not found")
+            if document.project_id:
+                await _require_project_access(getattr(request.state, "auth_principal", None), document.project_id)
+            elif _principal_has_resource_limits(getattr(request.state, "auth_principal", None)):
+                raise HTTPException(status_code=403, detail="global knowledge document is outside API key project or audit run scope")
             artifact_path = Path(document.artifact_path).resolve() if document.artifact_path else None
             try:
                 await service.delete_document_vectors(document_id)
@@ -375,8 +402,15 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return {"document_id": document_id, "deleted": True, "artifact_deleted": deleted_artifact}
 
     @router.get("/knowledge/documents/{document_id}/chunks")
-    async def list_knowledge_chunks(document_id: str) -> list[dict[str, Any]]:
+    async def list_knowledge_chunks(request: Request, document_id: str) -> list[dict[str, Any]]:
         async with SessionLocal() as session:
+            document = await session.scalar(select(KnowledgeDocument).where(KnowledgeDocument.document_id == document_id))
+            if not document:
+                raise HTTPException(status_code=404, detail="knowledge document not found")
+            if document.project_id:
+                await _require_project_access(getattr(request.state, "auth_principal", None), document.project_id)
+            elif _principal_has_resource_limits(getattr(request.state, "auth_principal", None)):
+                raise HTTPException(status_code=403, detail="global knowledge document is outside API key project or audit run scope")
             rows = (
                 await session.execute(
                     select(KnowledgeChunk)
@@ -387,7 +421,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return [_knowledge_chunk_to_dict(row) for row in rows]
 
     @router.post("/knowledge/search")
-    async def search_knowledge(body: KnowledgeSearchRequest) -> dict[str, Any]:
+    async def search_knowledge(request: Request, body: KnowledgeSearchRequest) -> dict[str, Any]:
+        principal = getattr(request.state, "auth_principal", None)
+        if body.project_id:
+            await _require_project_access(principal, body.project_id)
+        elif _principal_has_resource_limits(principal) and body.include_global:
+            raise HTTPException(status_code=403, detail="global knowledge search requires unrestricted API key scope")
         service = KnowledgeService(settings)
         try:
             matches = await service.search(
@@ -413,13 +452,17 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return {"query": body.query, "matches": enriched}
 
     @router.get("/projects")
-    async def list_projects() -> list[dict[str, Any]]:
+    async def list_projects(request: Request) -> list[dict[str, Any]]:
+        principal = getattr(request.state, "auth_principal", None)
         async with SessionLocal() as session:
             rows = (await session.execute(select(Project).order_by(Project.created_at.desc()))).scalars()
-            return [_project_to_dict(row) for row in rows]
+            project_rows = list(rows)
+        allowed = [row for row in project_rows if await _principal_can_access_project(principal, row.project_id)]
+        return [_project_to_dict(row) for row in allowed]
 
     @router.post("/projects")
-    async def create_project(body: CreateProjectRequest) -> dict[str, Any]:
+    async def create_project(request: Request, body: CreateProjectRequest) -> dict[str, Any]:
+        _require_unrestricted_resource_scope(getattr(request.state, "auth_principal", None), "project creation")
         project_id = _slug_id(body.name)
         workspace = WorkspaceService(settings)
         async with SessionLocal() as session:
@@ -450,9 +493,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.post("/projects/upload-zip")
     async def upload_zip_project(
+        request: Request,
         name: str = Form(...),
         file: UploadFile = File(...),
     ) -> dict[str, Any]:
+        _require_unrestricted_resource_scope(getattr(request.state, "auth_principal", None), "project creation")
         project_id = _slug_id(name)
         workspace = WorkspaceService(settings)
         async with SessionLocal() as session:
@@ -478,14 +523,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return {"project": await _get_project(project_id), "snapshot": snapshot}
 
     @router.get("/projects/{project_id}")
-    async def get_project(project_id: str) -> dict[str, Any]:
+    async def get_project(request: Request, project_id: str) -> dict[str, Any]:
         project = await _get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="project not found")
+        await _require_project_access(getattr(request.state, "auth_principal", None), project_id)
         return project
 
     @router.get("/projects/{project_id}/snapshots")
-    async def list_project_snapshots(project_id: str) -> list[dict[str, Any]]:
+    async def list_project_snapshots(request: Request, project_id: str) -> list[dict[str, Any]]:
+        await _require_project_access(getattr(request.state, "auth_principal", None), project_id)
         async with SessionLocal() as session:
             rows = (
                 await session.execute(
@@ -497,7 +544,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return [_snapshot_to_dict(row) for row in rows]
 
     @router.post("/projects/{project_id}/audit-runs")
-    async def create_audit_run(project_id: str, body: CreateAuditRunRequest) -> dict[str, Any]:
+    async def create_audit_run(request: Request, project_id: str, body: CreateAuditRunRequest) -> dict[str, Any]:
+        principal = getattr(request.state, "auth_principal", None)
+        await _require_project_access(principal, project_id)
+        if _principal_allowed_audit_run_ids(principal):
+            raise HTTPException(status_code=403, detail="audit run creation requires project-only or unrestricted API key scope")
         async with SessionLocal() as session:
             project = await session.scalar(select(Project).where(Project.project_id == project_id))
             if not project:
@@ -535,19 +586,21 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "goal": "Run an initial code audit pass over the mounted project and report vulnerability candidates with file paths."
                 },
             )
-            agent_result = await start_agent_run(audit_run_id, start_body)
+            agent_result = await _start_agent_run_impl(audit_run_id, start_body)
             await _mark_audit_run_status(audit_run_id, "agent_completed")
         return {"audit_run": await _get_audit_run(audit_run_id), "agent_run": agent_result}
 
     @router.get("/audit-runs/{audit_run_id}")
-    async def get_audit_run(audit_run_id: str) -> dict[str, Any]:
+    async def get_audit_run(request: Request, audit_run_id: str) -> dict[str, Any]:
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
         return audit_run
 
     @router.get("/audit-runs/{audit_run_id}/findings")
-    async def list_findings(audit_run_id: str) -> list[dict[str, Any]]:
+    async def list_findings(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         async with SessionLocal() as session:
             rows = (
                 await session.execute(
@@ -557,10 +610,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return [_finding_to_dict(row) for row in rows]
 
     @router.post("/audit-runs/{audit_run_id}/findings")
-    async def create_finding(audit_run_id: str, body: CreateFindingRequest) -> dict[str, Any]:
+    async def create_finding(request: Request, audit_run_id: str, body: CreateFindingRequest) -> dict[str, Any]:
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
         finding = Finding(
             finding_id=str(uuid.uuid4()),
             audit_run_id=audit_run_id,
@@ -582,10 +636,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return _finding_to_dict(finding)
 
     @router.post("/audit-runs/{audit_run_id}/sca")
-    async def run_sca(audit_run_id: str) -> dict[str, Any]:
+    async def run_sca(request: Request, audit_run_id: str) -> dict[str, Any]:
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         if not workspace_path:
             raise HTTPException(status_code=400, detail="audit run has no workspace path")
@@ -632,10 +687,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             }
 
     @router.get("/audit-runs/{audit_run_id}/dependencies")
-    async def audit_run_dependencies(audit_run_id: str) -> dict[str, Any]:
+    async def audit_run_dependencies(request: Request, audit_run_id: str) -> dict[str, Any]:
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
         rows = await _list_dependency_records(audit_run_id)
         by_ecosystem: dict[str, int] = {}
         vulnerable = 0
@@ -655,13 +711,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         }
 
     @router.post("/audit-runs/{audit_run_id}/run-pipeline")
-    async def run_pipeline(audit_run_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    async def run_pipeline(request: Request, audit_run_id: str, background_tasks: BackgroundTasks) -> dict[str, Any]:
         runtime = runtime_provider()
-        if runtime is None:
-            return await proxy_gateway(f"/audit-runs/{audit_run_id}/run-pipeline", method="POST")
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/run-pipeline", method="POST")
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         if not workspace_path:
             raise HTTPException(status_code=400, detail="audit run has no workspace path")
@@ -677,13 +734,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return {"audit_run_id": audit_run_id, "status": "accepted", "backend": backend}
 
     @router.post("/audit-runs/{audit_run_id}/cancel")
-    async def cancel_audit_run(audit_run_id: str) -> dict[str, Any]:
+    async def cancel_audit_run(request: Request, audit_run_id: str) -> dict[str, Any]:
         runtime = runtime_provider()
-        if runtime is None:
-            return await proxy_gateway(f"/audit-runs/{audit_run_id}/cancel", method="POST")
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/cancel", method="POST")
         await _request_pipeline_cancel(audit_run_id, reason="user_requested")
         await _mark_audit_run_status(audit_run_id, "cancelling")
         await _set_pipeline_state(audit_run_id, stage="cancelling", status="cancelling")
@@ -710,8 +768,9 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         }
 
     @router.post("/audit-runs/{audit_run_id}/judge")
-    async def judge_audit_run(audit_run_id: str) -> dict[str, Any]:
+    async def judge_audit_run(request: Request, audit_run_id: str) -> dict[str, Any]:
         runtime = runtime_provider()
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/judge", method="POST")
         result = await _judge_audit_run_internal(audit_run_id, runtime)
@@ -720,8 +779,9 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return result
 
     @router.post("/audit-runs/{audit_run_id}/report")
-    async def generate_report(audit_run_id: str) -> dict[str, Any]:
+    async def generate_report(request: Request, audit_run_id: str) -> dict[str, Any]:
         runtime = runtime_provider()
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/report", method="POST")
         result = await _generate_report_internal(audit_run_id, settings)
@@ -730,18 +790,21 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return result
 
     @router.get("/audit-runs/{audit_run_id}/evidence")
-    async def audit_run_evidence(audit_run_id: str) -> list[dict[str, Any]]:
+    async def audit_run_evidence(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         return await _list_evidence(audit_run_id)
 
     @router.get("/audit-runs/{audit_run_id}/events")
-    async def audit_run_events(audit_run_id: str) -> list[dict[str, Any]]:
+    async def audit_run_events(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         return await _list_audit_run_events(audit_run_id)
 
     @router.get("/audit-runs/{audit_run_id}/pipeline-status")
-    async def audit_run_pipeline_status(audit_run_id: str) -> dict[str, Any]:
+    async def audit_run_pipeline_status(request: Request, audit_run_id: str) -> dict[str, Any]:
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
         findings = await _list_findings(audit_run_id)
         attempts = await _list_validation_attempts(audit_run_id)
         reports = await _list_reports(audit_run_id)
@@ -768,11 +831,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         }
 
     @router.get("/audit-runs/{audit_run_id}/validation-attempts")
-    async def audit_run_validation_attempts(audit_run_id: str) -> list[dict[str, Any]]:
+    async def audit_run_validation_attempts(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         return await _list_validation_attempts(audit_run_id)
 
     @router.get("/audit-runs/{audit_run_id}/reports")
-    async def audit_run_reports(audit_run_id: str) -> list[dict[str, Any]]:
+    async def audit_run_reports(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         return await _list_reports(audit_run_id)
 
     @router.get("/artifacts/metadata")
@@ -830,28 +895,31 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return FileResponse(path, filename=path.name, media_type="text/markdown", headers=secure_artifact_headers())
 
     @router.get("/findings/{finding_id}")
-    async def get_finding(finding_id: str) -> dict[str, Any]:
+    async def get_finding(request: Request, finding_id: str) -> dict[str, Any]:
         detail = await _get_finding_detail(finding_id)
         if not detail:
             raise HTTPException(status_code=404, detail="finding not found")
+        _require_finding_access(getattr(request.state, "auth_principal", None), detail["finding"])
         return detail
 
     @router.post("/findings/{finding_id}/poc")
-    async def run_finding_poc(finding_id: str, body: RunPocRequest) -> dict[str, Any]:
+    async def run_finding_poc(request: Request, finding_id: str, body: RunPocRequest) -> dict[str, Any]:
         runtime = runtime_provider()
-        if runtime is None:
-            return await proxy_gateway(
-                f"/findings/{finding_id}/poc",
-                method="POST",
-                json=body.model_dump(),
-            )
         async with SessionLocal() as session:
             finding = await session.scalar(select(Finding).where(Finding.finding_id == finding_id))
             if not finding:
                 raise HTTPException(status_code=404, detail="finding not found")
+            _require_finding_access(getattr(request.state, "auth_principal", None), _finding_to_dict(finding))
             audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == finding.audit_run_id))
             if not audit_run:
                 raise HTTPException(status_code=404, detail="audit run not found")
+            _require_audit_run_access(getattr(request.state, "auth_principal", None), _audit_run_to_dict(audit_run))
+            if runtime is None:
+                return await proxy_gateway(
+                    f"/findings/{finding_id}/poc",
+                    method="POST",
+                    json=body.model_dump(),
+                )
             audit_run_id = finding.audit_run_id
             project_id = finding.project_id
             existing_attempts = (
@@ -1324,7 +1392,19 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return {"pulled": pulled}
 
     @router.post("/audit-runs/{audit_run_id}/agent-runs")
-    async def start_agent_run(audit_run_id: str, body: StartAgentRunRequest) -> dict[str, Any]:
+    async def start_agent_run(request: Request, audit_run_id: str, body: StartAgentRunRequest) -> dict[str, Any]:
+        principal = getattr(request.state, "auth_principal", None)
+        audit_run = await _get_audit_run(audit_run_id)
+        if audit_run:
+            _require_audit_run_access(principal, audit_run)
+        else:
+            allowed_audit_run_ids = _principal_allowed_audit_run_ids(principal)
+            if allowed_audit_run_ids and audit_run_id not in allowed_audit_run_ids:
+                raise HTTPException(status_code=403, detail="audit run is outside API key project or audit run scope")
+            await _require_project_access(principal, body.project_id)
+        return await _start_agent_run_impl(audit_run_id, body)
+
+    async def _start_agent_run_impl(audit_run_id: str, body: StartAgentRunRequest) -> dict[str, Any]:
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/agent-runs", method="POST", json=body.model_dump())
@@ -1342,7 +1422,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/audit-runs/{audit_run_id}/demo")
-    async def start_demo(audit_run_id: str = "demo-run") -> dict[str, Any]:
+    async def start_demo(request: Request, audit_run_id: str = "demo-run") -> dict[str, Any]:
+        _require_unrestricted_resource_scope(getattr(request.state, "auth_principal", None), "demo audit run")
         if not settings.enable_demo_templates:
             raise HTTPException(status_code=403, detail="demo templates are disabled; set ENABLE_DEMO_TEMPLATES=true to run mock demos")
         workspace = settings.workspace_root / "demo-project"
@@ -1357,10 +1438,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             workspace_host_path=str(workspace),
             input_payload={"goal": "run demo agent and prove MCP connectivity"},
         )
-        return await start_agent_run(audit_run_id, body)
+        return await _start_agent_run_impl(audit_run_id, body)
 
     @router.post("/audit-runs/{audit_run_id}/opencode-demo")
-    async def start_opencode_demo(audit_run_id: str = "opencode-demo-run") -> dict[str, Any]:
+    async def start_opencode_demo(request: Request, audit_run_id: str = "opencode-demo-run") -> dict[str, Any]:
+        _require_unrestricted_resource_scope(getattr(request.state, "auth_principal", None), "demo audit run")
         workspace = settings.workspace_root / "opencode-demo-project"
         workspace.mkdir(parents=True, exist_ok=True)
         demo_file = workspace / "app.py"
@@ -1385,10 +1467,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 )
             },
         )
-        return await start_agent_run(audit_run_id, body)
+        return await _start_agent_run_impl(audit_run_id, body)
 
     @router.get("/audit-runs/{audit_run_id}/agent-runs")
-    async def audit_run_agent_runs(audit_run_id: str) -> list[dict[str, Any]]:
+    async def audit_run_agent_runs(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         async with SessionLocal() as session:
             rows = (
                 await session.execute(
@@ -1398,7 +1481,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return [_agent_run_to_dict(row) for row in rows]
 
     @router.get("/audit-runs/{audit_run_id}/agent-runs/{agent_run_id}")
-    async def audit_run_agent_run(audit_run_id: str, agent_run_id: str) -> dict[str, Any]:
+    async def audit_run_agent_run(request: Request, audit_run_id: str, agent_run_id: str) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         async with SessionLocal() as session:
             row = await session.scalar(
                 select(AgentRun).where(
@@ -1411,7 +1495,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return _agent_run_to_dict(row)
 
     @router.get("/audit-runs/{audit_run_id}/agent-runs/{agent_run_id}/events")
-    async def audit_run_agent_run_events(audit_run_id: str, agent_run_id: str) -> list[dict[str, Any]]:
+    async def audit_run_agent_run_events(request: Request, audit_run_id: str, agent_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         async with SessionLocal() as session:
             agent_run = await session.scalar(
                 select(AgentRun).where(
@@ -1440,14 +1525,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             ]
 
     @router.get("/audit-runs/{audit_run_id}/containers")
-    async def audit_run_containers(audit_run_id: str) -> list[dict[str, Any]]:
+    async def audit_run_containers(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/containers")
         return await runtime.containers(audit_run_id)
 
     @router.get("/audit-runs/{audit_run_id}/containers/{container_id}/logs")
-    async def audit_run_container_logs(audit_run_id: str, container_id: str) -> Response:
+    async def audit_run_container_logs(request: Request, audit_run_id: str, container_id: str) -> Response:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         runtime = runtime_provider()
         if runtime is None:
             data = await proxy_gateway(f"/audit-runs/{audit_run_id}/containers/{container_id}/logs")
@@ -1459,24 +1546,26 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return Response(logs, media_type="text/plain")
 
     @router.post("/audit-runs/{audit_run_id}/cleanup")
-    async def cleanup_audit_run(audit_run_id: str) -> dict[str, Any]:
+    async def cleanup_audit_run(request: Request, audit_run_id: str) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/cleanup", method="POST")
         return await runtime.cleanup_run(audit_run_id)
 
     @router.post("/audit-runs/{audit_run_id}/sandbox/poc")
-    async def run_poc(audit_run_id: str, body: RunPocRequest) -> dict[str, Any]:
+    async def run_poc(request: Request, audit_run_id: str, body: RunPocRequest) -> dict[str, Any]:
         runtime = runtime_provider()
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
         if runtime is None:
             return await proxy_gateway(
                 f"/audit-runs/{audit_run_id}/sandbox/poc",
                 method="POST",
                 json=body.model_dump(),
             )
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
-            raise HTTPException(status_code=404, detail="audit run not found")
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         try:
             result = await runtime.run_poc_container(
@@ -1501,17 +1590,18 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return result
 
     @router.post("/audit-runs/{audit_run_id}/sandbox/service")
-    async def start_sandbox_service(audit_run_id: str, body: StartSandboxServiceRequest) -> dict[str, Any]:
+    async def start_sandbox_service(request: Request, audit_run_id: str, body: StartSandboxServiceRequest) -> dict[str, Any]:
         runtime = runtime_provider()
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
         if runtime is None:
             return await proxy_gateway(
                 f"/audit-runs/{audit_run_id}/sandbox/service",
                 method="POST",
                 json=body.model_dump(),
             )
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
-            raise HTTPException(status_code=404, detail="audit run not found")
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         try:
             result = await runtime.start_sandbox_service(
@@ -1537,8 +1627,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return result
 
     @router.post("/audit-runs/{audit_run_id}/validators/scale")
-    async def scale_validators(audit_run_id: str, body: ValidatorScaleRequest) -> dict[str, Any]:
+    async def scale_validators(request: Request, audit_run_id: str, body: ValidatorScaleRequest) -> dict[str, Any]:
         runtime = runtime_provider()
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        if body.project_id != audit_run["project_id"]:
+            raise HTTPException(status_code=400, detail="validator project_id does not match audit run")
         if runtime is None:
             return await proxy_gateway(
                 f"/audit-runs/{audit_run_id}/validators/scale",
@@ -1915,6 +2011,106 @@ def _principal_can_access_artifact(principal: dict[str, Any] | None, references:
         if project_allowed and audit_run_allowed:
             return True
     return False
+
+
+def _principal_metadata(principal: dict[str, Any] | None) -> dict[str, Any]:
+    metadata = principal.get("metadata") if isinstance(principal, dict) else {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _principal_allowed_project_ids(principal: dict[str, Any] | None) -> set[str]:
+    if not principal or has_scope(principal, "admin"):
+        return set()
+    metadata = _principal_metadata(principal)
+    return _metadata_id_set(metadata.get("project_ids") or metadata.get("projects"))
+
+
+def _principal_allowed_audit_run_ids(principal: dict[str, Any] | None) -> set[str]:
+    if not principal or has_scope(principal, "admin"):
+        return set()
+    metadata = _principal_metadata(principal)
+    return _metadata_id_set(metadata.get("audit_run_ids") or metadata.get("audit_runs"))
+
+
+def _principal_has_resource_limits(principal: dict[str, Any] | None) -> bool:
+    return bool(_principal_allowed_project_ids(principal) or _principal_allowed_audit_run_ids(principal))
+
+
+def _principal_can_access_audit_run(principal: dict[str, Any] | None, audit_run: dict[str, Any] | AuditRun | None) -> bool:
+    if not audit_run:
+        return False
+    if not principal or has_scope(principal, "admin"):
+        return True
+    allowed_project_ids = _principal_allowed_project_ids(principal)
+    allowed_audit_run_ids = _principal_allowed_audit_run_ids(principal)
+    if not allowed_project_ids and not allowed_audit_run_ids:
+        return True
+    audit_run_id = _resource_attr(audit_run, "audit_run_id")
+    project_id = _resource_attr(audit_run, "project_id")
+    project_allowed = not allowed_project_ids or project_id in allowed_project_ids
+    audit_run_allowed = not allowed_audit_run_ids or audit_run_id in allowed_audit_run_ids
+    return project_allowed and audit_run_allowed
+
+
+async def _principal_can_access_project(principal: dict[str, Any] | None, project_id: str | None) -> bool:
+    if not project_id:
+        return False
+    if not principal or has_scope(principal, "admin"):
+        return True
+    allowed_project_ids = _principal_allowed_project_ids(principal)
+    allowed_audit_run_ids = _principal_allowed_audit_run_ids(principal)
+    if not allowed_project_ids and not allowed_audit_run_ids:
+        return True
+    if allowed_project_ids and project_id not in allowed_project_ids:
+        return False
+    if not allowed_audit_run_ids:
+        return True
+    async with SessionLocal() as session:
+        audit_run_id = await session.scalar(
+            select(AuditRun.audit_run_id)
+            .where(AuditRun.project_id == project_id, AuditRun.audit_run_id.in_(allowed_audit_run_ids))
+            .limit(1)
+        )
+    return bool(audit_run_id)
+
+
+async def _require_project_access(principal: dict[str, Any] | None, project_id: str) -> None:
+    if not await _principal_can_access_project(principal, project_id):
+        raise HTTPException(status_code=403, detail="project is outside API key project or audit run scope")
+
+
+def _require_audit_run_access(principal: dict[str, Any] | None, audit_run: dict[str, Any] | AuditRun | None) -> None:
+    if not _principal_can_access_audit_run(principal, audit_run):
+        raise HTTPException(status_code=403, detail="audit run is outside API key project or audit run scope")
+
+
+async def _require_audit_run_id_access(principal: dict[str, Any] | None, audit_run_id: str) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id)
+    if not audit_run:
+        raise HTTPException(status_code=404, detail="audit run not found")
+    _require_audit_run_access(principal, audit_run)
+    return audit_run
+
+
+def _require_finding_access(principal: dict[str, Any] | None, finding: dict[str, Any] | Finding | None) -> None:
+    if not finding:
+        raise HTTPException(status_code=404, detail="finding not found")
+    audit_run = {
+        "audit_run_id": _resource_attr(finding, "audit_run_id"),
+        "project_id": _resource_attr(finding, "project_id"),
+    }
+    _require_audit_run_access(principal, audit_run)
+
+
+def _require_unrestricted_resource_scope(principal: dict[str, Any] | None, action: str) -> None:
+    if _principal_has_resource_limits(principal):
+        raise HTTPException(status_code=403, detail=f"{action} requires unrestricted API key resource scope")
+
+
+def _resource_attr(resource: dict[str, Any] | Any, key: str) -> str:
+    if isinstance(resource, dict):
+        return str(resource.get(key) or "")
+    return str(getattr(resource, key, "") or "")
 
 
 def _metadata_id_set(value: Any) -> set[str]:

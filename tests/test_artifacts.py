@@ -162,3 +162,47 @@ def test_principal_artifact_scope_remains_unrestricted_without_metadata_limits()
 
     assert routes._principal_can_access_artifact({"scopes": ["read"], "metadata": {}}, references)
     assert routes._principal_can_access_artifact({"scopes": ["admin"], "metadata": {"project_ids": ["other"]}}, references)
+
+
+def test_principal_resource_scope_allows_matching_audit_run() -> None:
+    audit_run = {"audit_run_id": "run-1", "project_id": "project-1"}
+
+    assert routes._principal_can_access_audit_run({"scopes": ["audit"], "metadata": {"project_ids": ["project-1"]}}, audit_run)
+    assert routes._principal_can_access_audit_run({"scopes": ["audit"], "metadata": {"audit_run_ids": ["run-1"]}}, audit_run)
+    assert routes._principal_can_access_audit_run(
+        {"scopes": ["audit"], "metadata": {"project_ids": ["project-1"], "audit_run_ids": ["run-1"]}},
+        audit_run,
+    )
+
+
+def test_principal_resource_scope_denies_mismatched_audit_run() -> None:
+    audit_run = {"audit_run_id": "run-1", "project_id": "project-1"}
+
+    assert not routes._principal_can_access_audit_run({"scopes": ["audit"], "metadata": {"project_ids": ["project-2"]}}, audit_run)
+    assert not routes._principal_can_access_audit_run({"scopes": ["audit"], "metadata": {"audit_run_ids": ["run-2"]}}, audit_run)
+    assert not routes._principal_can_access_audit_run(
+        {"scopes": ["audit"], "metadata": {"project_ids": ["project-1"], "audit_run_ids": ["run-2"]}},
+        audit_run,
+    )
+
+
+def test_principal_resource_scope_remains_unrestricted_without_metadata_limits() -> None:
+    audit_run = {"audit_run_id": "run-1", "project_id": "project-1"}
+
+    assert routes._principal_can_access_audit_run({"scopes": ["read"], "metadata": {}}, audit_run)
+    assert routes._principal_can_access_audit_run({"scopes": ["admin"], "metadata": {"project_ids": ["project-2"]}}, audit_run)
+    assert asyncio.run(routes._principal_can_access_project({"scopes": ["read"], "metadata": {}}, "project-1"))
+    assert asyncio.run(routes._principal_can_access_project({"scopes": ["admin"], "metadata": {"project_ids": ["project-2"]}}, "project-1"))
+
+
+def test_principal_project_scope_uses_direct_project_metadata() -> None:
+    assert asyncio.run(routes._principal_can_access_project({"scopes": ["audit"], "metadata": {"project_ids": "project-1"}}, "project-1"))
+    assert not asyncio.run(
+        routes._principal_can_access_project({"scopes": ["audit"], "metadata": {"project_ids": ["project-2"]}}, "project-1")
+    )
+
+
+def test_resource_limit_detection_supports_legacy_metadata_aliases() -> None:
+    assert routes._principal_has_resource_limits({"scopes": ["audit"], "metadata": {"projects": ["project-1"]}})
+    assert routes._principal_has_resource_limits({"scopes": ["audit"], "metadata": {"audit_runs": "run-1"}})
+    assert not routes._principal_has_resource_limits({"scopes": ["audit"], "metadata": {}})
