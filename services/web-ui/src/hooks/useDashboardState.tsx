@@ -4,11 +4,14 @@ import type { UploadFile } from "antd/es/upload/interface";
 import { API_KEY_STORAGE_KEY } from "../api";
 import type {
   AgentRun,
+  AgentRunEvent,
+  ApiHealth,
   ApiKeyRecord,
   AuditRun,
   AuthStatus,
   ContainerRow,
   DependencyInventory,
+  DockerHealth,
   Finding,
   FindingDetail,
   KnowledgeDocument,
@@ -26,9 +29,9 @@ import type {
 } from "../types";
 
 export function useDashboardState() {
-  const [apiHealth, setApiHealth] = useState<unknown>();
+  const [apiHealth, setApiHealth] = useState<ApiHealth>();
   const [authStatus, setAuthStatus] = useState<AuthStatus>();
-  const [dockerHealth, setDockerHealth] = useState<unknown>();
+  const [dockerHealth, setDockerHealth] = useState<DockerHealth>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
   const [storageSummary, setStorageSummary] = useState<StorageSummary>();
   const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy>();
@@ -50,7 +53,7 @@ export function useDashboardState() {
   const [reports, setReports] = useState<ReportArtifact[]>([]);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>();
   const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
-  const [agentEvents, setAgentEvents] = useState<Array<Record<string, unknown>>>();
+  const [agentEvents, setAgentEvents] = useState<AgentRunEvent[]>();
   const [containerLogs, setContainerLogs] = useState<{ title: string; body: string }>();
   const [sandboxTarget, setSandboxTarget] = useState<{ network: string; target_url: string }>();
   const [lastResponse, setLastResponse] = useState<unknown>();

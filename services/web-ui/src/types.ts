@@ -2,8 +2,27 @@ export type Project = {
   project_id: string;
   name: string;
   source_type: string;
+  source_uri?: string;
+  default_branch?: string;
   status: string;
   metadata?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type ProjectSnapshot = {
+  snapshot_id: string;
+  project_id: string;
+  source_type: string;
+  source_ref?: string;
+  workspace_path?: string;
+  artifact_path?: string;
+  artifact?: ArtifactRef;
+  content_hash?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type AuditRun = {
@@ -11,19 +30,35 @@ export type AuditRun = {
   project_id: string;
   snapshot_id?: string;
   status: string;
+  validator_rounds?: number;
+  max_parallel_validators?: number;
+  allow_external_network?: boolean;
+  retain_runtime_on_failure?: boolean;
+  config?: Record<string, unknown>;
   created_at: string;
+  updated_at?: string;
 };
 
 export type AgentRun = {
   agent_run_id: string;
+  audit_run_id?: string;
+  project_id?: string;
   agent_name: string;
+  template_name?: string;
   status: string;
   protocol_kind: string;
+  input_summary?: Record<string, unknown>;
+  output_summary?: Record<string, unknown>;
+  artifact_path?: string;
+  error?: string;
   created_at: string;
+  updated_at?: string;
 };
 
 export type Finding = {
   finding_id: string;
+  audit_run_id?: string;
+  project_id?: string;
   title: string;
   severity: string;
   status: string;
@@ -34,6 +69,8 @@ export type Finding = {
   source: string;
   description?: string;
   raw?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type DependencyRecord = {
@@ -72,27 +109,45 @@ export type ArtifactRef = {
 
 export type EvidenceRow = {
   evidence_id: string;
+  finding_id?: string;
+  audit_run_id?: string;
   kind: string;
   summary?: string;
   artifact_path?: string;
   artifact?: ArtifactRef;
   payload?: Record<string, unknown>;
   created_at?: string;
+  updated_at?: string;
 };
 
 export type FindingDetail = {
   finding: Finding;
   evidence: EvidenceRow[];
-  validation_attempts: Array<Record<string, unknown>>;
+  validation_attempts: ValidationAttempt[];
+};
+
+export type ValidationAttempt = {
+  attempt_id: string;
+  finding_id: string;
+  audit_run_id: string;
+  agent_run_id?: string;
+  round_index: number;
+  status: string;
+  result?: Record<string, unknown>;
+  created_at: string;
+  updated_at?: string;
 };
 
 export type ReportArtifact = {
   report_id: string;
+  audit_run_id?: string;
+  project_id?: string;
   kind: string;
   path: string;
   artifact?: ArtifactRef;
   summary: Record<string, unknown>;
   created_at: string;
+  updated_at?: string;
 };
 
 export type AuditRunEvent = {
@@ -102,7 +157,17 @@ export type AuditRunEvent = {
   created_at: string;
 };
 
+export type AgentRunEvent = {
+  id: number;
+  agent_run_id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 export type PipelineStatus = {
+  audit_run?: AuditRun;
+  pipeline?: Record<string, unknown>;
   current?: {
     stage?: string;
     status?: string;
@@ -128,6 +193,12 @@ export type ManagedRuntime = {
     run_count?: number;
     expired_run_count?: number;
   };
+};
+
+export type DockerHealth = {
+  ok?: boolean;
+  status?: string;
+  [key: string]: unknown;
 };
 
 export type RuntimePolicy = {
@@ -159,6 +230,15 @@ export type RuntimePolicy = {
     max_workspace_uncompressed_bytes?: number;
     allowed_git_url_schemes?: string[];
     allowed_git_hosts?: string[];
+  };
+  pipeline?: {
+    execution_backend?: string;
+    recovery_on_startup?: boolean;
+  };
+  sandbox?: {
+    default_runtime?: string;
+    enable_gvisor?: boolean;
+    allow_runc_sandbox?: boolean;
   };
 };
 
@@ -217,6 +297,12 @@ export type AuthStatus = {
   service?: string;
 };
 
+export type ApiHealth = {
+  ok?: boolean;
+  service?: string;
+  [key: string]: unknown;
+};
+
 export type ApiKeyRecord = {
   key_id: string;
   name: string;
@@ -247,12 +333,15 @@ export type KnowledgeDocument = {
   document_id: string;
   title: string;
   source_name: string;
+  content_type?: string;
   scope: string;
   project_id?: string;
   status: string;
   chunk_count: number;
   created_at: string;
+  updated_at?: string;
   artifact?: ArtifactRef;
+  artifact_path?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -266,6 +355,7 @@ export type KnowledgeMatch = {
   project_id?: string;
   chunk_index?: number;
   text: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type ContainerRow = {
@@ -280,4 +370,42 @@ export type ContainerRow = {
   exit_code?: number;
   log_artifact?: string;
   container_name?: string;
+};
+
+export type WorkerHeartbeatsResponse = {
+  workers: WorkerHeartbeat[];
+};
+
+export type ProjectMutationResponse = {
+  project: Project;
+  snapshot?: ProjectSnapshot | Record<string, unknown> | null;
+};
+
+export type CreateAuditRunResponse = {
+  audit_run: AuditRun;
+  agent_run?: AgentRun | null;
+};
+
+export type KnowledgeSearchResponse = {
+  query: string;
+  matches: KnowledgeMatch[];
+};
+
+export type KnowledgeDocumentMutationResponse = {
+  document?: KnowledgeDocument;
+  chunks_indexed?: number;
+  deleted?: boolean;
+  deleted_artifact?: boolean;
+  error?: string;
+};
+
+export type SandboxServiceResponse = {
+  network: string;
+  target_url: string;
+  [key: string]: unknown;
+};
+
+export type FindingPocResponse = {
+  finding: FindingDetail;
+  [key: string]: unknown;
 };

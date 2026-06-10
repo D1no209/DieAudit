@@ -1,7 +1,39 @@
 import { formatHttpError, readJson, withAuth } from "../api";
+import type {
+  AgentRun,
+  AgentRunEvent,
+  ApiHealth,
+  ApiKeyRecord,
+  AuditRun,
+  AuthStatus,
+  ContainerRow,
+  CreateAuditRunResponse,
+  DependencyInventory,
+  DockerHealth,
+  Finding,
+  FindingDetail,
+  FindingPocResponse,
+  KnowledgeDocument,
+  KnowledgeDocumentMutationResponse,
+  KnowledgeSearchResponse,
+  ManagedRuntime,
+  PipelineStatus,
+  PlatformAuditEvent,
+  Project,
+  ProjectMutationResponse,
+  ReportArtifact,
+  RuntimePolicy,
+  RuntimeReadiness,
+  SandboxCapabilities,
+  SandboxServiceResponse,
+  StorageSummary,
+  WorkerHeartbeatsResponse,
+} from "../types";
 
-function postJson(path: string, body?: unknown) {
-  return readJson(path, {
+type JsonObject = Record<string, unknown>;
+
+function postJson<T = unknown>(path: string, body?: unknown) {
+  return readJson<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -9,76 +41,76 @@ function postJson(path: string, body?: unknown) {
 }
 
 export function getPlatformBootstrap() {
-  return Promise.all([readJson("/api/health"), readJson("/api/auth/status")]);
+  return Promise.all([readJson<ApiHealth>("/api/health"), readJson<AuthStatus>("/api/auth/status")]);
 }
 
 export function getDockerHealth() {
-  return readJson("/gateway/runtime/docker/health");
+  return readJson<DockerHealth>("/gateway/runtime/docker/health");
 }
 
 export function listProjects() {
-  return readJson("/gateway/projects");
+  return readJson<Project[]>("/gateway/projects");
 }
 
 export function getManagedRuntime() {
-  return readJson("/gateway/runtime/managed");
+  return readJson<ManagedRuntime>("/gateway/runtime/managed");
 }
 
 export function getStorageSummary() {
-  return readJson("/gateway/runtime/storage");
+  return readJson<StorageSummary>("/gateway/runtime/storage");
 }
 
 export function getRuntimePolicy() {
-  return readJson("/gateway/runtime/policy");
+  return readJson<RuntimePolicy>("/gateway/runtime/policy");
 }
 
 export function getRuntimeReadiness() {
-  return readJson("/gateway/runtime/readiness");
+  return readJson<RuntimeReadiness>("/gateway/runtime/readiness");
 }
 
 export function getWorkerHeartbeats() {
-  return readJson("/gateway/runtime/workers");
+  return readJson<WorkerHeartbeatsResponse>("/gateway/runtime/workers");
 }
 
 export function getSandboxCapabilities() {
-  return readJson("/gateway/runtime/sandbox/capabilities");
+  return readJson<SandboxCapabilities>("/gateway/runtime/sandbox/capabilities");
 }
 
 export function listApiKeys() {
-  return readJson("/gateway/auth/api-keys");
+  return readJson<ApiKeyRecord[]>("/gateway/auth/api-keys");
 }
 
 export function listPlatformAuditEvents() {
-  return readJson("/gateway/platform/audit-events?limit=100");
+  return readJson<PlatformAuditEvent[]>("/gateway/platform/audit-events?limit=100");
 }
 
 export function listKnowledgeDocuments() {
-  return readJson("/gateway/knowledge/documents");
+  return readJson<KnowledgeDocument[]>("/gateway/knowledge/documents");
 }
 
 export async function getAuditRunBundle(auditRunId: string) {
   const [run, agents, findings, dependencies, containers, reports, pipeline] = await Promise.all([
-    readJson(`/gateway/audit-runs/${auditRunId}`),
-    readJson(`/gateway/audit-runs/${auditRunId}/agent-runs`),
-    readJson(`/gateway/audit-runs/${auditRunId}/findings`),
-    readJson(`/gateway/audit-runs/${auditRunId}/dependencies`).catch(() => undefined),
-    readJson(`/gateway/audit-runs/${auditRunId}/containers`),
-    readJson(`/gateway/audit-runs/${auditRunId}/reports`),
-    readJson(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
+    readJson<AuditRun>(`/gateway/audit-runs/${auditRunId}`),
+    readJson<AgentRun[]>(`/gateway/audit-runs/${auditRunId}/agent-runs`),
+    readJson<Finding[]>(`/gateway/audit-runs/${auditRunId}/findings`),
+    readJson<DependencyInventory>(`/gateway/audit-runs/${auditRunId}/dependencies`).catch(() => undefined),
+    readJson<ContainerRow[]>(`/gateway/audit-runs/${auditRunId}/containers`),
+    readJson<ReportArtifact[]>(`/gateway/audit-runs/${auditRunId}/reports`),
+    readJson<PipelineStatus>(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
   ]);
   return { agents, containers, dependencies, findings, pipeline, reports, run };
 }
 
 export function createGitProject(values: { name: string; git_url: string; ref?: string }) {
-  return postJson("/gateway/projects", values);
+  return postJson<ProjectMutationResponse>("/gateway/projects", values);
 }
 
 export function uploadZipProject(formData: FormData) {
-  return readJson("/gateway/projects/upload-zip", { method: "POST", body: formData });
+  return readJson<ProjectMutationResponse>("/gateway/projects/upload-zip", { method: "POST", body: formData });
 }
 
 export function createAuditRun(projectId: string) {
-  return postJson(`/gateway/projects/${projectId}/audit-runs`, {
+  return postJson<CreateAuditRunResponse>(`/gateway/projects/${projectId}/audit-runs`, {
     agent_name: "opencode-orchestrator",
     allow_external_network: false,
     input_payload: {
@@ -88,39 +120,39 @@ export function createAuditRun(projectId: string) {
 }
 
 export function runSca(auditRunId: string) {
-  return readJson(`/gateway/audit-runs/${auditRunId}/sca`, { method: "POST" });
+  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/sca`, { method: "POST" });
 }
 
 export function runPipeline(auditRunId: string) {
-  return readJson(`/gateway/audit-runs/${auditRunId}/run-pipeline`, { method: "POST" });
+  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/run-pipeline`, { method: "POST" });
 }
 
 export function runJudge(auditRunId: string) {
-  return readJson(`/gateway/audit-runs/${auditRunId}/judge`, { method: "POST" });
+  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/judge`, { method: "POST" });
 }
 
 export function generateReport(auditRunId: string) {
-  return readJson(`/gateway/audit-runs/${auditRunId}/report`, { method: "POST" });
+  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/report`, { method: "POST" });
 }
 
 export function runSandboxPoc(auditRunId: string, body: Record<string, unknown>) {
-  return postJson(`/gateway/audit-runs/${auditRunId}/sandbox/poc`, body);
+  return postJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/sandbox/poc`, body);
 }
 
 export function startSandboxService(auditRunId: string, body: Record<string, unknown>) {
-  return postJson(`/gateway/audit-runs/${auditRunId}/sandbox/service`, body);
+  return postJson<SandboxServiceResponse>(`/gateway/audit-runs/${auditRunId}/sandbox/service`, body);
 }
 
 export function getFinding(findingId: string) {
-  return readJson(`/gateway/findings/${findingId}`);
+  return readJson<FindingDetail>(`/gateway/findings/${findingId}`);
 }
 
 export function runFindingPoc(findingId: string, body: Record<string, unknown>) {
-  return postJson(`/gateway/findings/${findingId}/poc`, body);
+  return postJson<FindingPocResponse>(`/gateway/findings/${findingId}/poc`, body);
 }
 
 export function getAgentEvents(auditRunId: string, agentRunId: string) {
-  return readJson(`/gateway/audit-runs/${auditRunId}/agent-runs/${agentRunId}/events`);
+  return readJson<AgentRunEvent[]>(`/gateway/audit-runs/${auditRunId}/agent-runs/${agentRunId}/events`);
 }
 
 export async function getContainerLogs(auditRunId: string, containerId: string) {
@@ -136,47 +168,47 @@ export async function getContainerLogs(auditRunId: string, containerId: string) 
 }
 
 export function cleanupAuditRun(auditRunId: string) {
-  return readJson(`/gateway/audit-runs/${auditRunId}/cleanup`, { method: "POST" });
+  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/cleanup`, { method: "POST" });
 }
 
 export function cancelAuditRun(auditRunId: string) {
-  return readJson(`/gateway/audit-runs/${auditRunId}/cancel`, { method: "POST" });
+  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/cancel`, { method: "POST" });
 }
 
 export function cleanupExpiredRuntime() {
-  return readJson("/gateway/runtime/cleanup-expired", { method: "POST" });
+  return readJson<JsonObject>("/gateway/runtime/cleanup-expired", { method: "POST" });
 }
 
 export function previewLocalStorageCleanup() {
-  return postJson("/gateway/runtime/storage/cleanup", { dry_run: true });
+  return postJson<JsonObject>("/gateway/runtime/storage/cleanup", { dry_run: true });
 }
 
 export function cleanupPlatformAuditEvents() {
-  return readJson("/gateway/platform/audit-events", { method: "DELETE" });
+  return readJson<JsonObject>("/gateway/platform/audit-events", { method: "DELETE" });
 }
 
 export function createManagedApiKey(body: Record<string, unknown>) {
-  return postJson("/gateway/auth/api-keys", body);
+  return postJson<ApiKeyRecord>("/gateway/auth/api-keys", body);
 }
 
 export function deactivateManagedApiKey(keyId: string) {
-  return readJson(`/gateway/auth/api-keys/${keyId}/deactivate`, { method: "POST" });
+  return readJson<ApiKeyRecord>(`/gateway/auth/api-keys/${keyId}/deactivate`, { method: "POST" });
 }
 
 export function uploadKnowledgeDocument(formData: FormData) {
-  return readJson("/gateway/knowledge/documents", { method: "POST", body: formData });
+  return readJson<KnowledgeDocumentMutationResponse>("/gateway/knowledge/documents", { method: "POST", body: formData });
 }
 
 export function searchKnowledge(body: Record<string, unknown>) {
-  return postJson("/gateway/knowledge/search", body);
+  return postJson<KnowledgeSearchResponse>("/gateway/knowledge/search", body);
 }
 
 export function reindexKnowledgeDocument(documentId: string) {
-  return readJson(`/gateway/knowledge/documents/${documentId}/reindex`, { method: "POST" });
+  return readJson<KnowledgeDocumentMutationResponse>(`/gateway/knowledge/documents/${documentId}/reindex`, { method: "POST" });
 }
 
 export function deleteKnowledgeDocument(documentId: string) {
-  return readJson(`/gateway/knowledge/documents/${documentId}`, { method: "DELETE" });
+  return readJson<KnowledgeDocumentMutationResponse>(`/gateway/knowledge/documents/${documentId}`, { method: "DELETE" });
 }
 
 export async function fetchArtifactBlob(url: string) {

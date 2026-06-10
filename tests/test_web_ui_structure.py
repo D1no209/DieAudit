@@ -159,6 +159,34 @@ def test_web_ui_build_runs_typecheck() -> None:
     assert "npm run typecheck" in package_json["scripts"]["build"]
 
 
+def test_dashboard_api_client_uses_typed_json_boundaries() -> None:
+    api = read_source("services/web-ui/src/client/dashboardApi.ts")
+    state = read_source("services/web-ui/src/hooks/useDashboardState.tsx")
+    overview = read_source("services/web-ui/src/pages/OverviewPage.tsx")
+    drawers = read_source("services/web-ui/src/components/AppDrawers.tsx")
+
+    for typed_call in (
+        "readJson<ApiHealth>",
+        "readJson<Project[]>",
+        "readJson<AuditRun>",
+        "readJson<AgentRun[]>",
+        "readJson<Finding[]>",
+        "readJson<ContainerRow[]>",
+        "readJson<PipelineStatus>",
+        "postJson<CreateAuditRunResponse>",
+        "postJson<KnowledgeSearchResponse>",
+    ):
+        assert typed_call in api
+
+    assert "as Project[]" not in read_source("services/web-ui/src/hooks/dashboard/useDashboardRefresh.ts")
+    assert "useState<ApiHealth>" in state
+    assert "useState<DockerHealth>" in state
+    assert "useState<AgentRunEvent[]>" in state
+    assert "apiHealth?: any" not in overview
+    assert "dockerHealth?: any" not in overview
+    assert "agentEvents?: Array<Record<string, unknown>>" not in drawers
+
+
 def test_routes_use_dashboard_controller_instead_of_flat_prop_surface() -> None:
     routes = read_source("services/web-ui/src/routes/AppRoutes.tsx")
 

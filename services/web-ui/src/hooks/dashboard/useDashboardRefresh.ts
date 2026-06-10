@@ -1,7 +1,6 @@
 import { API_KEY_STORAGE_KEY, rememberApiKeyHeaderName } from "../../api";
 import * as dashboardApi from "../../client/dashboardApi";
 import type { AppView } from "../../navigation";
-import type { Project } from "../../types";
 import type { DashboardStateController } from "../useDashboardState";
 
 export function useDashboardRefresh(dashboardState: DashboardStateController) {
@@ -59,7 +58,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
   }
 
   async function refreshProjects(preferredProjectId?: string) {
-    const projectRows = await dashboardApi.listProjects() as Project[];
+    const projectRows = await dashboardApi.listProjects();
     setProjects(projectRows);
     const nextProjectId = preferredProjectId && projectRows.some((project) => project.project_id === preferredProjectId)
       ? preferredProjectId

@@ -1,12 +1,12 @@
 import { FileTextOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
 import { Button, Collapse, Descriptions, Drawer, List, Space, Tag, Typography } from "antd";
-import type { ArtifactRef, FindingDetail } from "../types";
+import type { AgentRunEvent, ArtifactRef, FindingDetail } from "../types";
 import { severityColor } from "../utils/format";
 
 const { Text } = Typography;
 
 type Props = {
-  agentEvents?: Array<Record<string, unknown>>;
+  agentEvents?: AgentRunEvent[];
   containerLogs?: { title: string; body: string };
   loading: boolean;
   sandboxExecutionAvailable: boolean;

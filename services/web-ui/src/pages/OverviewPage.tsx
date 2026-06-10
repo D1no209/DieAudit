@@ -7,7 +7,9 @@ import {
 } from "@ant-design/icons";
 import { Card, Statistic, Typography } from "antd";
 import type {
+  ApiHealth,
   AuthStatus,
+  DockerHealth,
   ManagedRuntime,
   RuntimeReadiness,
   SandboxCapabilities,
@@ -17,9 +19,9 @@ import { PageHeader } from "../components/PageHeader";
 const { Text } = Typography;
 
 type Props = {
-  apiHealth?: any;
+  apiHealth?: ApiHealth;
   authStatus?: AuthStatus;
-  dockerHealth?: any;
+  dockerHealth?: DockerHealth;
   findingsCount: number;
   managedRuntime?: ManagedRuntime;
   projectsCount: number;

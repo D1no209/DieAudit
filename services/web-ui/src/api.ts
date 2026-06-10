@@ -2,13 +2,13 @@ export const API_KEY_STORAGE_KEY = "dieaudit.apiKey";
 export const API_KEY_HEADER_STORAGE_KEY = "dieaudit.apiKeyHeader";
 export const API_KEY_HEADER = "X-DieAudit-Api-Key";
 
-export async function readJson(path: string, options?: RequestInit) {
+export async function readJson<T = unknown>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, withAuth(options));
   const text = await response.text();
   if (!response.ok) {
     throw new Error(formatHttpError(text, response.statusText));
   }
-  return text ? JSON.parse(text) : {};
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 export function withAuth(options?: RequestInit): RequestInit {
