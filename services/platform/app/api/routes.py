@@ -44,7 +44,14 @@ from app.schemas import (
     ValidatorScaleRequest,
 )
 from app.services.artifacts import ArtifactAccessError, artifact_metadata, resolve_artifact_path
-from app.services.auth import api_key_record_to_dict, auth_is_enabled, generate_api_key, get_current_api_key, hash_api_key, has_scope
+from app.services.auth import (
+    api_key_record_to_dict,
+    auth_is_enabled,
+    create_persisted_api_key,
+    get_current_api_key,
+    has_scope,
+    normalize_scopes,
+)
 from app.services.dependency_scanner import DependencyScanner
 from app.services.finding_dedupe import find_existing_finding, finding_identity
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService
@@ -163,22 +170,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.post("/auth/api-keys")
     async def create_api_key(request: Request, body: CreateApiKeyRequest) -> dict[str, Any]:
         await _require_admin(request, settings)
-        raw_key = generate_api_key()
-        row = ApiKeyRecord(
-            key_id=str(uuid.uuid4()),
+        return await create_persisted_api_key(
             name=body.name,
-            key_hash=hash_api_key(raw_key),
-            scopes=_normalize_scopes(body.scopes),
-            status="active",
-            metadata_json=body.metadata,
+            scopes=body.scopes,
+            metadata=body.metadata,
+            default_scope="read",
         )
-        async with SessionLocal() as session:
-            session.add(row)
-            await session.flush()
-            await session.refresh(row)
-            record = api_key_record_to_dict(row)
-            await session.commit()
-            return {"api_key": raw_key, "record": record}
 
     @router.post("/auth/api-keys/{key_id}/deactivate")
     async def deactivate_api_key(request: Request, key_id: str) -> dict[str, Any]:
@@ -2510,8 +2507,7 @@ async def _require_admin(request: Request, settings: Settings) -> None:
 
 
 def _normalize_scopes(scopes: list[str]) -> list[str]:
-    normalized = sorted({item.strip().lower() for item in scopes if item and item.strip()})
-    return normalized or ["read"]
+    return normalize_scopes(scopes, default_scope="read")
 
 
 def _normalize_knowledge_scope(scope: str) -> str:

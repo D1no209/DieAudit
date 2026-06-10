@@ -41,6 +41,20 @@ Invoke-RestMethod http://localhost:8080/gateway/runtime/readiness | ConvertTo-Js
 
 The Compose default now queues audit pipelines for `workflow-worker`; the API process no longer owns pipeline execution through request-local background tasks.
 
+Create the first persisted admin key from the running Compose environment without opening an unauthenticated browser/API setup flow:
+
+```powershell
+.\scripts\create-api-key.ps1 -Name bootstrap-admin -Scope admin
+```
+
+Linux/macOS equivalent:
+
+```bash
+NAME=bootstrap-admin SCOPES=admin ./scripts/create-api-key.sh
+```
+
+The command prints the API key once and stores only its hash in Postgres. Use the printed key as `X-DieAudit-Api-Key`.
+
 ## Demo Runtime Orchestration
 
 Build the demo Agent/MCP images and start the core platform:

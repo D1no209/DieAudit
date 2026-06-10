@@ -3,6 +3,7 @@ import hashlib
 import secrets
 from datetime import datetime, timezone
 from typing import Any
+import uuid
 
 from sqlalchemy import select
 
@@ -116,6 +117,36 @@ async def authenticate_api_key(settings: Settings, supplied: str | None) -> dict
         row.last_used_at = datetime.now(timezone.utc)
         await session.commit()
         return api_key_principal(row)
+
+
+async def create_persisted_api_key(
+    *,
+    name: str,
+    scopes: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    default_scope: str = "admin",
+) -> dict[str, Any]:
+    raw_key = generate_api_key()
+    row = ApiKeyRecord(
+        key_id=str(uuid.uuid4()),
+        name=name,
+        key_hash=hash_api_key(raw_key),
+        scopes=normalize_scopes(scopes or [], default_scope=default_scope),
+        status="active",
+        metadata_json=metadata or {},
+    )
+    async with SessionLocal() as session:
+        session.add(row)
+        await session.flush()
+        await session.refresh(row)
+        record = api_key_record_to_dict(row)
+        await session.commit()
+    return {"api_key": raw_key, "record": record}
+
+
+def normalize_scopes(scopes: list[str], *, default_scope: str = "admin") -> list[str]:
+    normalized = sorted({item.strip().lower() for item in scopes if item and item.strip()})
+    return normalized or [default_scope]
 
 
 def api_key_principal(row: ApiKeyRecord) -> dict[str, Any]:
