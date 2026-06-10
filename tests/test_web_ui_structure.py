@@ -63,6 +63,8 @@ def test_projects_page_uses_focused_subcomponents() -> None:
 def test_runtime_page_uses_focused_subcomponents() -> None:
     runtime_page = read_source("services/web-ui/src/pages/RuntimePage.tsx")
     readiness_panel = read_source("services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx")
+    readiness_overview = read_source("services/web-ui/src/pages/runtime/ReadinessOverviewPanel.tsx")
+    readiness_actions = read_source("services/web-ui/src/pages/runtime/ReadinessNextActionsPanel.tsx")
 
     assert "List.Item.Meta" not in runtime_page
     assert "rowKey=\"Id\"" not in runtime_page
@@ -78,6 +80,10 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
         "WorkerHeartbeatPanel",
     ):
         assert component in readiness_panel
+
+    assert "Readiness data is unavailable" in readiness_panel
+    assert "Readiness data is unavailable" in readiness_overview
+    assert "Readiness data is unavailable" in readiness_actions
 
     for path in (
         "services/web-ui/src/pages/runtime/RuntimeActionBar.tsx",

@@ -10,6 +10,14 @@ type Props = {
 export function ReadinessNextActionsPanel({ runtimeReadiness }: Props) {
   const actions = runtimeReadiness?.next_actions || [];
 
+  if (!runtimeReadiness) {
+    return (
+      <Card title="Next Actions">
+        <Alert type="warning" showIcon message="Readiness data is unavailable." />
+      </Card>
+    );
+  }
+
   if (actions.length === 0) {
     return (
       <Card title="Next Actions">

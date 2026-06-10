@@ -7,11 +7,12 @@ const { Text } = Typography;
 type Props = {
   checks: RuntimeReadinessCheck[];
   emptyText: string;
+  type?: "success" | "warning";
 };
 
-export function ReadinessCheckList({ checks, emptyText }: Props) {
+export function ReadinessCheckList({ checks, emptyText, type = "success" }: Props) {
   if (checks.length === 0) {
-    return <Alert type="success" showIcon message={emptyText} />;
+    return <Alert type={type} showIcon message={emptyText} />;
   }
 
   return (
