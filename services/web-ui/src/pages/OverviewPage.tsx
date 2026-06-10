@@ -5,7 +5,7 @@ import {
   FolderOpenOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import { Card, Statistic, Typography } from "antd";
+import { Alert, Card, Statistic, Typography } from "antd";
 import type {
   ApiHealth,
   AuthStatus,
@@ -39,11 +39,21 @@ export function OverviewPage({
   runtimeReadiness,
   sandboxCapabilities,
 }: Props) {
-  const firstReadinessFailure = runtimeReadiness?.checks?.find((item) => item.status === "fail");
+  const firstBlockingCheck = runtimeReadiness?.blocking_checks?.[0] || runtimeReadiness?.checks?.find((item) => item.status === "fail");
+  const firstNextAction = runtimeReadiness?.next_actions?.[0];
 
   return (
     <>
       <PageHeader title="Overview" />
+      {!runtimeReadiness?.ok && firstNextAction && (
+        <Alert
+          className="section"
+          type="error"
+          showIcon
+          message={firstNextAction.title || "Production readiness blocker"}
+          description={firstNextAction.remediation?.[0] || "Open Runtime > Readiness for the full remediation checklist."}
+        />
+      )}
       <div className="stats-grid section">
         <Card><Statistic title="Web API" value={apiHealth?.ok ? "Healthy" : "Unknown"} prefix={<ApiOutlined />} /></Card>
         <Card>
@@ -59,8 +69,8 @@ export function OverviewPage({
           <Text type={runtimeReadiness?.ok ? "success" : "danger"}>
             fail {runtimeReadiness?.summary?.fail ?? "-"} / warn {runtimeReadiness?.summary?.warn ?? "-"} / pass {runtimeReadiness?.summary?.pass ?? "-"}
           </Text>
-          {!runtimeReadiness?.ok && firstReadinessFailure && (
-            <Text type="secondary">{firstReadinessFailure.title}</Text>
+          {!runtimeReadiness?.ok && firstBlockingCheck && (
+            <Text type="secondary">{firstBlockingCheck.title}</Text>
           )}
         </Card>
         <Card><Statistic title="Docker Runtime" value={dockerHealth?.ok ? "Ready" : "Unknown"} prefix={<CloudServerOutlined />} /></Card>

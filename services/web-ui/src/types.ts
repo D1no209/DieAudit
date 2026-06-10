@@ -256,13 +256,23 @@ export type RuntimeReadiness = {
     warn?: number;
     pass?: number;
   };
-  checks?: Array<{
+  checks?: RuntimeReadinessCheck[];
+  blocking_checks?: RuntimeReadinessCheck[];
+  warning_checks?: RuntimeReadinessCheck[];
+  next_actions?: Array<{
+    id?: string;
+    title?: string;
+    status?: "pass" | "warn" | "fail";
+    remediation?: string[];
+  }>;
+};
+
+export type RuntimeReadinessCheck = {
     id: string;
     title: string;
     status: "pass" | "warn" | "fail";
     detail?: unknown;
     remediation?: string[];
-  }>;
 };
 
 export type WorkerHeartbeat = {

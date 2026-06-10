@@ -7,6 +7,7 @@ import yaml
 from app.api.routes import (
     _embedding_readiness_remediation,
     _sandbox_readiness_remediation,
+    _summarize_readiness_checks,
     _template_readiness_checks,
     _vector_store_readiness_remediation,
 )
@@ -178,3 +179,33 @@ def test_vector_store_readiness_remediation_handles_dimension_mismatch() -> None
 
     assert any("KNOWLEDGE_COLLECTION_NAME" in item for item in remediation)
     assert any("Reindex" in item for item in remediation)
+
+
+def test_readiness_summary_promotes_blocking_checks_and_actions() -> None:
+    checks = [
+        {
+            "id": "api_key",
+            "title": "API key is configured",
+            "status": "fail",
+            "detail": {},
+            "remediation": ["set key", "restart services"],
+        },
+        {
+            "id": "heavy_analyzers",
+            "title": "Heavy analyzers have required tool CLIs",
+            "status": "warn",
+            "detail": {},
+            "remediation": ["pull tool image"],
+        },
+        {"id": "docker", "title": "Docker runtime is reachable", "status": "pass", "detail": {}},
+    ]
+
+    summary = _summarize_readiness_checks(checks)
+
+    assert summary["ok"] is False
+    assert summary["status"] == "not_ready"
+    assert summary["summary"] == {"fail": 1, "warn": 1, "pass": 1}
+    assert [item["id"] for item in summary["blocking_checks"]] == ["api_key"]
+    assert [item["id"] for item in summary["warning_checks"]] == ["heavy_analyzers"]
+    assert [item["id"] for item in summary["next_actions"]] == ["api_key", "heavy_analyzers"]
+    assert summary["next_actions"][0]["remediation"] == ["set key", "restart services"]

@@ -178,6 +178,38 @@ def template_readiness_checks(
     return checks
 
 
+def summarize_readiness_checks(checks: list[dict[str, Any]]) -> dict[str, Any]:
+    blocking_checks = [check for check in checks if check.get("status") == "fail"]
+    warning_checks = [check for check in checks if check.get("status") == "warn"]
+    passed_checks = [check for check in checks if check.get("status") == "pass"]
+    next_actions: list[dict[str, Any]] = []
+
+    for check in blocking_checks + warning_checks:
+        remediation = check.get("remediation") if isinstance(check.get("remediation"), list) else []
+        next_actions.append(
+            {
+                "id": check.get("id"),
+                "status": check.get("status"),
+                "title": check.get("title"),
+                "remediation": remediation[:3],
+            }
+        )
+
+    return {
+        "ok": not blocking_checks,
+        "status": "ready" if not blocking_checks else "not_ready",
+        "summary": {
+            "fail": len(blocking_checks),
+            "warn": len(warning_checks),
+            "pass": len(passed_checks),
+        },
+        "blocking_checks": blocking_checks,
+        "warning_checks": warning_checks,
+        "next_actions": next_actions[:8],
+        "checks": checks,
+    }
+
+
 def pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = normalized_pipeline_backend(settings)
     supported_backends = {"background-tasks", "workflow-worker"}

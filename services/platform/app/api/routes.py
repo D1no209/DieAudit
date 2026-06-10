@@ -16,6 +16,7 @@ from app.api.readiness import (
     normalized_pipeline_backend as _normalized_pipeline_backend,
     pipeline_backend_readiness_check as _pipeline_backend_readiness_check,
     sandbox_readiness_remediation as _sandbox_readiness_remediation,
+    summarize_readiness_checks as _summarize_readiness_checks,
     template_readiness_checks as _template_readiness_checks,
     vector_store_readiness_remediation as _vector_store_readiness_remediation,
 )
@@ -1323,14 +1324,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         except Exception as exc:
             tool_capability_result = {"ok": False, "error": str(exc), "templates": {}}
         checks.extend(_template_readiness_checks(agent_templates, mcp_templates, tool_capability_result))
-        fail_count = sum(1 for check in checks if check["status"] == "fail")
-        warn_count = sum(1 for check in checks if check["status"] == "warn")
-        return {
-            "ok": fail_count == 0,
-            "status": "ready" if fail_count == 0 else "not_ready",
-            "summary": {"fail": fail_count, "warn": warn_count, "pass": sum(1 for check in checks if check["status"] == "pass")},
-            "checks": checks,
-        }
+        return _summarize_readiness_checks(checks)
 
     @router.get("/runtime/workers")
     async def runtime_workers() -> dict[str, Any]:
