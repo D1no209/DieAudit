@@ -4,7 +4,12 @@ from pathlib import Path
 
 import yaml
 
-from app.api.routes import _embedding_readiness_remediation, _sandbox_readiness_remediation, _template_readiness_checks
+from app.api.routes import (
+    _embedding_readiness_remediation,
+    _sandbox_readiness_remediation,
+    _template_readiness_checks,
+    _vector_store_readiness_remediation,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,3 +169,12 @@ def test_embedding_readiness_remediation_rejects_hash_for_production() -> None:
 
     assert any("openai-compatible" in item for item in remediation)
     assert any("embedding model" in item for item in remediation)
+
+
+def test_vector_store_readiness_remediation_handles_dimension_mismatch() -> None:
+    remediation = _vector_store_readiness_remediation(
+        {"status": "fail", "message": "Qdrant collection vector size 1024 does not match KNOWLEDGE_VECTOR_SIZE=1536"}
+    )
+
+    assert any("KNOWLEDGE_COLLECTION_NAME" in item for item in remediation)
+    assert any("Reindex" in item for item in remediation)

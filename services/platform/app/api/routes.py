@@ -17,6 +17,7 @@ from app.api.readiness import (
     pipeline_backend_readiness_check as _pipeline_backend_readiness_check,
     sandbox_readiness_remediation as _sandbox_readiness_remediation,
     template_readiness_checks as _template_readiness_checks,
+    vector_store_readiness_remediation as _vector_store_readiness_remediation,
 )
 from app.api.serializers import (
     agent_run_to_dict as _agent_run_to_dict,
@@ -238,7 +239,10 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.get("/knowledge/status")
     async def knowledge_status() -> dict[str, Any]:
         service = KnowledgeService(settings)
-        return {"embedding": await service.embedding_health(probe=settings.knowledge_embedding_probe_on_readiness)}
+        return {
+            "embedding": await service.embedding_health(probe=settings.knowledge_embedding_probe_on_readiness),
+            "vector_store": await service.collection_health(probe=settings.knowledge_embedding_probe_on_readiness),
+        }
 
     @router.post("/knowledge/documents")
     async def upload_knowledge_document(
@@ -1290,7 +1294,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "Verify Docker Engine is reachable through docker-socket-proxy, then install and configure a strong runtime such as gVisor runsc.",
                 ],
             })
-        embedding = await KnowledgeService(settings).embedding_health(probe=settings.knowledge_embedding_probe_on_readiness)
+        knowledge_service = KnowledgeService(settings)
+        embedding = await knowledge_service.embedding_health(probe=settings.knowledge_embedding_probe_on_readiness)
         checks.append(
             {
                 "id": "knowledge_embedding",
@@ -1298,6 +1303,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "status": embedding.get("status", "fail"),
                 "detail": embedding,
                 "remediation": _embedding_readiness_remediation(embedding),
+            }
+        )
+        vector_store = await knowledge_service.collection_health(probe=settings.knowledge_embedding_probe_on_readiness)
+        checks.append(
+            {
+                "id": "knowledge_vector_store",
+                "title": "Knowledge vector collection matches embedding configuration",
+                "status": vector_store.get("status", "fail"),
+                "detail": vector_store,
+                "remediation": _vector_store_readiness_remediation(vector_store),
             }
         )
         agent_templates = agent_template_store().list()

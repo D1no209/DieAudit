@@ -243,6 +243,116 @@ async def test_openai_compatible_embedding_dimension_mismatch_fails(monkeypatch:
         await service.embed_texts(["first"])
 
 
+@pytest.mark.asyncio
+async def test_ensure_collection_rejects_vector_dimension_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"result": {"config": {"params": {"vectors": {"size": 2, "distance": "Cosine"}}}}},
+        )
+    )
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant.local",
+            knowledge_collection_name="knowledge",
+            knowledge_vector_size=3,
+        )
+    )
+
+    with pytest.raises(KnowledgeIndexError, match="vector size 2"):
+        await service.ensure_collection()
+
+
+@pytest.mark.asyncio
+async def test_collection_health_warns_when_collection_is_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(404, json={"status": "not found"}))
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant.local",
+            knowledge_collection_name="knowledge",
+            knowledge_vector_size=3,
+        )
+    )
+
+    status = await service.collection_health()
+
+    assert status["status"] == "warn"
+    assert status["probe"]["exists"] is False
+
+
+@pytest.mark.asyncio
+async def test_collection_health_fails_on_vector_dimension_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"result": {"config": {"params": {"vectors": {"size": 2, "distance": "Cosine"}}}}},
+        )
+    )
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant.local",
+            knowledge_collection_name="knowledge",
+            knowledge_vector_size=3,
+        )
+    )
+
+    status = await service.collection_health()
+
+    assert status["status"] == "fail"
+    assert status["probe"]["dimension"] == 2
+    assert "KNOWLEDGE_VECTOR_SIZE=3" in status["message"]
+
+
+@pytest.mark.asyncio
+async def test_collection_health_accepts_named_qdrant_vectors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"result": {"config": {"params": {"vectors": {"text": {"size": 3, "distance": "Cosine"}}}}}},
+        )
+    )
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant.local",
+            knowledge_collection_name="knowledge",
+            knowledge_vector_size=3,
+        )
+    )
+
+    status = await service.collection_health()
+
+    assert status["status"] == "pass"
+    assert status["probe"]["dimension"] == 3
+
+
 def test_delete_knowledge_artifact_removes_only_knowledge_document_dir(tmp_path: Path) -> None:
     settings = SimpleNamespace(artifact_root=tmp_path)
     document_dir = tmp_path / "knowledge" / "doc-1"

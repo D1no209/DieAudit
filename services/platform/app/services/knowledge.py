@@ -208,6 +208,12 @@ class KnowledgeService:
         async with httpx.AsyncClient(base_url=self.settings.qdrant_url, timeout=30) as client:
             response = await client.get(f"/collections/{self.collection_name}")
             if response.status_code == 200:
+                existing_size = _qdrant_collection_vector_size(response.json())
+                if existing_size is not None and existing_size != self.vector_size:
+                    raise KnowledgeIndexError(
+                        f"Qdrant collection '{self.collection_name}' vector size {existing_size} does not match "
+                        f"KNOWLEDGE_VECTOR_SIZE={self.vector_size}; use a fresh collection name or reindex after recreating it"
+                    )
                 return
             if response.status_code != 404:
                 raise KnowledgeIndexError(response.text)
@@ -217,6 +223,54 @@ class KnowledgeService:
             )
             if create.status_code >= 400:
                 raise KnowledgeIndexError(create.text)
+
+    async def collection_health(self, *, probe: bool = True) -> dict[str, Any]:
+        status: dict[str, Any] = {
+            "collection": self.collection_name,
+            "vector_size": self.vector_size,
+            "qdrant_url_configured": bool(getattr(self.settings, "qdrant_url", "") or ""),
+            "probe_enabled": bool(probe),
+            "status": "pass",
+            "message": "knowledge vector collection is compatible",
+        }
+        if not status["qdrant_url_configured"]:
+            status["status"] = "fail"
+            status["message"] = "QDRANT_URL is required for knowledge vector search"
+            status["probe"] = {"attempted": False, "reason": status["message"]}
+            return status
+        if not probe:
+            status["probe"] = {"attempted": False, "reason": "disabled"}
+            return status
+        try:
+            async with httpx.AsyncClient(base_url=self.settings.qdrant_url, timeout=30) as client:
+                response = await client.get(f"/collections/{self.collection_name}")
+        except Exception as exc:
+            status["status"] = "fail"
+            status["message"] = "Qdrant collection probe failed"
+            status["probe"] = {"attempted": True, "ok": False, "error": str(exc)}
+            return status
+        if response.status_code == 404:
+            status["status"] = "warn"
+            status["message"] = "knowledge collection has not been created yet; upload or reindex a document to initialize it"
+            status["probe"] = {"attempted": True, "ok": True, "exists": False}
+            return status
+        if response.status_code >= 400:
+            status["status"] = "fail"
+            status["message"] = "Qdrant collection probe failed"
+            status["probe"] = {"attempted": True, "ok": False, "status_code": response.status_code, "error": response.text[-1000:]}
+            return status
+        existing_size = _qdrant_collection_vector_size(response.json())
+        status["probe"] = {"attempted": True, "ok": True, "exists": True, "dimension": existing_size}
+        if existing_size is None:
+            status["status"] = "warn"
+            status["message"] = "Qdrant collection exists, but its vector size could not be determined"
+        elif existing_size != self.vector_size:
+            status["status"] = "fail"
+            status["message"] = (
+                f"Qdrant collection vector size {existing_size} does not match KNOWLEDGE_VECTOR_SIZE={self.vector_size}; "
+                "use a fresh collection name or reindex after recreating it"
+            )
+        return status
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if self.embedding_provider in {"hash", "local-hash", ""}:
@@ -358,6 +412,26 @@ def _qdrant_filter(scope: str, project_id: str | None) -> dict[str, Any]:
     if project_id:
         must.append({"key": "project_id", "match": {"value": project_id}})
     return {"must": must}
+
+
+def _qdrant_collection_vector_size(body: dict[str, Any]) -> int | None:
+    vectors = (((body.get("result") or {}).get("config") or {}).get("params") or {}).get("vectors")
+    if not isinstance(vectors, dict):
+        return None
+    size = vectors.get("size")
+    if size is not None:
+        try:
+            return int(size)
+        except (TypeError, ValueError):
+            return None
+    for value in vectors.values():
+        if not isinstance(value, dict) or "size" not in value:
+            continue
+        try:
+            return int(value["size"])
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _extract_pdf(path: Path) -> str:

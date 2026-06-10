@@ -66,6 +66,23 @@ def embedding_readiness_remediation(status: dict[str, Any]) -> list[str]:
     return remediation
 
 
+def vector_store_readiness_remediation(status: dict[str, Any]) -> list[str]:
+    if status.get("qdrant_url_configured") is False:
+        return ["Set QDRANT_URL to the Qdrant service endpoint before enabling knowledge retrieval."]
+    message = str(status.get("message") or "")
+    if "vector size" in message or "KNOWLEDGE_VECTOR_SIZE" in message:
+        return [
+            "Set KNOWLEDGE_COLLECTION_NAME to a new collection name after changing embedding provider or vector dimension.",
+            "Reindex uploaded knowledge documents so Qdrant vectors match the configured embedding model.",
+            "Delete or archive obsolete Qdrant collections only after confirming no AuditRun depends on them.",
+        ]
+    if status.get("status") == "warn":
+        return ["Upload or reindex at least one knowledge document to initialize the configured Qdrant collection."]
+    if status.get("status") == "fail":
+        return ["Verify Qdrant is reachable from platform services and that the configured collection can be read."]
+    return []
+
+
 def template_readiness_checks(
     agent_templates: list[dict[str, Any]],
     mcp_templates: list[dict[str, Any]],
