@@ -77,6 +77,14 @@ body {
   border-inline-end: 0 !important;
 }
 
+.app-sider .ant-menu-item-group-title {
+  padding: 14px 24px 6px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
 .app-content {
   width: 100%;
   max-width: 1280px;

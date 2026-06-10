@@ -2,6 +2,7 @@ import { BugOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Button, Flex, Input, Layout, Menu, Space, Typography } from "antd";
 import type { AppView } from "../navigation";
 import { API_KEY_HEADER } from "../api";
+import type { NavigationItem } from "../navigation";
 
 const { Header } = Layout;
 const { Title, Text } = Typography;
@@ -10,7 +11,7 @@ type Props = {
   activeView: AppView;
   apiKey: string;
   authHeaderName?: string;
-  navigationItems: Array<{ key: AppView; icon: React.ReactNode; label: string }>;
+  navigationItems: NavigationItem[];
   onApiKeyChange: (value: string) => void;
   onRefresh: () => void;
   onSaveApiKey: () => void;
