@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
 from app.api.routes import (
     _embedding_readiness_remediation,
+    _http_guardrails_readiness_check,
     _sandbox_readiness_remediation,
     _summarize_readiness_checks,
     _template_readiness_checks,
     _vector_store_readiness_remediation,
+    _workspace_import_readiness_check,
 )
 
 
@@ -209,3 +212,63 @@ def test_readiness_summary_promotes_blocking_checks_and_actions() -> None:
     assert [item["id"] for item in summary["warning_checks"]] == ["heavy_analyzers"]
     assert [item["id"] for item in summary["next_actions"]] == ["api_key", "heavy_analyzers"]
     assert summary["next_actions"][0]["remediation"] == ["set key", "restart services"]
+
+
+def test_http_guardrails_readiness_fails_when_limits_are_disabled() -> None:
+    check = _http_guardrails_readiness_check(
+        SimpleNamespace(
+            max_request_body_bytes=0,
+            max_upload_bytes=1048576,
+            rate_limit_per_minute=0,
+            rate_limit_window_seconds=60,
+        )
+    )
+
+    assert check["status"] == "fail"
+    assert check["detail"]["missing_or_disabled"] == ["MAX_REQUEST_BODY_BYTES", "RATE_LIMIT_PER_MINUTE"]
+    assert any("MAX_REQUEST_BODY_BYTES" in item for item in check["remediation"])
+
+
+def test_http_guardrails_readiness_passes_with_positive_limits() -> None:
+    check = _http_guardrails_readiness_check(
+        SimpleNamespace(
+            max_request_body_bytes=1048576,
+            max_upload_bytes=1048576,
+            rate_limit_per_minute=120,
+            rate_limit_window_seconds=60,
+        )
+    )
+
+    assert check["status"] == "pass"
+    assert check["detail"]["missing_or_disabled"] == []
+
+
+def test_workspace_import_readiness_rejects_unsafe_local_schemes() -> None:
+    check = _workspace_import_readiness_check(
+        SimpleNamespace(
+            max_workspace_files=0,
+            max_workspace_uncompressed_bytes=536870912,
+            allowed_git_url_schemes="https, file, ssh",
+            allowed_git_hosts="github.com,gitlab.com",
+        )
+    )
+
+    assert check["status"] == "fail"
+    assert "MAX_WORKSPACE_FILES" in check["detail"]["missing_or_disabled"]
+    assert check["detail"]["unsafe_schemes"] == ["file"]
+    assert any("file://" in item for item in check["remediation"])
+
+
+def test_workspace_import_readiness_passes_for_https_and_ssh_with_limits() -> None:
+    check = _workspace_import_readiness_check(
+        SimpleNamespace(
+            max_workspace_files=20000,
+            max_workspace_uncompressed_bytes=536870912,
+            allowed_git_url_schemes="https,ssh",
+            allowed_git_hosts="",
+        )
+    )
+
+    assert check["status"] == "pass"
+    assert check["detail"]["allowed_git_url_schemes"] == ["https", "ssh"]
+    assert check["detail"]["unsafe_schemes"] == []

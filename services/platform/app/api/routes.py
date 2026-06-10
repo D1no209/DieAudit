@@ -13,12 +13,14 @@ from sqlalchemy import delete, select
 
 from app.api.readiness import (
     embedding_readiness_remediation as _embedding_readiness_remediation,
+    http_guardrails_readiness_check as _http_guardrails_readiness_check,
     normalized_pipeline_backend as _normalized_pipeline_backend,
     pipeline_backend_readiness_check as _pipeline_backend_readiness_check,
     sandbox_readiness_remediation as _sandbox_readiness_remediation,
     summarize_readiness_checks as _summarize_readiness_checks,
     template_readiness_checks as _template_readiness_checks,
     vector_store_readiness_remediation as _vector_store_readiness_remediation,
+    workspace_import_readiness_check as _workspace_import_readiness_check,
 )
 from app.api.serializers import (
     agent_run_to_dict as _agent_run_to_dict,
@@ -1247,6 +1249,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 },
             },
         ]
+        checks.append(_http_guardrails_readiness_check(settings))
+        checks.append(_workspace_import_readiness_check(settings))
         worker_health: dict[str, Any] | None = None
         if _normalized_pipeline_backend(settings) == "workflow-worker":
             worker_health = await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)

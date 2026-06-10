@@ -25,6 +25,71 @@ PRODUCTION_MCP_TEMPLATES = {
 OPTIONAL_HEAVY_MCP_TEMPLATES = {"joern-mcp", "codeql-mcp"}
 
 
+def http_guardrails_readiness_check(settings: Settings) -> dict[str, Any]:
+    missing: list[str] = []
+    if int(settings.max_request_body_bytes or 0) <= 0:
+        missing.append("MAX_REQUEST_BODY_BYTES")
+    if int(settings.max_upload_bytes or 0) <= 0:
+        missing.append("MAX_UPLOAD_BYTES")
+    if int(settings.rate_limit_per_minute or 0) <= 0:
+        missing.append("RATE_LIMIT_PER_MINUTE")
+    if int(settings.rate_limit_window_seconds or 0) <= 0:
+        missing.append("RATE_LIMIT_WINDOW_SECONDS")
+
+    return {
+        "id": "http_guardrails",
+        "title": "HTTP request guard rails are enabled",
+        "status": "fail" if missing else "pass",
+        "detail": {
+            "max_request_body_bytes": settings.max_request_body_bytes,
+            "max_upload_bytes": settings.max_upload_bytes,
+            "rate_limit_per_minute": settings.rate_limit_per_minute,
+            "rate_limit_window_seconds": settings.rate_limit_window_seconds,
+            "missing_or_disabled": missing,
+        },
+        "remediation": [] if not missing else [
+            "Set MAX_REQUEST_BODY_BYTES and MAX_UPLOAD_BYTES to positive byte limits for source uploads.",
+            "Set RATE_LIMIT_PER_MINUTE and RATE_LIMIT_WINDOW_SECONDS to positive values for single-node API throttling.",
+            "Use nginx, WAF, or ingress-level rate limiting before exposing multi-node deployments.",
+        ],
+    }
+
+
+def workspace_import_readiness_check(settings: Settings) -> dict[str, Any]:
+    schemes = _csv_values(settings.allowed_git_url_schemes)
+    unsafe_schemes = sorted(set(schemes) & {"file", "ftp"})
+    missing_limits: list[str] = []
+    if int(settings.max_workspace_files or 0) <= 0:
+        missing_limits.append("MAX_WORKSPACE_FILES")
+    if int(settings.max_workspace_uncompressed_bytes or 0) <= 0:
+        missing_limits.append("MAX_WORKSPACE_UNCOMPRESSED_BYTES")
+    if not schemes:
+        missing_limits.append("ALLOWED_GIT_URL_SCHEMES")
+
+    return {
+        "id": "workspace_import_guardrails",
+        "title": "Workspace import guard rails are enabled",
+        "status": "fail" if missing_limits or unsafe_schemes else "pass",
+        "detail": {
+            "max_workspace_files": settings.max_workspace_files,
+            "max_workspace_uncompressed_bytes": settings.max_workspace_uncompressed_bytes,
+            "allowed_git_url_schemes": schemes,
+            "allowed_git_hosts": _csv_values(settings.allowed_git_hosts),
+            "missing_or_disabled": missing_limits,
+            "unsafe_schemes": unsafe_schemes,
+        },
+        "remediation": [] if not missing_limits and not unsafe_schemes else [
+            "Set MAX_WORKSPACE_FILES and MAX_WORKSPACE_UNCOMPRESSED_BYTES to positive limits before accepting Git or zip imports.",
+            "Keep ALLOWED_GIT_URL_SCHEMES limited to https,ssh for production unless another remote scheme has been explicitly approved.",
+            "Do not allow file:// or local Git paths in production imports.",
+        ],
+    }
+
+
+def _csv_values(value: str) -> list[str]:
+    return [item.strip().lower() for item in (value or "").split(",") if item.strip()]
+
+
 def sandbox_readiness_remediation(detail: dict[str, Any]) -> list[str]:
     requested_runtime = str(detail.get("requested_runtime") or "runc")
     runtimes = detail.get("docker_runtimes") or []
