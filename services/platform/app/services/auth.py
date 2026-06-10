@@ -87,6 +87,7 @@ def bootstrap_principal(settings: Settings) -> dict[str, Any]:
         "name": "Environment bootstrap key",
         "source": "env",
         "scopes": ["*"],
+        "metadata": {},
     }
 
 
@@ -157,6 +158,7 @@ def api_key_principal(row: ApiKeyRecord) -> dict[str, Any]:
         "name": row.name,
         "source": "database",
         "scopes": row.scopes or [],
+        "metadata": row.metadata_json or {},
     }
 
 

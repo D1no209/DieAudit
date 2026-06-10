@@ -101,13 +101,24 @@ class _FakeSession:
         return _FakeResult(rows)
 
 
+def _artifact_reference_calls(row):
+    return [[], [], [], [], [], [row]]
+
+
 def test_artifact_reference_check_allows_explicit_orm_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     artifact = tmp_path / "reports" / "run-1" / "report.md"
     artifact.parent.mkdir(parents=True)
     artifact.write_text("# report", encoding="utf-8")
     settings = SimpleNamespace(artifact_root=tmp_path)
+    report = SimpleNamespace(
+        path=str(artifact),
+        summary={},
+        project_id="project-1",
+        audit_run_id="run-1",
+        report_id="report-1",
+    )
 
-    monkeypatch.setattr(routes, "SessionLocal", lambda: _FakeSession([[str(artifact)]]))
+    monkeypatch.setattr(routes, "SessionLocal", lambda: _FakeSession(_artifact_reference_calls(report)))
 
     assert asyncio.run(routes._artifact_is_referenced(settings, artifact.resolve()))
 
@@ -121,3 +132,33 @@ def test_artifact_reference_check_denies_unreferenced_artifact(monkeypatch: pyte
     monkeypatch.setattr(routes, "SessionLocal", lambda: _FakeSession([[], [], [], [], [], [], []]))
 
     assert not asyncio.run(routes._artifact_is_referenced(settings, artifact.resolve()))
+
+
+def test_principal_artifact_scope_allows_matching_project_or_audit_run() -> None:
+    references = [
+        {"kind": "report", "project_id": "project-1", "audit_run_id": "run-1", "record_id": "report-1"},
+    ]
+
+    assert routes._principal_can_access_artifact({"scopes": ["audit"], "metadata": {"project_ids": ["project-1"]}}, references)
+    assert routes._principal_can_access_artifact({"scopes": ["read"], "metadata": {"audit_run_ids": "run-1"}}, references)
+
+
+def test_principal_artifact_scope_denies_mismatched_project_or_audit_run() -> None:
+    references = [
+        {"kind": "report", "project_id": "project-1", "audit_run_id": "run-1", "record_id": "report-1"},
+    ]
+
+    assert not routes._principal_can_access_artifact({"scopes": ["audit"], "metadata": {"project_ids": ["project-2"]}}, references)
+    assert not routes._principal_can_access_artifact(
+        {"scopes": ["read"], "metadata": {"project_ids": ["project-1"], "audit_run_ids": ["run-2"]}},
+        references,
+    )
+
+
+def test_principal_artifact_scope_remains_unrestricted_without_metadata_limits() -> None:
+    references = [
+        {"kind": "report", "project_id": "project-1", "audit_run_id": "run-1", "record_id": "report-1"},
+    ]
+
+    assert routes._principal_can_access_artifact({"scopes": ["read"], "metadata": {}}, references)
+    assert routes._principal_can_access_artifact({"scopes": ["admin"], "metadata": {"project_ids": ["other"]}}, references)

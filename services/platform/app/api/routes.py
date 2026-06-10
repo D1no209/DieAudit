@@ -776,31 +776,37 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return await _list_reports(audit_run_id)
 
     @router.get("/artifacts/metadata")
-    async def artifact_metadata_endpoint(path: str = Query(...)) -> dict[str, Any]:
+    async def artifact_metadata_endpoint(request: Request, path: str = Query(...)) -> dict[str, Any]:
         try:
             artifact_path = resolve_artifact_path(settings, path)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ArtifactAccessError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not await _artifact_is_referenced(settings, artifact_path):
+        references = await _artifact_references(settings, artifact_path)
+        if not references:
             raise HTTPException(status_code=403, detail="artifact is not referenced by a platform record")
+        if not _principal_can_access_artifact(getattr(request.state, "auth_principal", None), references):
+            raise HTTPException(status_code=403, detail="artifact is outside API key project or audit run scope")
         return artifact_metadata(settings, artifact_path)
 
     @router.get("/artifacts/download")
-    async def download_artifact(path: str = Query(...)) -> FileResponse:
+    async def download_artifact(request: Request, path: str = Query(...)) -> FileResponse:
         try:
             artifact_path = resolve_artifact_path(settings, path)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ArtifactAccessError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not await _artifact_is_referenced(settings, artifact_path):
+        references = await _artifact_references(settings, artifact_path)
+        if not references:
             raise HTTPException(status_code=403, detail="artifact is not referenced by a platform record")
+        if not _principal_can_access_artifact(getattr(request.state, "auth_principal", None), references):
+            raise HTTPException(status_code=403, detail="artifact is outside API key project or audit run scope")
         return FileResponse(artifact_path, filename=artifact_path.name, headers=secure_artifact_headers())
 
     @router.get("/reports/{report_id}/download")
-    async def download_report(report_id: str) -> FileResponse:
+    async def download_report(request: Request, report_id: str) -> FileResponse:
         async with SessionLocal() as session:
             report = await session.scalar(select(ReportArtifact).where(ReportArtifact.report_id == report_id))
             if not report:
@@ -811,6 +817,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 raise HTTPException(status_code=404, detail="report artifact not found")
             except ArtifactAccessError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            references = [
+                {
+                    "kind": "report",
+                    "project_id": report.project_id,
+                    "audit_run_id": report.audit_run_id,
+                    "record_id": report.report_id,
+                }
+            ]
+            if not _principal_can_access_artifact(getattr(request.state, "auth_principal", None), references):
+                raise HTTPException(status_code=403, detail="report is outside API key project or audit run scope")
             return FileResponse(path, filename=path.name, media_type="text/markdown", headers=secure_artifact_headers())
 
     @router.get("/findings/{finding_id}")
@@ -1791,26 +1807,124 @@ def _artifact_metadata_or_none(path: str | None) -> dict[str, Any] | None:
 
 
 async def _artifact_is_referenced(settings: Settings, artifact_path: Path) -> bool:
-    reference_columns = (
-        ProjectSnapshot.artifact_path,
-        ContainerRun.log_artifact,
-        AgentRun.artifact_path,
-        Evidence.artifact_path,
-        KnowledgeDocument.artifact_path,
-        ReportArtifact.path,
-    )
-    async with SessionLocal() as session:
-        for column in reference_columns:
-            rows = (await session.execute(select(column).where(column.is_not(None)))).scalars()
-            for stored_path in rows:
-                if artifact_path_matches(settings, stored_path, artifact_path):
-                    return True
+    return bool(await _artifact_references(settings, artifact_path))
 
-        report_summaries = (await session.execute(select(ReportArtifact.summary))).scalars()
-        for summary in report_summaries:
-            if isinstance(summary, dict) and artifact_path_matches(settings, summary.get("json_path"), artifact_path):
-                return True
+
+async def _artifact_references(settings: Settings, artifact_path: Path) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    async with SessionLocal() as session:
+        snapshots = (await session.execute(select(ProjectSnapshot).where(ProjectSnapshot.artifact_path.is_not(None)))).scalars()
+        for row in snapshots:
+            if artifact_path_matches(settings, row.artifact_path, artifact_path):
+                references.append(
+                    {
+                        "kind": "project_snapshot",
+                        "project_id": row.project_id,
+                        "audit_run_id": None,
+                        "record_id": row.snapshot_id,
+                    }
+                )
+
+        containers = (await session.execute(select(ContainerRun).where(ContainerRun.log_artifact.is_not(None)))).scalars()
+        for row in containers:
+            if artifact_path_matches(settings, row.log_artifact, artifact_path):
+                references.append(
+                    {
+                        "kind": "container_log",
+                        "project_id": row.project_id,
+                        "audit_run_id": row.audit_run_id,
+                        "record_id": row.container_id,
+                    }
+                )
+
+        agent_runs = (await session.execute(select(AgentRun).where(AgentRun.artifact_path.is_not(None)))).scalars()
+        for row in agent_runs:
+            if artifact_path_matches(settings, row.artifact_path, artifact_path):
+                references.append(
+                    {
+                        "kind": "agent_run",
+                        "project_id": row.project_id,
+                        "audit_run_id": row.audit_run_id,
+                        "record_id": row.agent_run_id,
+                    }
+                )
+
+        evidence_rows = (await session.execute(select(Evidence).where(Evidence.artifact_path.is_not(None)))).scalars()
+        for row in evidence_rows:
+            if artifact_path_matches(settings, row.artifact_path, artifact_path):
+                audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == row.audit_run_id))
+                references.append(
+                    {
+                        "kind": "evidence",
+                        "project_id": audit_run.project_id if audit_run else None,
+                        "audit_run_id": row.audit_run_id,
+                        "record_id": row.evidence_id,
+                    }
+                )
+
+        documents = (await session.execute(select(KnowledgeDocument).where(KnowledgeDocument.artifact_path.is_not(None)))).scalars()
+        for row in documents:
+            if artifact_path_matches(settings, row.artifact_path, artifact_path):
+                references.append(
+                    {
+                        "kind": "knowledge_document",
+                        "project_id": row.project_id,
+                        "audit_run_id": None,
+                        "record_id": row.document_id,
+                    }
+                )
+
+        reports = (await session.execute(select(ReportArtifact))).scalars()
+        for row in reports:
+            if artifact_path_matches(settings, row.path, artifact_path):
+                references.append(
+                    {
+                        "kind": "report",
+                        "project_id": row.project_id,
+                        "audit_run_id": row.audit_run_id,
+                        "record_id": row.report_id,
+                    }
+                )
+            if isinstance(row.summary, dict) and artifact_path_matches(settings, row.summary.get("json_path"), artifact_path):
+                references.append(
+                    {
+                        "kind": "report_json",
+                        "project_id": row.project_id,
+                        "audit_run_id": row.audit_run_id,
+                        "record_id": row.report_id,
+                    }
+                )
+    return references
+
+
+def _principal_can_access_artifact(principal: dict[str, Any] | None, references: list[dict[str, Any]]) -> bool:
+    if not references:
+        return False
+    if not principal or has_scope(principal, "admin"):
+        return True
+    metadata = principal.get("metadata") if isinstance(principal, dict) else {}
+    if not isinstance(metadata, dict):
+        return True
+    allowed_project_ids = _metadata_id_set(metadata.get("project_ids") or metadata.get("projects"))
+    allowed_audit_run_ids = _metadata_id_set(metadata.get("audit_run_ids") or metadata.get("audit_runs"))
+    if not allowed_project_ids and not allowed_audit_run_ids:
+        return True
+    for reference in references:
+        project_allowed = not allowed_project_ids or str(reference.get("project_id") or "") in allowed_project_ids
+        audit_run_allowed = not allowed_audit_run_ids or str(reference.get("audit_run_id") or "") in allowed_audit_run_ids
+        if project_allowed and audit_run_allowed:
+            return True
     return False
+
+
+def _metadata_id_set(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {item.strip() for item in value.split(",") if item.strip()}
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip() for item in value if str(item).strip()}
+    return set()
 
 
 async def _record_snapshot(snapshot: dict[str, Any]) -> None:
