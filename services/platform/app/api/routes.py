@@ -43,7 +43,7 @@ from app.schemas import (
     TemplateBody,
     ValidatorScaleRequest,
 )
-from app.services.artifacts import ArtifactAccessError, artifact_metadata, resolve_artifact_path
+from app.services.artifacts import ArtifactAccessError, artifact_metadata, resolve_artifact_path, secure_artifact_headers
 from app.services.auth import (
     api_key_record_to_dict,
     auth_is_enabled,
@@ -749,7 +749,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ArtifactAccessError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return FileResponse(artifact_path, filename=artifact_path.name)
+        return FileResponse(artifact_path, filename=artifact_path.name, headers=secure_artifact_headers())
 
     @router.get("/reports/{report_id}/download")
     async def download_report(report_id: str) -> FileResponse:
@@ -763,7 +763,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 raise HTTPException(status_code=404, detail="report artifact not found")
             except ArtifactAccessError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            return FileResponse(path, filename=path.name, media_type="text/markdown")
+            return FileResponse(path, filename=path.name, media_type="text/markdown", headers=secure_artifact_headers())
 
     @router.get("/findings/{finding_id}")
     async def get_finding(finding_id: str) -> dict[str, Any]:

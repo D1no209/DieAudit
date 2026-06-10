@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.artifacts import ArtifactAccessError, artifact_metadata, resolve_artifact_path
+from app.services.artifacts import ArtifactAccessError, artifact_metadata, resolve_artifact_path, secure_artifact_headers
 
 
 def test_resolve_artifact_path_accepts_relative_path_under_artifact_root(tmp_path: Path) -> None:
@@ -38,3 +38,11 @@ def test_resolve_artifact_path_rejects_path_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ArtifactAccessError):
         resolve_artifact_path(settings, outside)
+
+
+def test_secure_artifact_headers_disable_browser_execution_and_cache() -> None:
+    headers = secure_artifact_headers()
+
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Content-Security-Policy"] == "sandbox"
+    assert "no-store" in headers["Cache-Control"]

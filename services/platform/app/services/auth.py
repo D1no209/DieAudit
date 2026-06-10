@@ -72,6 +72,8 @@ def required_scope_for_path(method: str, path: str) -> str | None:
         return "read"
     if path.startswith("/knowledge"):
         return "audit"
+    if path.startswith("/artifacts"):
+        return "audit"
     if path.startswith("/projects") or path.startswith("/audit-runs") or path.startswith("/findings") or path.startswith("/reports"):
         return "audit"
     if path == "/metrics":

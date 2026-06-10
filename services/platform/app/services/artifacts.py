@@ -39,3 +39,11 @@ def artifact_metadata(settings: Settings, path: str | Path) -> dict[str, Any]:
         "updated_at": stat.st_mtime,
         "download_url": f"/artifacts/download?path={quote(relative_path)}",
     }
+
+
+def secure_artifact_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "private, no-store, max-age=0",
+        "Content-Security-Policy": "sandbox",
+        "X-Content-Type-Options": "nosniff",
+    }
