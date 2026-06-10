@@ -23,6 +23,71 @@ def test_audit_runs_page_does_not_embed_result_tables() -> None:
     assert "AgentRunsPage" not in audit_runs_page
     assert "ReportsPage" not in audit_runs_page
     assert "Tabs" not in audit_runs_page
+    assert "List.Item.Meta" not in audit_runs_page
+    assert "Descriptions.Item" not in audit_runs_page
+
+
+def test_audit_runs_page_uses_focused_subcomponents() -> None:
+    audit_runs_page = read_source("services/web-ui/src/pages/AuditRunsPage.tsx")
+
+    for component in ("AuditRunActionBar", "AuditRunSummary", "RunContextPanel", "PipelineStatePanel"):
+        assert component in audit_runs_page
+
+    for path in (
+        "services/web-ui/src/pages/audit-runs/AuditRunActionBar.tsx",
+        "services/web-ui/src/pages/audit-runs/AuditRunSummary.tsx",
+        "services/web-ui/src/pages/audit-runs/RunContextPanel.tsx",
+        "services/web-ui/src/pages/audit-runs/PipelineStatePanel.tsx",
+    ):
+        assert (ROOT / path).is_file()
+
+
+def test_projects_page_uses_focused_subcomponents() -> None:
+    projects_page = read_source("services/web-ui/src/pages/ProjectsPage.tsx")
+
+    assert "Descriptions.Item" not in projects_page
+    assert "rowSelection" not in projects_page
+    assert "Form.Item" not in projects_page
+    for component in ("ProjectImportPanel", "SelectedProjectPanel", "ProjectInventoryTable"):
+        assert component in projects_page
+
+    for path in (
+        "services/web-ui/src/pages/projects/ProjectImportPanel.tsx",
+        "services/web-ui/src/pages/projects/SelectedProjectPanel.tsx",
+        "services/web-ui/src/pages/projects/ProjectInventoryTable.tsx",
+    ):
+        assert (ROOT / path).is_file()
+
+
+def test_runtime_page_uses_focused_subcomponents() -> None:
+    runtime_page = read_source("services/web-ui/src/pages/RuntimePage.tsx")
+
+    assert "List.Item.Meta" not in runtime_page
+    assert "rowKey=\"Id\"" not in runtime_page
+    for component in ("RuntimeActionBar", "RuntimeReadinessPanel", "RuntimeContainersPanel"):
+        assert component in runtime_page
+
+    for path in (
+        "services/web-ui/src/pages/runtime/RuntimeActionBar.tsx",
+        "services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx",
+        "services/web-ui/src/pages/runtime/RuntimeContainersPanel.tsx",
+    ):
+        assert (ROOT / path).is_file()
+
+
+def test_admin_page_uses_focused_subcomponents() -> None:
+    admin_page = read_source("services/web-ui/src/pages/AdminPage.tsx")
+
+    assert "Form.Item" not in admin_page
+    assert "runtimePolicy?.platform_audit_events" not in admin_page
+    for component in ("PlatformAuditPanel", "ApiKeysPanel"):
+        assert component in admin_page
+
+    for path in (
+        "services/web-ui/src/pages/admin/PlatformAuditPanel.tsx",
+        "services/web-ui/src/pages/admin/ApiKeysPanel.tsx",
+    ):
+        assert (ROOT / path).is_file()
 
 
 def test_findings_page_does_not_embed_dependency_inventory() -> None:

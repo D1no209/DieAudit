@@ -14,12 +14,12 @@ def test_web_ui_does_not_request_weak_sandbox_isolation_by_default() -> None:
 
 
 def test_web_ui_api_key_form_supports_artifact_scope_metadata() -> None:
-    admin_page = (ROOT / "services/web-ui/src/pages/AdminPage.tsx").read_text(encoding="utf-8")
+    api_keys_panel = (ROOT / "services/web-ui/src/pages/admin/ApiKeysPanel.tsx").read_text(encoding="utf-8")
     controller = (ROOT / "services/web-ui/src/hooks/useDashboardController.tsx").read_text(encoding="utf-8")
     columns = (ROOT / "services/web-ui/src/hooks/useDashboardColumns.tsx").read_text(encoding="utf-8")
 
-    assert 'name="project_ids"' in admin_page
-    assert 'name="audit_run_ids"' in admin_page
+    assert 'name="project_ids"' in api_keys_panel
+    assert 'name="audit_run_ids"' in api_keys_panel
     assert "parseCsvList(values.project_ids)" in controller
     assert "parseScopes(values.project_ids)" not in controller
     assert "project_ids: projectIds" in controller

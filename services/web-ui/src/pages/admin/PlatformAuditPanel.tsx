@@ -1,0 +1,58 @@
+import { DeleteOutlined } from "@ant-design/icons";
+import { Button, Card, Space, Table, Tag } from "antd";
+import type { ColumnsType } from "antd/es/table";
+import type { PlatformAuditEvent, RuntimePolicy, StorageSummary } from "../../types";
+import { formatBytes, totalStorageBytes } from "../../utils/format";
+
+type Props = {
+  loading: boolean;
+  platformAuditColumns: ColumnsType<PlatformAuditEvent>;
+  platformAuditEvents: PlatformAuditEvent[];
+  runtimePolicy?: RuntimePolicy;
+  storageSummary?: StorageSummary;
+  onCleanupPlatformAuditEvents: () => void;
+  onPreviewLocalStorageCleanup: () => void;
+};
+
+export function PlatformAuditPanel({
+  loading,
+  platformAuditColumns,
+  platformAuditEvents,
+  runtimePolicy,
+  storageSummary,
+  onCleanupPlatformAuditEvents,
+  onPreviewLocalStorageCleanup,
+}: Props) {
+  return (
+    <Card>
+      <Space wrap className="table-toolbar">
+        <Tag>retention: {runtimePolicy?.platform_audit_events?.retention_days ?? "-"}d</Tag>
+        <Tag>max rows: {runtimePolicy?.platform_audit_events?.max_rows ?? "-"}</Tag>
+        <Tag>runtime pkg: {runtimePolicy?.local_storage?.runtime_package_retention_days ?? "-"}d</Tag>
+        <Tag>upload staging: {runtimePolicy?.local_storage?.upload_staging_retention_days ?? "-"}d</Tag>
+        <Tag>unref workspaces: {runtimePolicy?.local_storage?.unreferenced_workspace_retention_days ?? "-"}d</Tag>
+        <Tag>unref snapshots: {runtimePolicy?.local_storage?.unreferenced_snapshot_retention_days ?? "-"}d</Tag>
+        <Tag>storage: {formatBytes(totalStorageBytes(storageSummary))}</Tag>
+        <Tag>container memory: {runtimePolicy?.default_container?.memory ?? "-"}</Tag>
+        <Tag>cpus: {runtimePolicy?.default_container?.cpus ?? "-"}</Tag>
+        <Tag>max body: {formatBytes(runtimePolicy?.http_guards?.max_request_body_bytes)}</Tag>
+        <Tag>max upload: {formatBytes(runtimePolicy?.http_guards?.max_upload_bytes)}</Tag>
+        <Tag>zip files: {runtimePolicy?.workspace_import?.max_workspace_files ?? "-"}</Tag>
+        <Tag>zip size: {formatBytes(runtimePolicy?.workspace_import?.max_workspace_uncompressed_bytes)}</Tag>
+        <Tag>git schemes: {(runtimePolicy?.workspace_import?.allowed_git_url_schemes || []).join(",") || "-"}</Tag>
+        <Tag>git hosts: {(runtimePolicy?.workspace_import?.allowed_git_hosts || []).join(",") || "public-only"}</Tag>
+        <Tag>
+          rate: {runtimePolicy?.http_guards?.rate_limit_per_minute ?? "-"} /{" "}
+          {runtimePolicy?.http_guards?.rate_limit_window_seconds ?? "-"}s
+        </Tag>
+        <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={onCleanupPlatformAuditEvents}>
+          清理审计事件
+        </Button>
+        <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={onPreviewLocalStorageCleanup}>
+          预览存储清理
+        </Button>
+      </Space>
+      <Table rowKey="id" columns={platformAuditColumns} dataSource={platformAuditEvents} pagination={{ pageSize: 10 }} scroll={{ x: 1200 }} />
+    </Card>
+  );
+}
