@@ -13,6 +13,9 @@ body {
   padding: 18px 28px;
   background: #ffffff;
   border-bottom: 1px solid #e6eaf0;
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
 .brand-icon {
@@ -37,10 +40,32 @@ body {
   min-width: 220px;
 }
 
+.mobile-nav {
+  display: none;
+  margin-top: 12px;
+  border-bottom: 0 !important;
+}
+
+.main-layout {
+  min-height: calc(100vh - 86px);
+  background: #f3f5f8;
+}
+
+.app-sider {
+  background: #ffffff !important;
+  border-right: 1px solid #e6eaf0;
+  padding-top: 16px;
+}
+
+.app-sider .ant-menu {
+  border-inline-end: 0 !important;
+}
+
 .app-content {
-  width: min(1180px, calc(100% - 32px));
+  width: 100%;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 24px 0 40px;
+  padding: 24px 28px 40px;
 }
 
 .section {
@@ -51,6 +76,16 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
+}
+
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #e6eaf0;
+  border-radius: 8px;
 }
 
 .workspace-grid {
@@ -96,5 +131,18 @@ pre {
   .workspace-grid,
   .knowledge-grid {
     grid-template-columns: 1fr;
+  }
+
+  .app-header {
+    padding: 14px 16px;
+  }
+
+  .app-content {
+    padding: 16px;
+  }
+
+  .mobile-nav {
+    display: flex;
+    overflow-x: auto;
   }
 }

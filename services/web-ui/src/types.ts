@@ -1,0 +1,255 @@
+export type Project = {
+  project_id: string;
+  name: string;
+  source_type: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type AuditRun = {
+  audit_run_id: string;
+  project_id: string;
+  snapshot_id?: string;
+  status: string;
+  created_at: string;
+};
+
+export type AgentRun = {
+  agent_run_id: string;
+  agent_name: string;
+  status: string;
+  protocol_kind: string;
+  created_at: string;
+};
+
+export type Finding = {
+  finding_id: string;
+  title: string;
+  severity: string;
+  status: string;
+  file_path?: string;
+  line_start?: number;
+  line_end?: number;
+  rule_id?: string;
+  source: string;
+  description?: string;
+  raw?: Record<string, unknown>;
+};
+
+export type ArtifactRef = {
+  path: string;
+  relative_path: string;
+  name: string;
+  size: number;
+  download_url: string;
+};
+
+export type EvidenceRow = {
+  evidence_id: string;
+  kind: string;
+  summary?: string;
+  artifact_path?: string;
+  artifact?: ArtifactRef;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type FindingDetail = {
+  finding: Finding;
+  evidence: EvidenceRow[];
+  validation_attempts: Array<Record<string, unknown>>;
+};
+
+export type ReportArtifact = {
+  report_id: string;
+  kind: string;
+  path: string;
+  artifact?: ArtifactRef;
+  summary: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AuditRunEvent = {
+  id: number;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type PipelineStatus = {
+  current?: {
+    stage?: string;
+    status?: string;
+    error?: string;
+  };
+  runtime_control?: {
+    cancel_requested?: boolean;
+    cancel_reason?: string;
+    cancel_requested_at?: string;
+  };
+  counts?: {
+    findings?: Record<string, number>;
+    validation_attempts?: Record<string, number>;
+    reports?: number;
+  };
+  events: AuditRunEvent[];
+};
+
+export type ManagedRuntime = {
+  summary?: {
+    container_count?: number;
+    network_count?: number;
+    run_count?: number;
+    expired_run_count?: number;
+  };
+};
+
+export type RuntimePolicy = {
+  default_container?: {
+    memory?: string;
+    cpus?: number;
+    pids_limit?: number;
+    tmpfs?: string;
+  };
+  platform_audit_events?: {
+    retention_days?: number;
+    max_rows?: number;
+  };
+  local_storage?: {
+    runtime_package_retention_days?: number;
+    upload_staging_retention_days?: number;
+    unreferenced_workspace_retention_days?: number;
+    unreferenced_snapshot_retention_days?: number;
+    cleanup_max_entries?: number;
+  };
+  http_guards?: {
+    max_request_body_bytes?: number;
+    max_upload_bytes?: number;
+    rate_limit_per_minute?: number;
+    rate_limit_window_seconds?: number;
+  };
+  workspace_import?: {
+    max_workspace_files?: number;
+    max_workspace_uncompressed_bytes?: number;
+    allowed_git_url_schemes?: string[];
+  };
+};
+
+export type StorageSummary = {
+  roots?: Record<string, { path: string; exists: boolean; files: number; dirs: number; bytes: number }>;
+  managed_prefixes?: Record<string, { path: string; exists: boolean; files: number; dirs: number; bytes: number }>;
+  policy?: Record<string, number>;
+};
+
+export type RuntimeReadiness = {
+  ok?: boolean;
+  status?: string;
+  summary?: {
+    fail?: number;
+    warn?: number;
+    pass?: number;
+  };
+  checks?: Array<{
+    id: string;
+    title: string;
+    status: "pass" | "warn" | "fail";
+    detail?: unknown;
+    remediation?: string[];
+  }>;
+};
+
+export type WorkerHeartbeat = {
+  worker_id: string;
+  service_name: string;
+  hostname: string;
+  status: string;
+  last_seen_at: string;
+  age_seconds?: number;
+  current_audit_run_id?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type SandboxCapabilities = {
+  ok?: boolean;
+  docker_available?: boolean;
+  configured_gvisor?: boolean;
+  allow_runc_sandbox?: boolean;
+  gvisor_available?: boolean;
+  strong_isolation_available?: boolean;
+  sandbox_execution_available?: boolean;
+  requested_runtime?: string;
+  reason?: string;
+  warnings?: string[];
+};
+
+export type AuthStatus = {
+  enabled?: boolean;
+  bootstrap_key_enabled?: boolean;
+  api_key_header?: string;
+  public_metrics?: boolean;
+  service?: string;
+};
+
+export type ApiKeyRecord = {
+  key_id: string;
+  name: string;
+  scopes: string[];
+  status: string;
+  last_used_at?: string;
+  deactivated_at?: string;
+  created_at: string;
+};
+
+export type PlatformAuditEvent = {
+  id: number;
+  service: string;
+  method: string;
+  path: string;
+  status_code: number;
+  client_host?: string;
+  user_agent?: string;
+  auth_enabled: boolean;
+  auth_result: string;
+  request_id?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type KnowledgeDocument = {
+  document_id: string;
+  title: string;
+  source_name: string;
+  scope: string;
+  project_id?: string;
+  status: string;
+  chunk_count: number;
+  created_at: string;
+  artifact?: ArtifactRef;
+  metadata?: Record<string, unknown>;
+};
+
+export type KnowledgeMatch = {
+  score?: number;
+  document_id: string;
+  chunk_id: string;
+  title?: string;
+  source_name?: string;
+  scope?: string;
+  project_id?: string;
+  chunk_index?: number;
+  text: string;
+};
+
+export type ContainerRow = {
+  Id: string;
+  Image: string;
+  Names: string[];
+  State: string;
+  Status: string;
+  Labels: Record<string, string>;
+  role?: string;
+  db_status?: string;
+  exit_code?: number;
+  log_artifact?: string;
+  container_name?: string;
+};

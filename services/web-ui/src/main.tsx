@@ -25,6 +25,7 @@ import {
   Input,
   Layout,
   List,
+  Menu,
   Popconfirm,
   Space,
   Statistic,
@@ -40,278 +41,19 @@ import type { ColumnsType } from "antd/es/table";
 import type { UploadFile } from "antd/es/upload/interface";
 import "antd/dist/reset.css";
 import "./styles.css";
+import { API_KEY_HEADER, API_KEY_STORAGE_KEY, formatHttpError, readJson } from "./api";
+import type { AgentRun, ApiKeyRecord, ArtifactRef, AuditRun, AuthStatus, ContainerRow, EvidenceRow, Finding, FindingDetail, KnowledgeDocument, KnowledgeMatch, ManagedRuntime, PipelineStatus, PlatformAuditEvent, Project, ReportArtifact, RuntimePolicy, RuntimeReadiness, SandboxCapabilities, StorageSummary, WorkerHeartbeat } from "./types";
 
-const { Header, Content } = Layout;
+const { Header, Content, Sider } = Layout;
 const { Title, Text, Paragraph } = Typography;
-const API_KEY_STORAGE_KEY = "dieaudit.apiKey";
-const API_KEY_HEADER = "X-DieAudit-Api-Key";
-
-type Project = {
-  project_id: string;
-  name: string;
-  source_type: string;
-  status: string;
-  metadata?: Record<string, unknown>;
-};
-
-type AuditRun = {
-  audit_run_id: string;
-  project_id: string;
-  snapshot_id?: string;
-  status: string;
-  created_at: string;
-};
-
-type AgentRun = {
-  agent_run_id: string;
-  agent_name: string;
-  status: string;
-  protocol_kind: string;
-  created_at: string;
-};
-
-type Finding = {
-  finding_id: string;
-  title: string;
-  severity: string;
-  status: string;
-  file_path?: string;
-  line_start?: number;
-  line_end?: number;
-  rule_id?: string;
-  source: string;
-  description?: string;
-  raw?: Record<string, unknown>;
-};
-
-type ArtifactRef = {
-  path: string;
-  relative_path: string;
-  name: string;
-  size: number;
-  download_url: string;
-};
-
-type EvidenceRow = {
-  evidence_id: string;
-  kind: string;
-  summary?: string;
-  artifact_path?: string;
-  artifact?: ArtifactRef;
-  payload?: Record<string, unknown>;
-  created_at?: string;
-};
-
-type FindingDetail = {
-  finding: Finding;
-  evidence: EvidenceRow[];
-  validation_attempts: Array<Record<string, unknown>>;
-};
-
-type ReportArtifact = {
-  report_id: string;
-  kind: string;
-  path: string;
-  artifact?: ArtifactRef;
-  summary: Record<string, unknown>;
-  created_at: string;
-};
-
-type AuditRunEvent = {
-  id: number;
-  event_type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-};
-
-type PipelineStatus = {
-  current?: {
-    stage?: string;
-    status?: string;
-    error?: string;
-  };
-  runtime_control?: {
-    cancel_requested?: boolean;
-    cancel_reason?: string;
-    cancel_requested_at?: string;
-  };
-  counts?: {
-    findings?: Record<string, number>;
-    validation_attempts?: Record<string, number>;
-    reports?: number;
-  };
-  events: AuditRunEvent[];
-};
-
-type ManagedRuntime = {
-  summary?: {
-    container_count?: number;
-    network_count?: number;
-    run_count?: number;
-    expired_run_count?: number;
-  };
-};
-
-type RuntimePolicy = {
-  default_container?: {
-    memory?: string;
-    cpus?: number;
-    pids_limit?: number;
-    tmpfs?: string;
-  };
-  platform_audit_events?: {
-    retention_days?: number;
-    max_rows?: number;
-  };
-  http_guards?: {
-    max_request_body_bytes?: number;
-    max_upload_bytes?: number;
-    rate_limit_per_minute?: number;
-    rate_limit_window_seconds?: number;
-  };
-  workspace_import?: {
-    max_workspace_files?: number;
-    max_workspace_uncompressed_bytes?: number;
-    allowed_git_url_schemes?: string[];
-  };
-};
-
-type RuntimeReadiness = {
-  ok?: boolean;
-  status?: string;
-  summary?: {
-    fail?: number;
-    warn?: number;
-    pass?: number;
-  };
-  checks?: Array<{
-    id: string;
-    title: string;
-    status: "pass" | "warn" | "fail";
-    detail?: unknown;
-    remediation?: string[];
-  }>;
-};
-
-type WorkerHeartbeat = {
-  worker_id: string;
-  service_name: string;
-  hostname: string;
-  status: string;
-  last_seen_at: string;
-  age_seconds?: number;
-  current_audit_run_id?: string;
-  metadata?: Record<string, unknown>;
-};
-
-type SandboxCapabilities = {
-  ok?: boolean;
-  docker_available?: boolean;
-  configured_gvisor?: boolean;
-  allow_runc_sandbox?: boolean;
-  gvisor_available?: boolean;
-  strong_isolation_available?: boolean;
-  sandbox_execution_available?: boolean;
-  requested_runtime?: string;
-  reason?: string;
-  warnings?: string[];
-};
-
-type AuthStatus = {
-  enabled?: boolean;
-  bootstrap_key_enabled?: boolean;
-  api_key_header?: string;
-  public_metrics?: boolean;
-  service?: string;
-};
-
-type ApiKeyRecord = {
-  key_id: string;
-  name: string;
-  scopes: string[];
-  status: string;
-  last_used_at?: string;
-  deactivated_at?: string;
-  created_at: string;
-};
-
-type PlatformAuditEvent = {
-  id: number;
-  service: string;
-  method: string;
-  path: string;
-  status_code: number;
-  client_host?: string;
-  user_agent?: string;
-  auth_enabled: boolean;
-  auth_result: string;
-  request_id?: string;
-  metadata?: Record<string, unknown>;
-  created_at: string;
-};
-
-type KnowledgeDocument = {
-  document_id: string;
-  title: string;
-  source_name: string;
-  scope: string;
-  project_id?: string;
-  status: string;
-  chunk_count: number;
-  created_at: string;
-  artifact?: ArtifactRef;
-  metadata?: Record<string, unknown>;
-};
-
-type KnowledgeMatch = {
-  score?: number;
-  document_id: string;
-  chunk_id: string;
-  title?: string;
-  source_name?: string;
-  scope?: string;
-  project_id?: string;
-  chunk_index?: number;
-  text: string;
-};
-
-type ContainerRow = {
-  Id: string;
-  Image: string;
-  Names: string[];
-  State: string;
-  Status: string;
-  Labels: Record<string, string>;
-  role?: string;
-  db_status?: string;
-  exit_code?: number;
-  log_artifact?: string;
-  container_name?: string;
-};
-
-async function readJson(path: string, options?: RequestInit) {
-  const response = await fetch(path, withAuth(options));
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(formatHttpError(text, response.statusText));
-  }
-  return text ? JSON.parse(text) : {};
-}
-
-function withAuth(options?: RequestInit): RequestInit {
-  const headers = new Headers(options?.headers);
-  const apiKey = window.localStorage.getItem(API_KEY_STORAGE_KEY);
-  if (apiKey) {
-    headers.set(API_KEY_HEADER, apiKey);
-  }
-  return { ...options, headers };
-}
 
 function App() {
+  const [activeView, setActiveView] = useState("overview");
   const [apiHealth, setApiHealth] = useState<any>();
   const [authStatus, setAuthStatus] = useState<AuthStatus>();
   const [dockerHealth, setDockerHealth] = useState<any>();
   const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
+  const [storageSummary, setStorageSummary] = useState<StorageSummary>();
   const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy>();
   const [runtimeReadiness, setRuntimeReadiness] = useState<RuntimeReadiness>();
   const [workerHeartbeats, setWorkerHeartbeats] = useState<WorkerHeartbeat[]>([]);
@@ -364,6 +106,7 @@ function App() {
       ]);
       setDockerHealth(docker);
       readJson("/gateway/runtime/managed").then(setManagedRuntime).catch(() => setManagedRuntime(undefined));
+      readJson("/gateway/runtime/storage").then(setStorageSummary).catch(() => setStorageSummary(undefined));
       readJson("/gateway/runtime/policy").then(setRuntimePolicy).catch(() => setRuntimePolicy(undefined));
       readJson("/gateway/runtime/readiness").then(setRuntimeReadiness).catch(() => setRuntimeReadiness(undefined));
       readJson("/gateway/runtime/workers").then((data) => setWorkerHeartbeats(data.workers || [])).catch(() => setWorkerHeartbeats([]));
@@ -716,6 +459,19 @@ function App() {
     });
   }
 
+  async function previewLocalStorageCleanup() {
+    await runAction(async () => {
+      const result = await readJson("/gateway/runtime/storage/cleanup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: true }),
+      });
+      setLastResponse(result);
+      const summary = await readJson("/gateway/runtime/storage");
+      setStorageSummary(summary);
+    });
+  }
+
   async function cleanupPlatformAuditEvents() {
     await runAction(async () => {
       const result = await readJson("/gateway/platform/audit-events", { method: "DELETE" });
@@ -959,6 +715,22 @@ function App() {
     },
   ];
 
+  const visibleTabKeys: Record<string, string[]> = {
+    projects: ["agents", "pipeline", "reports"],
+    findings: ["findings"],
+    runtime: ["readiness", "containers"],
+    knowledge: ["knowledge"],
+    admin: ["platform-audit", "api-keys"],
+  };
+  const navigationItems = [
+    { key: "overview", icon: <ApiOutlined />, label: "Overview" },
+    { key: "projects", icon: <FolderOpenOutlined />, label: "Projects & Runs" },
+    { key: "findings", icon: <BugOutlined />, label: "Findings" },
+    { key: "runtime", icon: <CloudServerOutlined />, label: "Runtime" },
+    { key: "knowledge", icon: <FileTextOutlined />, label: "Knowledge" },
+    { key: "admin", icon: <SafetyCertificateOutlined />, label: "Admin" },
+  ];
+
   return (
     <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
       <Layout className="app-shell">
@@ -981,20 +753,25 @@ function App() {
               />
               <Button onClick={saveApiKey}>保存 Key</Button>
               <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
-              <Button type="primary" icon={<PlayCircleOutlined />} loading={loading} onClick={startAudit}>启动审计</Button>
-              <Button icon={<PlayCircleOutlined />} loading={loading} onClick={runPipeline}>一键闭环</Button>
-              <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runSca}>SCA 扫描</Button>
-              <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
-              <Button icon={<CloudServerOutlined />} loading={loading} onClick={startSandboxService}>Sandbox Service</Button>
-              <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!sandboxTarget} onClick={runSandboxTargetPoc}>Target PoC</Button>
-              <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runPocSmoke}>PoC Smoke</Button>
-              <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
-              <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={cancelAuditRun}>取消</Button>
-              <Button icon={<DeleteOutlined />} loading={loading} onClick={cleanupExpiredRuntime}>清理过期</Button>
-              <Button danger icon={<DeleteOutlined />} loading={loading} onClick={cleanup}>清理运行时</Button>
             </Space>
           </Flex>
+          <Menu
+            className="mobile-nav"
+            mode="horizontal"
+            selectedKeys={[activeView]}
+            onClick={({ key }) => setActiveView(String(key))}
+            items={navigationItems}
+          />
         </Header>
+        <Layout className="main-layout">
+          <Sider className="app-sider" width={224} breakpoint="lg" collapsedWidth={0}>
+            <Menu
+              mode="inline"
+              selectedKeys={[activeView]}
+              onClick={({ key }) => setActiveView(String(key))}
+              items={navigationItems}
+            />
+          </Sider>
         <Content className="app-content">
           {error && <Alert type="error" showIcon message="运行错误" description={error} className="section" />}
           {authStatus?.enabled && !apiKey.trim() && (
@@ -1006,6 +783,7 @@ function App() {
               className="section"
             />
           )}
+          {activeView === "overview" && (
           <div className="stats-grid section">
             <Card><Statistic title="Web API" value={apiHealth?.ok ? "Healthy" : "Unknown"} prefix={<ApiOutlined />} /></Card>
             <Card>
@@ -1043,6 +821,27 @@ function App() {
               {sandboxCapabilities?.warnings?.[0] && <Text type="secondary">{sandboxCapabilities.warnings[0]}</Text>}
             </Card>
           </div>
+          )}
+          {activeView === "projects" && (
+          <div className="action-bar section">
+            <Button type="primary" icon={<PlayCircleOutlined />} loading={loading} onClick={startAudit}>启动审计</Button>
+            <Button icon={<PlayCircleOutlined />} loading={loading} onClick={runPipeline}>一键闭环</Button>
+            <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runSca}>SCA 扫描</Button>
+            <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runJudge}>研判</Button>
+            <Button icon={<FileTextOutlined />} loading={loading} onClick={generateReport}>报告</Button>
+            <Button danger icon={<StopOutlined />} loading={loading} disabled={!auditRun || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)} onClick={cancelAuditRun}>取消</Button>
+          </div>
+          )}
+          {activeView === "runtime" && (
+          <div className="action-bar section">
+            <Button icon={<CloudServerOutlined />} loading={loading} onClick={startSandboxService}>Sandbox Service</Button>
+            <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!sandboxTarget} onClick={runSandboxTargetPoc}>Target PoC</Button>
+            <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={runPocSmoke}>PoC Smoke</Button>
+            <Button icon={<DeleteOutlined />} loading={loading} onClick={cleanupExpiredRuntime}>清理过期运行时</Button>
+            <Button danger icon={<DeleteOutlined />} loading={loading} onClick={cleanup}>清理当前运行时</Button>
+          </div>
+          )}
+          {activeView === "projects" && (
           <div className="workspace-grid section">
             <Card title="Projects">
               <Tabs
@@ -1119,6 +918,8 @@ function App() {
               <pre>{JSON.stringify(lastResponse || { hint: "Import a project, start an audit, then run SCA." }, null, 2)}</pre>
             </Card>
           </div>
+          )}
+          {activeView !== "overview" && (
           <Tabs
             className="section"
             items={[
@@ -1252,6 +1053,11 @@ function App() {
                     <Space wrap className="table-toolbar">
                       <Tag>retention: {runtimePolicy?.platform_audit_events?.retention_days ?? "-"}d</Tag>
                       <Tag>max rows: {runtimePolicy?.platform_audit_events?.max_rows ?? "-"}</Tag>
+                      <Tag>runtime pkg: {runtimePolicy?.local_storage?.runtime_package_retention_days ?? "-"}d</Tag>
+                      <Tag>upload staging: {runtimePolicy?.local_storage?.upload_staging_retention_days ?? "-"}d</Tag>
+                      <Tag>unref workspaces: {runtimePolicy?.local_storage?.unreferenced_workspace_retention_days ?? "-"}d</Tag>
+                      <Tag>unref snapshots: {runtimePolicy?.local_storage?.unreferenced_snapshot_retention_days ?? "-"}d</Tag>
+                      <Tag>storage: {formatBytes(totalStorageBytes(storageSummary))}</Tag>
                       <Tag>container memory: {runtimePolicy?.default_container?.memory ?? "-"}</Tag>
                       <Tag>cpus: {runtimePolicy?.default_container?.cpus ?? "-"}</Tag>
                       <Tag>max body: {formatBytes(runtimePolicy?.http_guards?.max_request_body_bytes)}</Tag>
@@ -1262,6 +1068,9 @@ function App() {
                       <Tag>rate: {runtimePolicy?.http_guards?.rate_limit_per_minute ?? "-"} / {runtimePolicy?.http_guards?.rate_limit_window_seconds ?? "-"}s</Tag>
                       <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={cleanupPlatformAuditEvents}>
                         清理审计事件
+                      </Button>
+                      <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={previewLocalStorageCleanup}>
+                        预览存储清理
                       </Button>
                     </Space>
                     <Table
@@ -1318,8 +1127,9 @@ function App() {
                   </Card>
                 ),
               },
-            ]}
+            ].filter((item) => (visibleTabKeys[activeView] || []).includes(String(item.key)))}
           />
+          )}
           <Drawer
             title={selectedFinding?.finding.title || "Finding"}
             open={Boolean(selectedFinding)}
@@ -1402,6 +1212,7 @@ function App() {
             <pre>{containerLogs?.body || ""}</pre>
           </Drawer>
         </Content>
+        </Layout>
       </Layout>
     </ConfigProvider>
   );
@@ -1431,6 +1242,13 @@ function formatBytes(value?: number) {
     return `${Math.round(value / 1024)} KiB`;
   }
   return `${value} B`;
+}
+
+function totalStorageBytes(summary?: StorageSummary) {
+  if (!summary?.managed_prefixes) {
+    return undefined;
+  }
+  return Object.values(summary.managed_prefixes).reduce((total, item) => total + (item.bytes || 0), 0);
 }
 
 function renderReadinessDescription(item: NonNullable<RuntimeReadiness["checks"]>[number]) {
@@ -1483,21 +1301,6 @@ function artifactFileName(artifact?: ArtifactRef, fallbackPath?: string) {
   const source = artifact?.relative_path || fallbackPath || "artifact";
   const clean = source.split(/[\\/]/).filter(Boolean).pop();
   return clean || "artifact";
-}
-
-function formatHttpError(body: string, fallback: string) {
-  if (!body) {
-    return fallback;
-  }
-  try {
-    const parsed = JSON.parse(body);
-    if (typeof parsed?.detail === "string") {
-      return parsed.detail;
-    }
-    return JSON.stringify(parsed);
-  } catch {
-    return body;
-  }
 }
 
 function isActiveRun(auditStatus?: string, pipelineStatus?: string) {
