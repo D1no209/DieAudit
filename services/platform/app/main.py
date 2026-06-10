@@ -45,7 +45,11 @@ async def lifespan(app: FastAPI):
         and settings.pipeline_recovery_on_startup
         and pipeline_backend == "background-tasks"
     ):
-        await recover_interrupted_pipelines(service_name=settings.service_name, include_queued=True)
+        await recover_interrupted_pipelines(
+            service_name=settings.service_name,
+            include_queued=True,
+            worker_heartbeat_ttl_seconds=settings.pipeline_worker_heartbeat_ttl_seconds,
+        )
     yield
     if runtime:
         await runtime.close()

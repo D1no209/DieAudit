@@ -77,7 +77,11 @@ async def run_worker() -> None:
 
     await init_db()
     if settings.pipeline_recovery_on_startup:
-        recovery = await recover_interrupted_pipelines(service_name=settings.service_name, include_queued=False)
+        recovery = await recover_interrupted_pipelines(
+            service_name=settings.service_name,
+            include_queued=False,
+            worker_heartbeat_ttl_seconds=settings.pipeline_worker_heartbeat_ttl_seconds,
+        )
         if recovery.get("recovered"):
             logger.warning("recovered interrupted worker pipelines result=%s", recovery)
     runtime = RuntimeOrchestrator(settings)

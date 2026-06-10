@@ -6,8 +6,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from app.domain.models import AuditRun, AuditRunEvent
+from app.domain.models import AuditRun, AuditRunEvent, WorkerHeartbeat
 from app.repositories import SessionLocal
+from app.services.worker_heartbeat import ACTIVE_WORKER_STATUSES, ensure_aware
 
 
 ACTIVE_AUDIT_STATUSES = {"queued", "running", "validating", "cancelling"}
@@ -53,14 +54,32 @@ async def recover_interrupted_pipelines(
     session_factory: Callable = SessionLocal,
     recovered_at: datetime | None = None,
     include_queued: bool = True,
+    worker_heartbeat_ttl_seconds: float = 30.0,
 ) -> dict[str, Any]:
     recovered_at = recovered_at or datetime.now(timezone.utc)
     reason = f"{service_name} restarted while pipeline was active; background execution cannot be resumed automatically"
     recovered: list[dict[str, Any]] = []
+    skipped_active: list[dict[str, Any]] = []
     async with session_factory() as session:
-        rows = (await session.execute(select(AuditRun))).scalars()
+        workers = list((await session.execute(select(WorkerHeartbeat))).scalars())
+        rows = list((await session.execute(select(AuditRun))).scalars())
         for row in rows:
             if not is_active_pipeline(row.status, row.config, include_queued=include_queued):
+                continue
+            active_worker = _active_worker_for_pipeline(
+                row,
+                workers,
+                now=recovered_at,
+                max_age_seconds=worker_heartbeat_ttl_seconds,
+            )
+            if active_worker:
+                skipped_active.append(
+                    {
+                        "audit_run_id": row.audit_run_id,
+                        "worker_id": active_worker.worker_id,
+                        "last_seen_at": ensure_aware(active_worker.last_seen_at).isoformat(),
+                    }
+                )
                 continue
             previous_status = row.status
             previous_state = dict((row.config or {}).get("pipeline_state") or {})
@@ -92,4 +111,32 @@ async def recover_interrupted_pipelines(
                 }
             )
         await session.commit()
-    return {"recovered": len(recovered), "runs": recovered}
+    return {"recovered": len(recovered), "runs": recovered, "skipped_active": skipped_active}
+
+
+def _active_worker_for_pipeline(
+    audit_run: AuditRun,
+    workers: list[WorkerHeartbeat],
+    *,
+    now: datetime,
+    max_age_seconds: float,
+) -> WorkerHeartbeat | None:
+    worker_id = _pipeline_worker_id(audit_run.config)
+    for worker in workers:
+        if worker.status not in ACTIVE_WORKER_STATUSES:
+            continue
+        if worker.current_audit_run_id != audit_run.audit_run_id:
+            continue
+        if worker_id and worker.worker_id != worker_id:
+            continue
+        age_seconds = (now - ensure_aware(worker.last_seen_at)).total_seconds()
+        if age_seconds <= max_age_seconds:
+            return worker
+    return None
+
+
+def _pipeline_worker_id(config: dict[str, Any] | None) -> str | None:
+    runtime_control = (config or {}).get("runtime_control") or {}
+    pipeline_state = (config or {}).get("pipeline_state") or {}
+    worker_id = runtime_control.get("worker_id") or pipeline_state.get("worker_id")
+    return str(worker_id) if worker_id else None

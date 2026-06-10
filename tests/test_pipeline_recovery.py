@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.domain.models import AuditRun
+from app.domain.models import AuditRun, WorkerHeartbeat
 from app.services.pipeline_recovery import interrupted_pipeline_config, is_active_pipeline, recover_interrupted_pipelines
 
 
@@ -111,17 +111,90 @@ async def test_recover_interrupted_pipelines_preserves_queued_when_configured() 
     assert len(session.added) == 1
 
 
+@pytest.mark.asyncio
+async def test_recover_interrupted_pipelines_skips_run_with_fresh_owner_heartbeat() -> None:
+    recovered_at = datetime(2026, 6, 10, 1, 2, 3, tzinfo=timezone.utc)
+    running = AuditRun(
+        audit_run_id="run-running",
+        project_id="project-1",
+        status="running",
+        config={
+            "pipeline_state": {"stage": "validators", "status": "running", "worker_id": "worker-1"},
+            "runtime_control": {"worker_id": "worker-1"},
+        },
+    )
+    heartbeat = WorkerHeartbeat(
+        worker_id="worker-1",
+        service_name="workflow-worker",
+        hostname="host",
+        status="running",
+        current_audit_run_id="run-running",
+        last_seen_at=recovered_at - timedelta(seconds=5),
+    )
+    session = _FakeSession([running], workers=[heartbeat])
+
+    result = await recover_interrupted_pipelines(
+        service_name="workflow-worker",
+        session_factory=lambda: session,
+        recovered_at=recovered_at,
+        include_queued=False,
+        worker_heartbeat_ttl_seconds=30,
+    )
+
+    assert result["recovered"] == 0
+    assert result["skipped_active"][0]["audit_run_id"] == "run-running"
+    assert running.status == "running"
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_pipelines_recovers_run_with_stale_owner_heartbeat() -> None:
+    recovered_at = datetime(2026, 6, 10, 1, 2, 3, tzinfo=timezone.utc)
+    running = AuditRun(
+        audit_run_id="run-running",
+        project_id="project-1",
+        status="running",
+        config={
+            "pipeline_state": {"stage": "validators", "status": "running", "worker_id": "worker-1"},
+            "runtime_control": {"worker_id": "worker-1"},
+        },
+    )
+    heartbeat = WorkerHeartbeat(
+        worker_id="worker-1",
+        service_name="workflow-worker",
+        hostname="host",
+        status="running",
+        current_audit_run_id="run-running",
+        last_seen_at=recovered_at - timedelta(seconds=31),
+    )
+    session = _FakeSession([running], workers=[heartbeat])
+
+    result = await recover_interrupted_pipelines(
+        service_name="workflow-worker",
+        session_factory=lambda: session,
+        recovered_at=recovered_at,
+        include_queued=False,
+        worker_heartbeat_ttl_seconds=30,
+    )
+
+    assert result["recovered"] == 1
+    assert result["skipped_active"] == []
+    assert running.status == "failed"
+    assert session.added[0].event_type == "pipeline_interrupted"
+
+
 class _FakeScalarResult:
-    def __init__(self, rows: list[AuditRun]) -> None:
+    def __init__(self, rows) -> None:
         self._rows = rows
 
-    def scalars(self) -> list[AuditRun]:
+    def scalars(self):
         return self._rows
 
 
 class _FakeSession:
-    def __init__(self, rows: list[AuditRun]) -> None:
+    def __init__(self, rows: list[AuditRun], *, workers: list[WorkerHeartbeat] | None = None) -> None:
         self._rows = rows
+        self._workers = workers or []
         self.added = []
         self.committed = False
 
@@ -132,6 +205,9 @@ class _FakeSession:
         return False
 
     async def execute(self, statement):
+        entity = statement.column_descriptions[0].get("entity")
+        if entity is WorkerHeartbeat:
+            return _FakeScalarResult(self._workers)
         return _FakeScalarResult(self._rows)
 
     def add(self, row) -> None:
