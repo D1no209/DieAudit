@@ -163,6 +163,11 @@ type RuntimePolicy = {
     retention_days?: number;
     max_rows?: number;
   };
+  http_guards?: {
+    max_request_body_bytes?: number;
+    rate_limit_per_minute?: number;
+    rate_limit_window_seconds?: number;
+  };
 };
 
 type RuntimeReadiness = {
@@ -1243,6 +1248,8 @@ function App() {
                       <Tag>max rows: {runtimePolicy?.platform_audit_events?.max_rows ?? "-"}</Tag>
                       <Tag>container memory: {runtimePolicy?.default_container?.memory ?? "-"}</Tag>
                       <Tag>cpus: {runtimePolicy?.default_container?.cpus ?? "-"}</Tag>
+                      <Tag>max body: {formatBytes(runtimePolicy?.http_guards?.max_request_body_bytes)}</Tag>
+                      <Tag>rate: {runtimePolicy?.http_guards?.rate_limit_per_minute ?? "-"} / {runtimePolicy?.http_guards?.rate_limit_window_seconds ?? "-"}s</Tag>
                       <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={cleanupPlatformAuditEvents}>
                         清理审计事件
                       </Button>
@@ -1401,6 +1408,19 @@ function readinessColor(value: string) {
   if (value === "fail") return "red";
   if (value === "warn") return "orange";
   return "green";
+}
+
+function formatBytes(value?: number) {
+  if (!value || value <= 0) {
+    return "-";
+  }
+  if (value >= 1024 * 1024) {
+    return `${Math.round(value / (1024 * 1024))} MiB`;
+  }
+  if (value >= 1024) {
+    return `${Math.round(value / 1024)} KiB`;
+  }
+  return `${value} B`;
 }
 
 function renderReadinessDescription(item: NonNullable<RuntimeReadiness["checks"]>[number]) {

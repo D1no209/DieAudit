@@ -14,16 +14,22 @@ from app.services.auth import (
     auth_is_enabled,
     authenticate_api_key,
     can_access_scope,
+    hash_api_key,
     required_scope_for_path,
     reset_current_api_key,
     set_current_api_key,
 )
+from app.services.http_guards import FixedWindowRateLimiter, RequestBodyTooLarge, enforce_content_length_limit
 from app.services.pipeline_recovery import recover_interrupted_pipelines
 from app.settings import get_settings
 
 
 settings = get_settings()
 runtime: RuntimeOrchestrator | None = None
+rate_limiter = FixedWindowRateLimiter(
+    limit=settings.rate_limit_per_minute,
+    window_seconds=settings.rate_limit_window_seconds,
+)
 
 
 @asynccontextmanager
@@ -57,7 +63,30 @@ async def api_key_auth(request: Request, call_next):
     auth_result = "not_required"
     auth_principal: dict[str, Any] | None = None
     started = time.perf_counter()
+    supplied = request.headers.get(settings.api_key_header) or _bearer_token(request.headers.get("Authorization"))
     try:
+        try:
+            enforce_content_length_limit(
+                request.headers.get("Content-Length"),
+                max_bytes=settings.max_request_body_bytes,
+            )
+        except RequestBodyTooLarge as exc:
+            auth_result = "body_too_large"
+            response = JSONResponse({"detail": str(exc)}, status_code=413)
+            response.headers["X-Request-Id"] = request_id
+            await _record_platform_audit_event(request, 413, request_id, auth_enabled, auth_result, auth_principal, started)
+            return response
+        if not public_path:
+            rate_limit = _check_rate_limit(request, supplied)
+            if not rate_limit.allowed:
+                auth_result = "rate_limited"
+                response = JSONResponse({"detail": "rate limit exceeded"}, status_code=429)
+                response.headers["X-Request-Id"] = request_id
+                response.headers["Retry-After"] = str(rate_limit.retry_after_seconds)
+                response.headers["X-RateLimit-Limit"] = str(rate_limit.limit)
+                response.headers["X-RateLimit-Remaining"] = str(rate_limit.remaining)
+                await _record_platform_audit_event(request, 429, request_id, auth_enabled, auth_result, auth_principal, started)
+                return response
         if public_path or not auth_enabled:
             request.state.auth_principal = auth_principal
             response = await call_next(request)
@@ -65,7 +94,6 @@ async def api_key_auth(request: Request, call_next):
             response.headers["X-Request-Id"] = request_id
             await _record_platform_audit_event(request, status_code, request_id, auth_enabled, auth_result, auth_principal, started)
             return response
-        supplied = request.headers.get(settings.api_key_header) or _bearer_token(request.headers.get("Authorization"))
         auth_principal = await authenticate_api_key(settings, supplied)
         if auth_principal:
             forwarded_api_key_token = set_current_api_key(supplied)
@@ -116,6 +144,18 @@ def _is_public_path(path: str) -> bool:
 
 def _should_record_platform_event(path: str) -> bool:
     return path not in {"/", "/health", "/ready", "/auth/status", "/metrics"}
+
+
+def _check_rate_limit(request: Request, supplied_api_key: str | None):
+    rate_limiter.prune()
+    return rate_limiter.check(_rate_limit_identity(request, supplied_api_key))
+
+
+def _rate_limit_identity(request: Request, supplied_api_key: str | None) -> str:
+    if supplied_api_key:
+        return f"key:{hash_api_key(supplied_api_key)}"
+    client_host = request.client.host if request.client else "unknown"
+    return f"ip:{client_host}"
 
 
 async def _record_platform_audit_event(

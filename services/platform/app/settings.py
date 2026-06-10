@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     dieaudit_api_key: str = ""
     api_key_header: str = "X-DieAudit-Api-Key"
     public_metrics: bool = False
+    max_request_body_bytes: int = 104857600
+    rate_limit_per_minute: int = 120
+    rate_limit_window_seconds: int = 60
     default_sandbox_runtime: str = "runc"
     enable_gvisor: bool = False
     allow_runc_sandbox: bool = False

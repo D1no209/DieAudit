@@ -1028,6 +1028,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "retention_days": settings.platform_audit_event_retention_days,
                 "max_rows": settings.platform_audit_event_max_rows,
             },
+            "http_guards": {
+                "max_request_body_bytes": settings.max_request_body_bytes,
+                "rate_limit_per_minute": settings.rate_limit_per_minute,
+                "rate_limit_window_seconds": settings.rate_limit_window_seconds,
+            },
             "pipeline": {
                 "execution_backend": settings.pipeline_execution_backend,
                 "recovery_on_startup": settings.pipeline_recovery_on_startup,

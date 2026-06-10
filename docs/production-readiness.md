@@ -14,6 +14,12 @@ but cannot install safely by itself.
   - Set `PIPELINE_EXECUTION_BACKEND=workflow-worker`.
   - Keep `workflow-worker` running in the `core` Compose profile.
   - Verify `/runtime/workers` reports a fresh running worker heartbeat.
+- Keep HTTP guard rails enabled:
+  - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
+  - Keep `RATE_LIMIT_PER_MINUTE` greater than zero for single-node Compose
+    deployments.
+  - Put nginx, a WAF, or an ingress controller in front of the platform for
+    distributed rate limiting in multi-node deployments.
 - Use a strong sandbox runtime for untrusted PoC execution:
   - Install gVisor `runsc` or another strong runtime such as Kata.
   - Register the runtime in Docker Engine and restart Docker.
