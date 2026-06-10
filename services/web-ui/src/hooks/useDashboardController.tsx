@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Form, message } from "antd";
-import type { UploadFile } from "antd/es/upload/interface";
+import { useEffect } from "react";
+import { message } from "antd";
 import {
   API_KEY_STORAGE_KEY,
   formatHttpError,
@@ -9,101 +8,88 @@ import {
   withAuth,
 } from "../api";
 import type {
-  AgentRun,
-  ApiKeyRecord,
   ArtifactRef,
-  AuditRun,
-  AuthStatus,
   ContainerRow,
-  DependencyInventory,
-  Finding,
-  FindingDetail,
-  KnowledgeDocument,
-  KnowledgeMatch,
-  ManagedRuntime,
-  PipelineStatus,
-  PlatformAuditEvent,
-  Project,
-  ReportArtifact,
-  RuntimePolicy,
-  RuntimeReadiness,
-  SandboxCapabilities,
-  StorageSummary,
-  WorkerHeartbeat,
 } from "../types";
 import { artifactFileName, artifactUrl, isActiveRun, parseCsvList, parseScopes } from "../utils/format";
 import { useDashboardColumns } from "./useDashboardColumns";
+import { useDashboardState } from "./useDashboardState";
 
 export function useDashboardController() {
-  const [apiHealth, setApiHealth] = useState<unknown>();
-  const [authStatus, setAuthStatus] = useState<AuthStatus>();
-  const [dockerHealth, setDockerHealth] = useState<unknown>();
-  const [managedRuntime, setManagedRuntime] = useState<ManagedRuntime>();
-  const [storageSummary, setStorageSummary] = useState<StorageSummary>();
-  const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy>();
-  const [runtimeReadiness, setRuntimeReadiness] = useState<RuntimeReadiness>();
-  const [workerHeartbeats, setWorkerHeartbeats] = useState<WorkerHeartbeat[]>([]);
-  const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
-  const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
-  const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
-  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
-  const [knowledgeMatches, setKnowledgeMatches] = useState<KnowledgeMatch[]>([]);
-  const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>();
-  const [auditRun, setAuditRun] = useState<AuditRun>();
-  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
-  const [findings, setFindings] = useState<Finding[]>([]);
-  const [dependencies, setDependencies] = useState<DependencyInventory>();
-  const [containers, setContainers] = useState<ContainerRow[]>([]);
-  const [reports, setReports] = useState<ReportArtifact[]>([]);
-  const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>();
-  const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
-  const [agentEvents, setAgentEvents] = useState<Array<Record<string, unknown>>>();
-  const [containerLogs, setContainerLogs] = useState<{ title: string; body: string }>();
-  const [sandboxTarget, setSandboxTarget] = useState<{ network: string; target_url: string }>();
-  const [lastResponse, setLastResponse] = useState<unknown>();
-  const [error, setError] = useState<string>();
-  const [loading, setLoading] = useState(false);
-  const [zipFiles, setZipFiles] = useState<UploadFile[]>([]);
-  const [knowledgeFiles, setKnowledgeFiles] = useState<UploadFile[]>([]);
-  const [gitForm] = Form.useForm();
-  const [zipForm] = Form.useForm();
-  const [apiKeyForm] = Form.useForm();
-  const [knowledgeUploadForm] = Form.useForm();
-  const [knowledgeSearchForm] = Form.useForm();
-
-  const selectedProject = useMemo(
-    () => projects.find((project) => project.project_id === selectedProjectId),
-    [projects, selectedProjectId],
-  );
-
-  function clearProtectedState() {
-    setDockerHealth(undefined);
-    setManagedRuntime(undefined);
-    setStorageSummary(undefined);
-    setRuntimePolicy(undefined);
-    setRuntimeReadiness(undefined);
-    setWorkerHeartbeats([]);
-    setSandboxCapabilities(undefined);
-    setApiKeys([]);
-    setPlatformAuditEvents([]);
-    setKnowledgeDocuments([]);
-    setKnowledgeMatches([]);
-    setProjects([]);
-    setSelectedProjectId(undefined);
-    setAuditRun(undefined);
-    setAgentRuns([]);
-    setFindings([]);
-    setDependencies(undefined);
-    setContainers([]);
-    setReports([]);
-    setPipelineStatus(undefined);
-    setSelectedFinding(undefined);
-    setAgentEvents(undefined);
-    setContainerLogs(undefined);
-    setSandboxTarget(undefined);
-  }
+  const dashboardState = useDashboardState();
+  const {
+    agentEvents,
+    agentRuns,
+    apiHealth,
+    apiKey,
+    apiKeyForm,
+    apiKeys,
+    auditRun,
+    authStatus,
+    clearProtectedState,
+    containerLogs,
+    containers,
+    dependencies,
+    dockerHealth,
+    error,
+    findings,
+    gitForm,
+    knowledgeDocuments,
+    knowledgeFiles,
+    knowledgeMatches,
+    knowledgeSearchForm,
+    knowledgeUploadForm,
+    lastResponse,
+    loading,
+    managedRuntime,
+    pipelineStatus,
+    platformAuditEvents,
+    projects,
+    reports,
+    runtimePolicy,
+    runtimeReadiness,
+    sandboxCapabilities,
+    sandboxTarget,
+    selectedFinding,
+    selectedProject,
+    selectedProjectId,
+    setAgentEvents,
+    setAgentRuns,
+    setApiHealth,
+    setApiKey,
+    setApiKeys,
+    setAuditRun,
+    setAuthStatus,
+    setContainerLogs,
+    setContainers,
+    setDependencies,
+    setDockerHealth,
+    setError,
+    setFindings,
+    setKnowledgeDocuments,
+    setKnowledgeFiles,
+    setKnowledgeMatches,
+    setLastResponse,
+    setLoading,
+    setManagedRuntime,
+    setPipelineStatus,
+    setPlatformAuditEvents,
+    setProjects,
+    setReports,
+    setRuntimePolicy,
+    setRuntimeReadiness,
+    setSandboxCapabilities,
+    setSandboxTarget,
+    setSelectedFinding,
+    setSelectedProjectId,
+    setStorageSummary,
+    setWorkerHeartbeats,
+    setZipFiles,
+    storageSummary,
+    workerHeartbeats,
+    zipFiles,
+    zipForm,
+  } = dashboardState;
 
   async function refreshAuditRun(auditRunId: string) {
     const [run, agents, findingRows, dependencyRows, containerRows, reportRows, pipeline] = await Promise.all([
