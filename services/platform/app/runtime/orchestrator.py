@@ -13,13 +13,13 @@ from urllib.parse import urlparse
 import httpx
 from sqlalchemy import select
 
-from app.domain.models import AgentRun, AgentRunEvent, AuditRun, ContainerRun, Evidence, Finding, RuntimeNetwork, ValidationAttempt
+from app.domain.models import AgentRun, AgentRunEvent, ApiKeyRecord, AuditRun, ContainerRun, Evidence, Finding, RuntimeNetwork, ValidationAttempt
 from app.integrations.docker import DockerClient
 from app.integrations.protocols import OpenCodeAcpClient
 from app.repositories import SessionLocal
 from app.runtime.opencode_package import OpenCodeRuntimePackageBuilder
 from app.services.agent_output import AgentOutputIngestor
-from app.services.auth import get_current_api_key
+from app.services.auth import create_persisted_api_key
 from app.services.templates import TemplateStore
 from app.settings import Settings
 
@@ -418,7 +418,13 @@ class RuntimeOrchestrator:
             await self.docker.remove_network(network_name)
             await self._mark_network_cleaned(audit_run_id, network_name)
             removed_networks.append(network_name)
-        return {"audit_run_id": audit_run_id, "removed_containers": removed, "removed_networks": removed_networks}
+        deactivated_api_keys = await self._deactivate_mcp_api_keys(audit_run_id)
+        return {
+            "audit_run_id": audit_run_id,
+            "removed_containers": removed,
+            "removed_networks": removed_networks,
+            "deactivated_mcp_api_keys": deactivated_api_keys,
+        }
 
     async def containers(self, audit_run_id: str) -> list[dict[str, Any]]:
         live_containers = await self.docker.list_containers_by_run(audit_run_id)
@@ -929,10 +935,11 @@ class RuntimeOrchestrator:
         mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / agent_run_id / template["name"]
         mcp_artifact_path.mkdir(parents=True, exist_ok=True)
         mounts = await self._mounts(workspace_host_path, template, artifact_host_path=mcp_artifact_path)
-        env = self._mcp_env(
+        env = await self._mcp_env(
             template=template,
             audit_run_id=audit_run_id,
             project_id=project_id,
+            agent_run_id=agent_run_id,
         )
         payload = self._container_payload(
             image=image,
@@ -953,7 +960,7 @@ class RuntimeOrchestrator:
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "mcp", labels, "running")
         return {"id": created["Id"], "name": name, "image": image, "role": "mcp", "template": template["name"]}
 
-    def _mcp_env(self, *, template: dict[str, Any], audit_run_id: str, project_id: str) -> dict[str, Any]:
+    async def _mcp_env(self, *, template: dict[str, Any], audit_run_id: str, project_id: str, agent_run_id: str) -> dict[str, Any]:
         env = {
             **template.get("env", {}),
             "AUDIT_RUN_ID": audit_run_id,
@@ -963,11 +970,56 @@ class RuntimeOrchestrator:
             env.setdefault("PLATFORM_API_URL", "http://agent-gateway:8000")
             env.setdefault("KNOWLEDGE_API_URL", env["PLATFORM_API_URL"])
             env["API_KEY_HEADER"] = self.settings.api_key_header
-            api_key = get_current_api_key() or self.settings.dieaudit_api_key
-            if api_key:
-                env["DIEAUDIT_API_KEY"] = api_key
+            env["DIEAUDIT_API_KEY"] = await self._create_mcp_api_key(
+                template=template,
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                agent_run_id=agent_run_id,
+            )
         self._inject_internal_no_proxy(env, ["agent-gateway", "host.docker.internal"])
         return env
+
+    async def _create_mcp_api_key(self, *, template: dict[str, Any], audit_run_id: str, project_id: str, agent_run_id: str) -> str:
+        platform_api = str(template.get("permissions", {}).get("platform_api") or "")
+        scopes = ["read"] if platform_api == "knowledge" else ["audit"]
+        result = await create_persisted_api_key(
+            name=f"mcp-{template['name']}-{audit_run_id}-{agent_run_id[:8]}",
+            scopes=scopes,
+            metadata={
+                "kind": "mcp-sidecar",
+                "mcp": template["name"],
+                "agent_run_id": agent_run_id,
+                "project_ids": [project_id],
+                "audit_run_ids": [audit_run_id],
+                "expires_at": utc_ttl(),
+            },
+            default_scope=scopes[0],
+        )
+        return result["api_key"]
+
+    async def _deactivate_mcp_api_keys(self, audit_run_id: str) -> list[str]:
+        deactivated: list[str] = []
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(ApiKeyRecord).where(
+                        ApiKeyRecord.status == "active",
+                    )
+                )
+            ).scalars()
+            now = datetime.now(timezone.utc)
+            for row in rows:
+                metadata = row.metadata_json or {}
+                if metadata.get("kind") != "mcp-sidecar":
+                    continue
+                audit_run_ids = metadata.get("audit_run_ids") or []
+                if audit_run_id not in {str(item) for item in audit_run_ids}:
+                    continue
+                row.status = "inactive"
+                row.deactivated_at = now
+                deactivated.append(row.key_id)
+            await session.commit()
+        return deactivated
 
     async def _start_agent(
         self,

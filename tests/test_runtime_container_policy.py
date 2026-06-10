@@ -10,6 +10,7 @@ from app.runtime.orchestrator import RuntimeOrchestrator
 def _orchestrator() -> RuntimeOrchestrator:
     orchestrator = RuntimeOrchestrator.__new__(RuntimeOrchestrator)
     orchestrator.settings = SimpleNamespace(
+        api_key_header="X-DieAudit-Api-Key",
         default_container_memory="512m",
         default_container_cpus=0.5,
         default_container_pids_limit=128,
@@ -79,6 +80,105 @@ def test_reused_sandbox_network_must_be_managed_current_run(monkeypatch) -> None
 
 def test_sandbox_network_creation_and_reuse_policy(monkeypatch) -> None:
     asyncio.run(_run_sandbox_network_creation_and_reuse_policy_test(monkeypatch))
+
+
+def test_mcp_platform_api_env_uses_scoped_sidecar_key(monkeypatch) -> None:
+    asyncio.run(_run_mcp_platform_api_env_test(monkeypatch))
+
+
+def test_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch) -> None:
+    asyncio.run(_run_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch))
+
+
+async def _run_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch) -> None:
+    import app.runtime.orchestrator as orchestrator_module
+
+    orchestrator = _orchestrator()
+    rows = [
+        SimpleNamespace(
+            key_id="mcp-current",
+            status="active",
+            deactivated_at=None,
+            metadata_json={"kind": "mcp-sidecar", "audit_run_ids": ["run-1"]},
+        ),
+        SimpleNamespace(
+            key_id="mcp-other-run",
+            status="active",
+            deactivated_at=None,
+            metadata_json={"kind": "mcp-sidecar", "audit_run_ids": ["run-2"]},
+        ),
+        SimpleNamespace(
+            key_id="user-project-key",
+            status="active",
+            deactivated_at=None,
+            metadata_json={"project_ids": ["project-1"]},
+        ),
+    ]
+
+    class FakeResult:
+        def scalars(self):
+            return rows
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def execute(self, _statement):
+            return FakeResult()
+
+        async def commit(self):
+            self.committed = True
+
+    monkeypatch.setattr(orchestrator_module, "SessionLocal", lambda: FakeSession())
+
+    deactivated = await orchestrator._deactivate_mcp_api_keys("run-1")
+
+    assert deactivated == ["mcp-current"]
+    assert rows[0].status == "inactive"
+    assert rows[0].deactivated_at is not None
+    assert rows[1].status == "active"
+    assert rows[1].deactivated_at is None
+    assert rows[2].status == "active"
+    assert rows[2].deactivated_at is None
+
+
+async def _run_mcp_platform_api_env_test(monkeypatch) -> None:
+    import app.runtime.orchestrator as orchestrator_module
+
+    orchestrator = _orchestrator()
+    captured = {}
+
+    async def fake_create_persisted_api_key(**kwargs):
+        captured.update(kwargs)
+        return {"api_key": "dak_scoped_mcp_key", "record": {"key_id": "key-1"}}
+
+    monkeypatch.setattr(orchestrator_module, "create_persisted_api_key", fake_create_persisted_api_key)
+
+    env = await orchestrator._mcp_env(
+        template={
+            "name": "kb-mcp",
+            "env": {"MCP_NAME": "kb-mcp"},
+            "permissions": {"platform_api": "knowledge"},
+        },
+        audit_run_id="run-1",
+        project_id="project-1",
+        agent_run_id="agent-1234567890",
+    )
+
+    assert env["DIEAUDIT_API_KEY"] == "dak_scoped_mcp_key"
+    assert env["API_KEY_HEADER"] == "X-DieAudit-Api-Key"
+    assert env["AUDIT_RUN_ID"] == "run-1"
+    assert env["PROJECT_ID"] == "project-1"
+    assert captured["scopes"] == ["read"]
+    assert captured["default_scope"] == "read"
+    assert captured["metadata"]["kind"] == "mcp-sidecar"
+    assert captured["metadata"]["mcp"] == "kb-mcp"
+    assert captured["metadata"]["project_ids"] == ["project-1"]
+    assert captured["metadata"]["audit_run_ids"] == ["run-1"]
+    assert captured["metadata"]["agent_run_id"] == "agent-1234567890"
 
 
 async def _run_sandbox_network_creation_and_reuse_policy_test(monkeypatch) -> None:
