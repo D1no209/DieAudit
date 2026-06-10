@@ -905,6 +905,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.post("/findings/{finding_id}/poc")
     async def run_finding_poc(request: Request, finding_id: str, body: RunPocRequest) -> dict[str, Any]:
         runtime = runtime_provider()
+        allow_external_network = _effective_sandbox_external_network(settings, body.allow_external_network)
         async with SessionLocal() as session:
             finding = await session.scalar(select(Finding).where(Finding.finding_id == finding_id))
             if not finding:
@@ -918,7 +919,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 return await proxy_gateway(
                     f"/findings/{finding_id}/poc",
                     method="POST",
-                    json=body.model_dump(),
+                    json={**body.model_dump(), "allow_external_network": allow_external_network},
                 )
             audit_run_id = finding.audit_run_id
             project_id = finding.project_id
@@ -952,7 +953,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 command=body.command,
                 env=body.env,
                 workspace_host_path=workspace_path,
-                allow_external_network=body.allow_external_network,
+                allow_external_network=allow_external_network,
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
                 timeout_seconds=body.timeout_seconds,
                 mount_workspace=body.mount_workspace,
@@ -1556,6 +1557,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.post("/audit-runs/{audit_run_id}/sandbox/poc")
     async def run_poc(request: Request, audit_run_id: str, body: RunPocRequest) -> dict[str, Any]:
         runtime = runtime_provider()
+        allow_external_network = _effective_sandbox_external_network(settings, body.allow_external_network)
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
@@ -1564,7 +1566,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return await proxy_gateway(
                 f"/audit-runs/{audit_run_id}/sandbox/poc",
                 method="POST",
-                json=body.model_dump(),
+                json={**body.model_dump(), "allow_external_network": allow_external_network},
             )
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         try:
@@ -1575,7 +1577,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 command=body.command,
                 env=body.env,
                 workspace_host_path=workspace_path,
-                allow_external_network=body.allow_external_network,
+                allow_external_network=allow_external_network,
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
                 timeout_seconds=body.timeout_seconds,
                 mount_workspace=body.mount_workspace,
@@ -1592,6 +1594,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.post("/audit-runs/{audit_run_id}/sandbox/service")
     async def start_sandbox_service(request: Request, audit_run_id: str, body: StartSandboxServiceRequest) -> dict[str, Any]:
         runtime = runtime_provider()
+        allow_external_network = _effective_sandbox_external_network(settings, body.allow_external_network)
         audit_run = await _get_audit_run(audit_run_id)
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
@@ -1600,7 +1603,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return await proxy_gateway(
                 f"/audit-runs/{audit_run_id}/sandbox/service",
                 method="POST",
-                json=body.model_dump(),
+                json={**body.model_dump(), "allow_external_network": allow_external_network},
             )
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         try:
@@ -1613,7 +1616,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 workspace_host_path=workspace_path,
                 service_name=body.service_name,
                 port=body.port,
-                allow_external_network=body.allow_external_network,
+                allow_external_network=allow_external_network,
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
                 startup_timeout_seconds=body.startup_timeout_seconds,
                 mount_workspace=body.mount_workspace,
@@ -2105,6 +2108,15 @@ def _require_finding_access(principal: dict[str, Any] | None, finding: dict[str,
 def _require_unrestricted_resource_scope(principal: dict[str, Any] | None, action: str) -> None:
     if _principal_has_resource_limits(principal):
         raise HTTPException(status_code=403, detail=f"{action} requires unrestricted API key resource scope")
+
+
+def _effective_sandbox_external_network(settings: Settings, requested: bool) -> bool:
+    if requested and not settings.allow_sandbox_external_network:
+        raise HTTPException(
+            status_code=403,
+            detail="sandbox external network is disabled by platform policy; set ALLOW_SANDBOX_EXTERNAL_NETWORK=true to permit it",
+        )
+    return bool(requested)
 
 
 def _resource_attr(resource: dict[str, Any] | Any, key: str) -> str:

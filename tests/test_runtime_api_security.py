@@ -37,11 +37,37 @@ def _auth_headers() -> dict[str, str]:
     return {settings.api_key_header: settings.dieaudit_api_key}
 
 
+def test_poc_api_rejects_external_network_when_platform_policy_disables_it(monkeypatch) -> None:
+    runtime = _RejectingRuntime()
+    monkeypatch.setattr(main_module, "runtime", runtime)
+    monkeypatch.setattr(routes, "_get_audit_run", _audit_run)
+    monkeypatch.setattr(routes, "_record_audit_run_event", _record_event)
+    monkeypatch.setattr(settings, "allow_sandbox_external_network", False)
+
+    client = TestClient(app)
+    response = client.post(
+        "/audit-runs/run-1/sandbox/poc",
+        headers=_auth_headers(),
+        json={
+            "image": "python:3.12-slim",
+            "command": ["python", "-c", "print('ok')"],
+            "network_name": "dieaudit-run-other-sandbox",
+            "allow_external_network": True,
+            "allow_weak_isolation": True,
+        },
+    )
+
+    assert response.status_code == 403
+    assert "sandbox external network is disabled" in response.json()["detail"]
+    assert not hasattr(runtime, "last_poc_kwargs")
+
+
 def test_poc_api_rejects_runtime_network_policy_violation(monkeypatch) -> None:
     runtime = _RejectingRuntime()
     monkeypatch.setattr(main_module, "runtime", runtime)
     monkeypatch.setattr(routes, "_get_audit_run", _audit_run)
     monkeypatch.setattr(routes, "_record_audit_run_event", _record_event)
+    monkeypatch.setattr(settings, "allow_sandbox_external_network", True)
 
     client = TestClient(app)
     response = client.post(
@@ -61,3 +87,4 @@ def test_poc_api_rejects_runtime_network_policy_violation(monkeypatch) -> None:
     assert runtime.last_poc_kwargs["audit_run_id"] == "run-1"
     assert runtime.last_poc_kwargs["project_id"] == "project-1"
     assert runtime.last_poc_kwargs["network_name"] == "dieaudit-run-other-sandbox"
+    assert runtime.last_poc_kwargs["allow_external_network"] is True

@@ -31,6 +31,7 @@ Required before exposing the platform:
 - Keep `ENABLE_DEMO_TEMPLATES=false`; mock demo templates are hidden from production runtime APIs by default.
 - Install gVisor `runsc` or another strong container runtime, then set `ENABLE_GVISOR=true` and `DEFAULT_SANDBOX_RUNTIME=runsc`.
 - Keep `ALLOW_RUNC_SANDBOX=false` for untrusted PoC execution.
+- Keep `ALLOW_SANDBOX_EXTERNAL_NETWORK=false` unless a specific sandbox/PoC test requires outbound network access.
 - Configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection.
 - Build the optional heavy analyzer MCP images before relying on Joern/CodeQL templates: `docker compose --profile tools build tool-mcp-codeql-image tool-mcp-joern-image`.
 
@@ -46,7 +47,7 @@ Check sandbox runtime visibility from both Docker and the platform:
 
 ```powershell
 docker info --format '{{json .Runtimes}}'
-docker compose --profile core config | Select-String "DEFAULT_SANDBOX_RUNTIME|ENABLE_GVISOR|ALLOW_RUNC_SANDBOX"
+docker compose --profile core config | Select-String "DEFAULT_SANDBOX_RUNTIME|ENABLE_GVISOR|ALLOW_RUNC_SANDBOX|ALLOW_SANDBOX_EXTERNAL_NETWORK"
 Invoke-RestMethod http://localhost:8080/gateway/runtime/sandbox/capabilities | ConvertTo-Json -Depth 10
 ```
 
