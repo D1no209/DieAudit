@@ -281,7 +281,7 @@ async function readJson(path: string, options?: RequestInit) {
   const response = await fetch(path, withAuth(options));
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text || response.statusText);
+    throw new Error(formatHttpError(text, response.statusText));
   }
   return text ? JSON.parse(text) : {};
 }
@@ -581,13 +581,29 @@ function App() {
     });
   }
 
-  function openArtifact(artifact?: ArtifactRef, fallbackPath?: string) {
+  async function openArtifact(artifact?: ArtifactRef, fallbackPath?: string) {
     const url = artifactUrl(artifact, fallbackPath);
     if (!url) {
       message.warning("Artifact is not available");
       return;
     }
-    window.open(url, "_blank", "noopener,noreferrer");
+    await runAction(async () => {
+      const response = await fetch(url, withAuth());
+      const text = response.ok ? undefined : await response.text();
+      if (!response.ok) {
+        throw new Error(formatHttpError(text || "", response.statusText));
+      }
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = artifactFileName(artifact, fallbackPath);
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
+    });
   }
 
   async function openFinding(findingId: string) {
@@ -648,7 +664,7 @@ function App() {
       );
       const text = await response.text();
       if (!response.ok) {
-        throw new Error(text || response.statusText);
+        throw new Error(formatHttpError(text, response.statusText));
       }
       setContainerLogs({ title: row.container_name || row.Names?.[0]?.replace("/", "") || row.Id.slice(0, 12), body: text });
     });
@@ -786,8 +802,10 @@ function App() {
     const normalized = apiKey.trim();
     if (normalized) {
       window.localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
+      message.success("API Key saved locally");
     } else {
       window.localStorage.removeItem(API_KEY_STORAGE_KEY);
+      message.warning("API Key removed");
     }
     refresh();
   }
@@ -967,6 +985,15 @@ function App() {
         </Header>
         <Content className="app-content">
           {error && <Alert type="error" showIcon message="运行错误" description={error} className="section" />}
+          {authStatus?.enabled && !apiKey.trim() && (
+            <Alert
+              type="warning"
+              showIcon
+              message="API authentication is enabled"
+              description={`Enter a key for ${authStatus.api_key_header || API_KEY_HEADER} before using runtime, project, audit, artifact, and knowledge APIs.`}
+              className="section"
+            />
+          )}
           <div className="stats-grid section">
             <Card><Statistic title="Web API" value={apiHealth?.ok ? "Healthy" : "Unknown"} prefix={<ApiOutlined />} /></Card>
             <Card>
@@ -1393,6 +1420,30 @@ function artifactUrl(artifact?: ArtifactRef, fallbackPath?: string) {
     return `/gateway${path}`;
   }
   return `/gateway/artifacts/download?path=${encodeURIComponent(path)}`;
+}
+
+function artifactFileName(artifact?: ArtifactRef, fallbackPath?: string) {
+  if (artifact?.name) {
+    return artifact.name;
+  }
+  const source = artifact?.relative_path || fallbackPath || "artifact";
+  const clean = source.split(/[\\/]/).filter(Boolean).pop();
+  return clean || "artifact";
+}
+
+function formatHttpError(body: string, fallback: string) {
+  if (!body) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.detail === "string") {
+      return parsed.detail;
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return body;
+  }
 }
 
 function isActiveRun(auditStatus?: string, pipelineStatus?: string) {
