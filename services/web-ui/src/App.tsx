@@ -1,4 +1,5 @@
 import { ConfigProvider, theme } from "antd";
+import { AuditContextBar } from "./components/AuditContextBar";
 import { AppDrawers } from "./components/AppDrawers";
 import { AppShell } from "./components/AppShell";
 import { AppStatusAlerts } from "./components/AppStatusAlerts";
@@ -26,6 +27,15 @@ export function App() {
         onSaveApiKey={actions.saveApiKey}
         onViewChange={setActiveView}
       >
+        <AuditContextBar
+          activeView={activeView}
+          agentRunsCount={state.agentRuns.length}
+          auditRun={state.auditRun}
+          findingsCount={state.findings.length}
+          reportsCount={state.reports.length}
+          selectedProject={state.selectedProject}
+          onViewChange={setActiveView}
+        />
         <AppRoutes activeView={activeView} dashboard={dashboard} />
         <AppDrawers
           agentEvents={state.agentEvents}

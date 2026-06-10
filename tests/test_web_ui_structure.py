@@ -121,6 +121,7 @@ def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
     controller = read_source("services/web-ui/src/hooks/useDashboardController.tsx")
 
     assert "useDashboardController" in app
+    assert "AuditContextBar" in app
     assert "readJson(" not in app
     assert app.count("useState") == 0
     assert "<AppRoutes activeView={activeView} dashboard={dashboard} />" in app
@@ -128,6 +129,20 @@ def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
     assert "useAuditRunActions" in controller
     assert "dashboardApi." not in controller
     assert "function runPipeline()" not in controller
+
+
+def test_audit_context_is_shared_shell_component() -> None:
+    context_bar = read_source("services/web-ui/src/components/AuditContextBar.tsx")
+    audit_runs_page = read_source("services/web-ui/src/pages/AuditRunsPage.tsx")
+    findings_page = read_source("services/web-ui/src/pages/FindingsPage.tsx")
+
+    assert "aria-label=\"Audit context\"" in context_bar
+    assert "onViewChange(\"projects\")" in context_bar
+    assert "onViewChange(\"audit-runs\")" in context_bar
+    assert "onViewChange(\"findings\")" in context_bar
+    assert "onViewChange(\"reports\")" in context_bar
+    assert "AuditContextBar" not in audit_runs_page
+    assert "AuditContextBar" not in findings_page
 
 
 def test_dashboard_controller_uses_domain_action_hooks() -> None:
