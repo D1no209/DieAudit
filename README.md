@@ -41,6 +41,14 @@ Invoke-RestMethod http://localhost:8080/gateway/runtime/readiness | ConvertTo-Js
 
 The Compose default now queues audit pipelines for `workflow-worker`; the API process no longer owns pipeline execution through request-local background tasks.
 
+Check sandbox runtime visibility from both Docker and the platform:
+
+```powershell
+docker info --format '{{json .Runtimes}}'
+docker compose --profile core config | Select-String "DEFAULT_SANDBOX_RUNTIME|ENABLE_GVISOR|ALLOW_RUNC_SANDBOX"
+Invoke-RestMethod http://localhost:8080/gateway/runtime/sandbox/capabilities | ConvertTo-Json -Depth 10
+```
+
 Create the first persisted admin key from the running Compose environment without opening an unauthenticated browser/API setup flow:
 
 ```powershell
