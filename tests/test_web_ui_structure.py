@@ -62,16 +62,31 @@ def test_projects_page_uses_focused_subcomponents() -> None:
 
 def test_runtime_page_uses_focused_subcomponents() -> None:
     runtime_page = read_source("services/web-ui/src/pages/RuntimePage.tsx")
+    readiness_panel = read_source("services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx")
 
     assert "List.Item.Meta" not in runtime_page
     assert "rowKey=\"Id\"" not in runtime_page
     for component in ("RuntimeActionBar", "RuntimeReadinessPanel", "RuntimeContainersPanel"):
         assert component in runtime_page
 
+    assert "List.Item.Meta" not in readiness_panel
+    assert "rowKey=\"worker_id\"" not in readiness_panel
+    for component in (
+        "ReadinessCheckList",
+        "ReadinessNextActionsPanel",
+        "ReadinessOverviewPanel",
+        "WorkerHeartbeatPanel",
+    ):
+        assert component in readiness_panel
+
     for path in (
         "services/web-ui/src/pages/runtime/RuntimeActionBar.tsx",
         "services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx",
         "services/web-ui/src/pages/runtime/RuntimeContainersPanel.tsx",
+        "services/web-ui/src/pages/runtime/ReadinessCheckList.tsx",
+        "services/web-ui/src/pages/runtime/ReadinessNextActionsPanel.tsx",
+        "services/web-ui/src/pages/runtime/ReadinessOverviewPanel.tsx",
+        "services/web-ui/src/pages/runtime/WorkerHeartbeatPanel.tsx",
     ):
         assert (ROOT / path).is_file()
 
