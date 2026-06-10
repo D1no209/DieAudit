@@ -29,7 +29,7 @@ export function AppHeader({
 }: Props) {
   return (
     <Header className="app-header">
-      <Flex align="center" justify="space-between" gap={16}>
+      <Flex className="header-main-row" align="center" justify="space-between" gap={16}>
         <Space>
           <BugOutlined className="brand-icon" />
           <div>
@@ -37,7 +37,7 @@ export function AppHeader({
             <Text className="brand-subtitle">多 Agent 代码审计运行台</Text>
           </div>
         </Space>
-        <Space wrap>
+        <Space wrap className="header-actions">
           <Input.Password
             className="api-key-input"
             placeholder={authHeaderName || API_KEY_HEADER}

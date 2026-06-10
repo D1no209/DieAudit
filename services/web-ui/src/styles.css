@@ -10,6 +10,7 @@ body {
 
 .app-header {
   height: auto;
+  line-height: normal;
   padding: 18px 28px;
   background: #ffffff;
   border-bottom: 1px solid #e6eaf0;
@@ -36,6 +37,10 @@ body {
   width: 180px;
 }
 
+.header-actions {
+  justify-content: flex-end;
+}
+
 .api-key-name-field {
   min-width: 220px;
 }
@@ -44,6 +49,17 @@ body {
   display: none;
   margin-top: 12px;
   border-bottom: 0 !important;
+}
+
+.mobile-nav.ant-menu-overflow,
+.mobile-nav .ant-menu-overflow {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.mobile-nav > .ant-menu-overflow-item,
+.mobile-nav .ant-menu-item {
+  flex-shrink: 0;
 }
 
 .main-layout {
@@ -91,6 +107,13 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 16px;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(480px, 1.1fr);
+  gap: 16px;
+  align-items: start;
 }
 
 .action-bar {
@@ -148,6 +171,11 @@ pre {
 }
 
 @media (max-width: 980px) {
+  .app-sider {
+    display: none;
+  }
+
+  .content-grid,
   .workspace-grid,
   .knowledge-grid {
     grid-template-columns: 1fr;
@@ -157,12 +185,29 @@ pre {
     padding: 14px 16px;
   }
 
+  .header-main-row {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .api-key-input {
+    width: min(100%, 220px);
+  }
+
   .app-content {
     padding: 16px;
   }
 
   .mobile-nav {
     display: flex;
+    max-width: 100%;
     overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
   }
 }

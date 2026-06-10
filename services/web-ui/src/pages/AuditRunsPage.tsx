@@ -4,26 +4,23 @@ import {
   SafetyCertificateOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Card, Collapse, Descriptions, List, Space, Statistic, Table, Tabs, Tag, Typography } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import type { AgentRun, ArtifactRef, AuditRun, PipelineStatus, Project, ReportArtifact } from "../types";
+import { Alert, Button, Card, Collapse, Descriptions, List, Space, Statistic, Tag, Typography } from "antd";
+import type { AuditRun, PipelineStatus, Project } from "../types";
 import { isActiveRun } from "../utils/format";
 import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
 
 type Props = {
-  agentColumns: ColumnsType<AgentRun>;
-  agentRuns: AgentRun[];
+  agentRunsCount: number;
   auditRun?: AuditRun;
   lastResponse?: unknown;
   loading: boolean;
   pipelineStatus?: PipelineStatus;
-  reports: ReportArtifact[];
+  reportsCount: number;
   selectedProject?: Project;
   onCancelAuditRun: () => void;
   onGenerateReport: () => void;
-  onOpenArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
   onRunJudge: () => void;
   onRunPipeline: () => void;
   onRunSca: () => void;
@@ -31,17 +28,15 @@ type Props = {
 };
 
 export function AuditRunsPage({
-  agentColumns,
-  agentRuns,
+  agentRunsCount,
   auditRun,
   lastResponse,
   loading,
   pipelineStatus,
-  reports,
+  reportsCount,
   selectedProject,
   onCancelAuditRun,
   onGenerateReport,
-  onOpenArtifact,
   onRunJudge,
   onRunPipeline,
   onRunSca,
@@ -95,8 +90,8 @@ export function AuditRunsPage({
           </Tag>
         </Card>
         <Card>
-          <Statistic title="Reports" value={reports.length} />
-          <Text type="secondary">AgentRuns {agentRuns.length}</Text>
+          <Statistic title="Reports" value={reportsCount} />
+          <Text type="secondary">AgentRuns {agentRunsCount}</Text>
         </Card>
       </div>
 
@@ -111,94 +106,54 @@ export function AuditRunsPage({
         />
       )}
 
-      <Tabs
-        className="section"
-        items={[
-          {
-            key: "run",
-            label: "Run",
-            children: (
-              <Card>
-                <Descriptions bordered size="small" column={1}>
-                  <Descriptions.Item label="Project">{selectedProject?.name || "-"}</Descriptions.Item>
-                  <Descriptions.Item label="Project ID">{selectedProject?.project_id || "-"}</Descriptions.Item>
-                  <Descriptions.Item label="AuditRun ID">{auditRun?.audit_run_id || "-"}</Descriptions.Item>
-                  <Descriptions.Item label="AuditRun Status">{auditRun?.status || "-"}</Descriptions.Item>
-                  <Descriptions.Item label="Created At">{auditRun?.created_at || "-"}</Descriptions.Item>
-                </Descriptions>
-                {Boolean(lastResponse) && (
-                  <Collapse
-                    className="table-toolbar"
-                    size="small"
-                    items={[
-                      {
-                        key: "last-response",
-                        label: "Last Response",
-                        children: <pre>{JSON.stringify(lastResponse, null, 2)}</pre>,
-                      },
-                    ]}
+      <div className="content-grid section">
+        <Card title="Run Context">
+          <Descriptions bordered size="small" column={1}>
+            <Descriptions.Item label="Project">{selectedProject?.name || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Project ID">{selectedProject?.project_id || "-"}</Descriptions.Item>
+            <Descriptions.Item label="AuditRun ID">{auditRun?.audit_run_id || "-"}</Descriptions.Item>
+            <Descriptions.Item label="AuditRun Status">{auditRun?.status || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Created At">{auditRun?.created_at || "-"}</Descriptions.Item>
+          </Descriptions>
+          {Boolean(lastResponse) && (
+            <Collapse
+              className="table-toolbar"
+              size="small"
+              items={[
+                {
+                  key: "last-response",
+                  label: "Last Response",
+                  children: <pre>{JSON.stringify(lastResponse, null, 2)}</pre>,
+                },
+              ]}
+            />
+          )}
+        </Card>
+        <Card title="Pipeline State">
+          <Space direction="vertical" size={16} className="drawer-stack">
+            <Space wrap>
+              {Object.entries(pipelineStatus?.counts?.findings || {}).map(([status, count]) => (
+                <Tag key={status}>{status}: {count}</Tag>
+              ))}
+              {Object.entries(pipelineStatus?.counts?.validation_attempts || {}).map(([status, count]) => (
+                <Tag key={`attempt-${status}`}>attempt {status}: {count}</Tag>
+              ))}
+              <Tag>reports: {pipelineStatus?.counts?.reports ?? 0}</Tag>
+            </Space>
+            <List
+              dataSource={pipelineStatus?.events || []}
+              renderItem={(item) => (
+                <List.Item>
+                  <List.Item.Meta
+                    title={<Space><Tag>{item.event_type}</Tag><Text>{item.created_at}</Text></Space>}
+                    description={<pre>{JSON.stringify(item.payload || {}, null, 2)}</pre>}
                   />
-                )}
-              </Card>
-            ),
-          },
-          {
-            key: "agents",
-            label: `AgentRuns (${agentRuns.length})`,
-            children: <Card><Table rowKey="agent_run_id" columns={agentColumns} dataSource={agentRuns} pagination={{ pageSize: 8 }} /></Card>,
-          },
-          {
-            key: "pipeline",
-            label: "Pipeline",
-            children: (
-              <Card>
-                <Space direction="vertical" size={16} className="drawer-stack">
-                  <Space wrap>
-                    {Object.entries(pipelineStatus?.counts?.findings || {}).map(([status, count]) => (
-                      <Tag key={status}>{status}: {count}</Tag>
-                    ))}
-                    {Object.entries(pipelineStatus?.counts?.validation_attempts || {}).map(([status, count]) => (
-                      <Tag key={`attempt-${status}`}>attempt {status}: {count}</Tag>
-                    ))}
-                    <Tag>reports: {pipelineStatus?.counts?.reports ?? 0}</Tag>
-                  </Space>
-                  <List
-                    dataSource={pipelineStatus?.events || []}
-                    renderItem={(item) => (
-                      <List.Item>
-                        <List.Item.Meta
-                          title={<Space><Tag>{item.event_type}</Tag><Text>{item.created_at}</Text></Space>}
-                          description={<pre>{JSON.stringify(item.payload || {}, null, 2)}</pre>}
-                        />
-                      </List.Item>
-                    )}
-                  />
-                </Space>
-              </Card>
-            ),
-          },
-          {
-            key: "reports",
-            label: `Reports (${reports.length})`,
-            children: (
-              <Card>
-                <List
-                  dataSource={reports}
-                  renderItem={(item) => (
-                    <List.Item>
-                      <List.Item.Meta title={item.kind} description={item.artifact?.relative_path || item.path} />
-                      <Space>
-                        <Tag>{String(item.summary?.finding_count ?? 0)} findings</Tag>
-                        <Button size="small" icon={<FileTextOutlined />} onClick={() => onOpenArtifact(item.artifact, item.path)}>下载</Button>
-                      </Space>
-                    </List.Item>
-                  )}
-                />
-              </Card>
-            ),
-          },
-        ]}
-      />
+                </List.Item>
+              )}
+            />
+          </Space>
+        </Card>
+      </div>
     </>
   );
 }

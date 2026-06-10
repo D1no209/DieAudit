@@ -2,11 +2,14 @@ import type { FormInstance } from "antd/es/form";
 import type { UploadFile } from "antd/es/upload/interface";
 import type { AppView } from "../navigation";
 import { AdminPage } from "../pages/AdminPage";
+import { AgentRunsPage } from "../pages/AgentRunsPage";
 import { AuditRunsPage } from "../pages/AuditRunsPage";
+import { DependenciesPage } from "../pages/DependenciesPage";
 import { FindingsPage } from "../pages/FindingsPage";
 import { KnowledgePage } from "../pages/KnowledgePage";
 import { OverviewPage } from "../pages/OverviewPage";
 import { ProjectsPage } from "../pages/ProjectsPage";
+import { ReportsPage } from "../pages/ReportsPage";
 import { RuntimePage } from "../pages/RuntimePage";
 import type {
   AgentRun,
@@ -133,17 +136,15 @@ export function AppRoutes(props: Props) {
   if (activeView === "audit-runs") {
     return (
       <AuditRunsPage
-        agentColumns={columns.agentColumns}
-        agentRuns={props.agentRuns}
+        agentRunsCount={props.agentRuns.length}
         auditRun={props.auditRun}
         lastResponse={props.lastResponse}
         loading={props.loading}
         pipelineStatus={props.pipelineStatus}
-        reports={props.reports}
+        reportsCount={props.reports.length}
         selectedProject={props.selectedProject}
         onCancelAuditRun={props.onCancelAuditRun}
         onGenerateReport={props.onGenerateReport}
-        onOpenArtifact={props.onOpenArtifact}
         onRunJudge={props.onRunJudge}
         onRunPipeline={props.onRunPipeline}
         onRunSca={props.onRunSca}
@@ -152,8 +153,28 @@ export function AppRoutes(props: Props) {
     );
   }
 
+  if (activeView === "agent-runs") {
+    return <AgentRunsPage agentColumns={columns.agentColumns} agentRuns={props.agentRuns} auditRun={props.auditRun} />;
+  }
+
   if (activeView === "findings") {
-    return <FindingsPage dependencies={props.dependencies} findings={props.findings} onOpenFinding={props.onOpenFinding} />;
+    return <FindingsPage findings={props.findings} onOpenFinding={props.onOpenFinding} />;
+  }
+
+  if (activeView === "dependencies") {
+    return <DependenciesPage dependencies={props.dependencies} />;
+  }
+
+  if (activeView === "reports") {
+    return (
+      <ReportsPage
+        auditRun={props.auditRun}
+        loading={props.loading}
+        reports={props.reports}
+        onGenerateReport={props.onGenerateReport}
+        onOpenArtifact={props.onOpenArtifact}
+      />
+    );
   }
 
   if (activeView === "runtime") {
