@@ -221,7 +221,7 @@ export function useDashboardController() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           agent_name: "opencode-orchestrator",
-          allow_external_network: true,
+          allow_external_network: false,
           input_payload: {
             goal: "Run an initial security audit. Inspect the mounted source and report vulnerability candidates with file paths.",
           },

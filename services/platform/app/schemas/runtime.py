@@ -25,7 +25,7 @@ class CreateAuditRunRequest(BaseModel):
     agent_name: str = "opencode-orchestrator"
     validator_rounds: int = Field(default=1, ge=1)
     max_parallel_validators: int = Field(default=2, ge=1)
-    allow_external_network: bool = True
+    allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
     input_payload: dict[str, Any] = Field(default_factory=dict)
     start_agent: bool = True

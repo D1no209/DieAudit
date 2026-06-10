@@ -13,6 +13,13 @@ def test_web_ui_does_not_request_weak_sandbox_isolation_by_default() -> None:
     assert "allow_weak_isolation: false" in app_source
 
 
+def test_web_ui_does_not_enable_external_network_by_default() -> None:
+    app_source = (ROOT / "services/web-ui/src/hooks/useDashboardController.tsx").read_text(encoding="utf-8")
+
+    assert "allow_external_network: true" not in app_source
+    assert "allow_external_network: false" in app_source
+
+
 def test_web_ui_api_key_form_supports_artifact_scope_metadata() -> None:
     api_keys_panel = (ROOT / "services/web-ui/src/pages/admin/ApiKeysPanel.tsx").read_text(encoding="utf-8")
     controller = (ROOT / "services/web-ui/src/hooks/useDashboardController.tsx").read_text(encoding="utf-8")

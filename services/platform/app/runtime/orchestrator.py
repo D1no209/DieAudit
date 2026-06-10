@@ -546,8 +546,8 @@ class RuntimeOrchestrator:
         if dedicated_network:
             await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
             await self._record_network(audit_run_id, network_name, "created")
-        elif not await self.docker.network_exists(network_name):
-            raise RuntimeError(f"sandbox network does not exist: {network_name}")
+        else:
+            await self._require_managed_run_network(network_name=network_name, audit_run_id=audit_run_id)
 
         mounts: list[dict[str, Any]] = []
         if mount_workspace and workspace_host_path:
@@ -1315,6 +1315,20 @@ class RuntimeOrchestrator:
             else:
                 session.add(RuntimeNetwork(audit_run_id=audit_run_id, name=name, status=status))
             await session.commit()
+
+    async def _require_managed_run_network(self, *, network_name: str, audit_run_id: str) -> dict[str, Any]:
+        network = await self.docker.network_exists(network_name)
+        if not network:
+            raise RuntimeError(f"sandbox network does not exist: {network_name}")
+        labels = network.get("Labels") or {}
+        if labels.get("dieaudit.managed") != "true":
+            raise RuntimeError(f"sandbox network is not managed by DieAudit: {network_name}")
+        if labels.get("dieaudit.audit_run_id") != audit_run_id:
+            raise RuntimeError(f"sandbox network belongs to a different audit run: {network_name}")
+        role = labels.get("dieaudit.role")
+        if role not in {"runtime", "sandbox", "poc"}:
+            raise RuntimeError(f"sandbox network has unsupported role label: {role or 'missing'}")
+        return network
 
     async def _mark_network_cleaned(self, audit_run_id: str, name: str) -> None:
         async with SessionLocal() as session:

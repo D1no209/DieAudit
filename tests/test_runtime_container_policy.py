@@ -73,6 +73,56 @@ def test_ephemeral_container_payload_is_hardened(monkeypatch) -> None:
     asyncio.run(_run_ephemeral_container_payload_test(monkeypatch))
 
 
+def test_reused_sandbox_network_must_be_managed_current_run(monkeypatch) -> None:
+    asyncio.run(_run_reused_sandbox_network_policy_test(monkeypatch))
+
+
+async def _run_reused_sandbox_network_policy_test(monkeypatch) -> None:
+    orchestrator = _orchestrator()
+    networks = {
+        "dieaudit-run-1-sandbox": {
+            "Name": "dieaudit-run-1-sandbox",
+            "Labels": {
+                "dieaudit.managed": "true",
+                "dieaudit.audit_run_id": "run-1",
+                "dieaudit.role": "sandbox",
+            },
+        },
+        "dieaudit-run-2-sandbox": {
+            "Name": "dieaudit-run-2-sandbox",
+            "Labels": {
+                "dieaudit.managed": "true",
+                "dieaudit.audit_run_id": "run-2",
+                "dieaudit.role": "sandbox",
+            },
+        },
+        "external": {"Name": "external", "Labels": {}},
+        "dieaudit-run-1-unknown": {
+            "Name": "dieaudit-run-1-unknown",
+            "Labels": {
+                "dieaudit.managed": "true",
+                "dieaudit.audit_run_id": "run-1",
+            },
+        },
+    }
+
+    async def fake_network_exists(name):
+        return networks.get(name)
+
+    orchestrator.docker = SimpleNamespace(network_exists=fake_network_exists)
+
+    allowed = await orchestrator._require_managed_run_network(network_name="dieaudit-run-1-sandbox", audit_run_id="run-1")
+    assert allowed["Name"] == "dieaudit-run-1-sandbox"
+
+    for network_name in ("external", "dieaudit-run-2-sandbox", "dieaudit-run-1-unknown", "missing"):
+        try:
+            await orchestrator._require_managed_run_network(network_name=network_name, audit_run_id="run-1")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"network should have been rejected: {network_name}")
+
+
 async def _run_ephemeral_container_payload_test(monkeypatch) -> None:
     client = DockerClient("http://docker.example")
     captured_payload = {}
