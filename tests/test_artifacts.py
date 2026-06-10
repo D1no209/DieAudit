@@ -206,3 +206,41 @@ def test_resource_limit_detection_supports_legacy_metadata_aliases() -> None:
     assert routes._principal_has_resource_limits({"scopes": ["audit"], "metadata": {"projects": ["project-1"]}})
     assert routes._principal_has_resource_limits({"scopes": ["audit"], "metadata": {"audit_runs": "run-1"}})
     assert not routes._principal_has_resource_limits({"scopes": ["audit"], "metadata": {}})
+
+
+def test_tool_result_metadata_keeps_execution_evidence_fields() -> None:
+    metadata = routes._tool_result_metadata(
+        {
+            "ok": False,
+            "tool": "semgrep",
+            "command": ["semgrep", "--json", "."],
+            "cwd": "/workspace/project",
+            "exit_code": 2,
+            "error": "scan failed",
+            "timeout_seconds": 60,
+            "stdout": "large output omitted",
+            "secret": "must-not-leak",
+        }
+    )
+
+    assert metadata == {
+        "ok": False,
+        "tool": "semgrep",
+        "command": ["semgrep", "--json", "."],
+        "cwd": "/workspace/project",
+        "exit_code": 2,
+        "error": "scan failed",
+        "timeout_seconds": 60,
+    }
+
+
+def test_tool_evidence_payload_embeds_compact_execution_metadata() -> None:
+    payload = routes._tool_evidence_payload(
+        {"title": "SQL injection", "file_path": "app.py"},
+        {"ok": True, "tool": "osv", "command": ["osv-scanner"], "ignored": {"nested": "value"}},
+    )
+
+    assert payload["title"] == "SQL injection"
+    assert payload["tool_execution"]["tool"] == "osv"
+    assert payload["tool_execution"]["command"] == ["osv-scanner"]
+    assert "ignored" in payload["tool_execution"]

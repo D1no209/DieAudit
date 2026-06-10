@@ -2317,6 +2317,10 @@ async def _run_sca_mcp(
         findings=result.get("findings", []) if isinstance(result, dict) else [],
         evidence_kind="sca-result",
         artifact_path=artifact_path,
+        tool_execution={
+            "sbom": _tool_result_metadata((sbom_result or {}).get("result") if isinstance(sbom_result, dict) else None),
+            "osv": _tool_result_metadata(result),
+        },
     )
     summary = {
         "ok": bool(osv_result.get("ok")),
@@ -2355,6 +2359,7 @@ async def _run_semgrep_mcp(
         findings=result.get("findings", []) if isinstance(result, dict) else [],
         evidence_kind="semgrep-result",
         artifact_path=result.get("artifact_path") if isinstance(result, dict) else None,
+        tool_execution=_tool_result_metadata(result),
     )
     summary = {
         "ok": bool(result.get("ok")) if isinstance(result, dict) else bool(mcp_result.get("ok")),
@@ -2374,6 +2379,7 @@ async def _ingest_tool_findings(
     findings: list[Any],
     evidence_kind: str,
     artifact_path: str | None = None,
+    tool_execution: dict[str, Any] | None = None,
 ) -> int:
     created = 0
     async with SessionLocal() as session:
@@ -2414,12 +2420,37 @@ async def _ingest_tool_findings(
                     kind=evidence_kind,
                     summary=finding.description or finding.title,
                     artifact_path=artifact_path,
-                    payload=item,
+                    payload=_tool_evidence_payload(item, tool_execution),
                 )
             )
             created += 1
         await session.commit()
     return created
+
+
+def _tool_result_metadata(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    keys = {
+        "artifact",
+        "artifact_path",
+        "available",
+        "command",
+        "cwd",
+        "error",
+        "exit_code",
+        "ok",
+        "timeout_seconds",
+        "tool",
+    }
+    return {key: result[key] for key in keys if key in result}
+
+
+def _tool_evidence_payload(finding: dict[str, Any], tool_execution: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(finding)
+    if tool_execution:
+        payload["tool_execution"] = _compact_event_payload(tool_execution)
+    return payload
 
 
 async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
