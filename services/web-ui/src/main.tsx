@@ -165,8 +165,14 @@ type RuntimePolicy = {
   };
   http_guards?: {
     max_request_body_bytes?: number;
+    max_upload_bytes?: number;
     rate_limit_per_minute?: number;
     rate_limit_window_seconds?: number;
+  };
+  workspace_import?: {
+    max_workspace_files?: number;
+    max_workspace_uncompressed_bytes?: number;
+    allowed_git_url_schemes?: string[];
   };
 };
 
@@ -1249,6 +1255,10 @@ function App() {
                       <Tag>container memory: {runtimePolicy?.default_container?.memory ?? "-"}</Tag>
                       <Tag>cpus: {runtimePolicy?.default_container?.cpus ?? "-"}</Tag>
                       <Tag>max body: {formatBytes(runtimePolicy?.http_guards?.max_request_body_bytes)}</Tag>
+                      <Tag>max upload: {formatBytes(runtimePolicy?.http_guards?.max_upload_bytes)}</Tag>
+                      <Tag>zip files: {runtimePolicy?.workspace_import?.max_workspace_files ?? "-"}</Tag>
+                      <Tag>zip size: {formatBytes(runtimePolicy?.workspace_import?.max_workspace_uncompressed_bytes)}</Tag>
+                      <Tag>git schemes: {(runtimePolicy?.workspace_import?.allowed_git_url_schemes || []).join(",") || "-"}</Tag>
                       <Tag>rate: {runtimePolicy?.http_guards?.rate_limit_per_minute ?? "-"} / {runtimePolicy?.http_guards?.rate_limit_window_seconds ?? "-"}s</Tag>
                       <Button size="small" icon={<DeleteOutlined />} loading={loading} onClick={cleanupPlatformAuditEvents}>
                         清理审计事件

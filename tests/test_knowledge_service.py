@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +38,15 @@ def test_embedding_is_normalized_and_stable() -> None:
 
     assert first == second
     assert abs(sum(value * value for value in first) - 1.0) < 0.000001
+
+
+def test_save_upload_rejects_oversized_document(tmp_path: Path) -> None:
+    service = KnowledgeService(SimpleNamespace(artifact_root=tmp_path, max_upload_bytes=4))
+
+    with pytest.raises(KnowledgeIndexError, match="upload exceeds"):
+        service.save_upload(document_id="doc-1", filename="article.md", stream=io.BytesIO(b"12345"))
+
+    assert not (tmp_path / "knowledge" / "doc-1" / "article.md").exists()
 
 
 def test_embedding_status_warns_for_hash_provider(tmp_path: Path) -> None:

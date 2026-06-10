@@ -43,9 +43,19 @@ class KnowledgeService:
         target_dir = self.settings.artifact_root / "knowledge" / document_id
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / safe_name
+        max_bytes = int(getattr(self.settings, "max_upload_bytes", 104857600) or 0)
+        copied = 0
+        too_large = False
         with target.open("wb") as handle:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                copied += len(chunk)
+                if max_bytes > 0 and copied > max_bytes:
+                    too_large = True
+                    break
                 handle.write(chunk)
+        if too_large:
+            target.unlink(missing_ok=True)
+            raise KnowledgeIndexError(f"upload exceeds {max_bytes} bytes")
         return target
 
     def extract_text(self, path: Path, content_type: str | None = None) -> str:

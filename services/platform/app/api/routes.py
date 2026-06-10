@@ -1030,8 +1030,18 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             },
             "http_guards": {
                 "max_request_body_bytes": settings.max_request_body_bytes,
+                "max_upload_bytes": settings.max_upload_bytes,
                 "rate_limit_per_minute": settings.rate_limit_per_minute,
                 "rate_limit_window_seconds": settings.rate_limit_window_seconds,
+            },
+            "workspace_import": {
+                "max_workspace_files": settings.max_workspace_files,
+                "max_workspace_uncompressed_bytes": settings.max_workspace_uncompressed_bytes,
+                "allowed_git_url_schemes": [
+                    item.strip()
+                    for item in settings.allowed_git_url_schemes.split(",")
+                    if item.strip()
+                ],
             },
             "pipeline": {
                 "execution_backend": settings.pipeline_execution_backend,

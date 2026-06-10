@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     api_key_header: str = "X-DieAudit-Api-Key"
     public_metrics: bool = False
     max_request_body_bytes: int = 104857600
+    max_upload_bytes: int = 104857600
+    max_workspace_files: int = 20000
+    max_workspace_uncompressed_bytes: int = 536870912
+    allowed_git_url_schemes: str = "https,ssh"
     rate_limit_per_minute: int = 120
     rate_limit_window_seconds: int = 60
     default_sandbox_runtime: str = "runc"

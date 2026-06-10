@@ -16,10 +16,18 @@ but cannot install safely by itself.
   - Verify `/runtime/workers` reports a fresh running worker heartbeat.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
+  - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when
+    `Content-Length` is absent or incorrect.
   - Keep `RATE_LIMIT_PER_MINUTE` greater than zero for single-node Compose
     deployments.
   - Put nginx, a WAF, or an ingress controller in front of the platform for
     distributed rate limiting in multi-node deployments.
+- Keep project import guard rails enabled:
+  - Set `MAX_WORKSPACE_FILES` and `MAX_WORKSPACE_UNCOMPRESSED_BYTES` to bound
+    zip extraction.
+  - Keep `ALLOWED_GIT_URL_SCHEMES=https,ssh` unless a deployment explicitly
+    needs another remote scheme.
+  - Do not allow `file://` or local Git paths in production.
 - Use a strong sandbox runtime for untrusted PoC execution:
   - Install gVisor `runsc` or another strong runtime such as Kata.
   - Register the runtime in Docker Engine and restart Docker.
