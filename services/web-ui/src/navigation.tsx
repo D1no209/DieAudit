@@ -4,16 +4,18 @@ import {
   CloudServerOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
+  PlayCircleOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 
-export type AppView = "overview" | "projects" | "findings" | "runtime" | "knowledge" | "admin";
+export type AppView = "overview" | "projects" | "audit-runs" | "findings" | "runtime" | "knowledge" | "admin";
 
 export const DEFAULT_VIEW: AppView = "overview";
 
 export const APP_VIEW_PATHS: Record<AppView, string> = {
   overview: "/overview",
   projects: "/projects",
+  "audit-runs": "/audit-runs",
   findings: "/findings",
   runtime: "/runtime",
   knowledge: "/knowledge",
@@ -39,7 +41,8 @@ export function hashFromAppView(view: AppView): string {
 
 export const navigationItems = [
   { key: "overview", icon: <ApiOutlined />, label: "Overview" },
-  { key: "projects", icon: <FolderOpenOutlined />, label: "Projects & Runs" },
+  { key: "projects", icon: <FolderOpenOutlined />, label: "Projects" },
+  { key: "audit-runs", icon: <PlayCircleOutlined />, label: "Audit Runs" },
   { key: "findings", icon: <BugOutlined />, label: "Findings" },
   { key: "runtime", icon: <CloudServerOutlined />, label: "Runtime" },
   { key: "knowledge", icon: <FileTextOutlined />, label: "Knowledge" },

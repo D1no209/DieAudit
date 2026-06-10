@@ -2,6 +2,7 @@ import type { FormInstance } from "antd/es/form";
 import type { UploadFile } from "antd/es/upload/interface";
 import type { AppView } from "../navigation";
 import { AdminPage } from "../pages/AdminPage";
+import { AuditRunsPage } from "../pages/AuditRunsPage";
 import { FindingsPage } from "../pages/FindingsPage";
 import { KnowledgePage } from "../pages/KnowledgePage";
 import { OverviewPage } from "../pages/OverviewPage";
@@ -113,31 +114,40 @@ export function AppRoutes(props: Props) {
   if (activeView === "projects") {
     return (
       <ProjectsPage
-        agentColumns={columns.agentColumns}
-        agentRuns={props.agentRuns}
-        auditRun={props.auditRun}
         gitForm={props.gitForm}
-        lastResponse={props.lastResponse}
         loading={props.loading}
-        pipelineStatus={props.pipelineStatus}
         projectColumns={columns.projectColumns}
         projects={props.projects}
-        reports={props.reports}
         selectedProject={props.selectedProject}
         selectedProjectId={props.selectedProjectId}
         zipFiles={props.zipFiles}
         zipForm={props.zipForm}
-        onCancelAuditRun={props.onCancelAuditRun}
         onCreateGitProject={props.onCreateGitProject}
+        onSelectProject={props.onSelectProject}
+        onSetZipFiles={props.onSetZipFiles}
+        onUploadZipProject={props.onUploadZipProject}
+      />
+    );
+  }
+
+  if (activeView === "audit-runs") {
+    return (
+      <AuditRunsPage
+        agentColumns={columns.agentColumns}
+        agentRuns={props.agentRuns}
+        auditRun={props.auditRun}
+        lastResponse={props.lastResponse}
+        loading={props.loading}
+        pipelineStatus={props.pipelineStatus}
+        reports={props.reports}
+        selectedProject={props.selectedProject}
+        onCancelAuditRun={props.onCancelAuditRun}
         onGenerateReport={props.onGenerateReport}
         onOpenArtifact={props.onOpenArtifact}
         onRunJudge={props.onRunJudge}
         onRunPipeline={props.onRunPipeline}
         onRunSca={props.onRunSca}
-        onSelectProject={props.onSelectProject}
-        onSetZipFiles={props.onSetZipFiles}
         onStartAudit={props.onStartAudit}
-        onUploadZipProject={props.onUploadZipProject}
       />
     );
   }
