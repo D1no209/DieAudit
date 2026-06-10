@@ -3,6 +3,8 @@ import json
 import re
 import shutil
 import subprocess
+import tomllib
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -650,9 +652,18 @@ def _split_rg_line(line: str) -> tuple[str, str, str, str]:
 
 
 def _detect_dependencies() -> list[dict[str, Any]]:
-    packages: list[dict[str, Any]] = []
-    packages.extend(_npm_package_lock())
-    packages.extend(_python_requirements())
+    packages = [
+        *_npm_package_lock(),
+        *_yarn_lock(),
+        *_pnpm_lock(),
+        *_python_requirements(),
+        *_python_pyproject(),
+        *_python_poetry_lock(),
+        *_go_mod(),
+        *_cargo_lock(),
+        *_composer_lock(),
+        *_maven_pom(),
+    ]
     seen = set()
     deduped = []
     for item in packages:
@@ -669,44 +680,265 @@ def _npm_package_lock() -> list[dict[str, Any]]:
     for lockfile in WORKSPACE_ROOT.rglob("package-lock.json"):
         if not _is_safe_file(lockfile):
             continue
-        data = json.loads(lockfile.read_text(encoding="utf-8", errors="replace"))
-        packages = data.get("packages") or {}
-        for path, body in packages.items():
-            if not path.startswith("node_modules/"):
-                continue
-            name = body.get("name") or path.removeprefix("node_modules/")
-            version = body.get("version")
-            if name and version:
-                result.append(
-                    {
-                        "ecosystem": "npm",
-                        "name": name,
-                        "version": version,
-                        "manifest": lockfile.relative_to(WORKSPACE_ROOT).as_posix(),
-                    }
-                )
+        try:
+            data = json.loads(lockfile.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            continue
+        manifest = lockfile.relative_to(WORKSPACE_ROOT).as_posix()
+        for path, body in (data.get("packages") or {}).items():
+            if path.startswith("node_modules/") and isinstance(body, dict):
+                name = body.get("name") or path.removeprefix("node_modules/")
+                version = body.get("version")
+                if name and version:
+                    result.append(_package("npm", name, version, manifest))
+        _collect_npm_dependencies(data.get("dependencies") or {}, manifest, result)
+    return result
+
+
+def _collect_npm_dependencies(dependencies: dict[str, Any], manifest: str, result: list[dict[str, Any]]) -> None:
+    for name, body in dependencies.items():
+        if not isinstance(body, dict):
+            continue
+        version = body.get("version")
+        if name and version:
+            result.append(_package("npm", name, version, manifest))
+        nested = body.get("dependencies")
+        if isinstance(nested, dict):
+            _collect_npm_dependencies(nested, manifest, result)
+
+
+def _yarn_lock() -> list[dict[str, Any]]:
+    result = []
+    for lockfile in WORKSPACE_ROOT.rglob("yarn.lock"):
+        if not _is_safe_file(lockfile):
+            continue
+        manifest = lockfile.relative_to(WORKSPACE_ROOT).as_posix()
+        current_name: str | None = None
+        current_version: str | None = None
+        for raw_line in lockfile.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw_line.rstrip()
+            if line and not line.startswith((" ", "\t")) and line.endswith(":"):
+                if current_name and current_version:
+                    result.append(_package("npm", current_name, current_version, manifest))
+                current_name = _npm_name_from_descriptor(line[:-1].split(",", 1)[0].strip().strip('"'))
+                current_version = None
+            elif current_name:
+                match = re.match(r'^\s+version\s+"?([^"\s]+)"?', line)
+                if match:
+                    current_version = match.group(1)
+        if current_name and current_version:
+            result.append(_package("npm", current_name, current_version, manifest))
+    return result
+
+
+def _pnpm_lock() -> list[dict[str, Any]]:
+    result = []
+    pattern = re.compile(r"^\s{2,}/?((?:@[^/\s]+/)?[^@\s/]+)@([^:\s(]+)")
+    for lockfile in WORKSPACE_ROOT.rglob("pnpm-lock.yaml"):
+        if not _is_safe_file(lockfile):
+            continue
+        manifest = lockfile.relative_to(WORKSPACE_ROOT).as_posix()
+        for line in lockfile.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = pattern.match(line)
+            if match:
+                result.append(_package("npm", match.group(1), match.group(2), manifest))
     return result
 
 
 def _python_requirements() -> list[dict[str, Any]]:
     result = []
-    pattern = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*==\s*([A-Za-z0-9_.!+-]+)")
+    pattern = re.compile(r"^\s*([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*={2,3}\s*([A-Za-z0-9_.!+-]+)")
     for requirements in WORKSPACE_ROOT.rglob("requirements*.txt"):
         if not _is_safe_file(requirements):
             continue
+        manifest = requirements.relative_to(WORKSPACE_ROOT).as_posix()
         for line in requirements.read_text(encoding="utf-8", errors="replace").splitlines():
             match = pattern.match(line)
             if not match:
                 continue
-            result.append(
-                {
-                    "ecosystem": "PyPI",
-                    "name": match.group(1),
-                    "version": match.group(2),
-                    "manifest": requirements.relative_to(WORKSPACE_ROOT).as_posix(),
-                }
-            )
+            result.append(_package("PyPI", match.group(1), match.group(2), manifest))
     return result
+
+
+def _python_pyproject() -> list[dict[str, Any]]:
+    result = []
+    for pyproject in WORKSPACE_ROOT.rglob("pyproject.toml"):
+        if not _is_safe_file(pyproject):
+            continue
+        try:
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8", errors="replace"))
+        except tomllib.TOMLDecodeError:
+            continue
+        manifest = pyproject.relative_to(WORKSPACE_ROOT).as_posix()
+        for spec in (data.get("project") or {}).get("dependencies") or []:
+            parsed = _python_exact_requirement(str(spec))
+            if parsed:
+                result.append(_package("PyPI", parsed[0], parsed[1], manifest))
+        poetry_dependencies = ((data.get("tool") or {}).get("poetry") or {}).get("dependencies") or {}
+        for name, spec in poetry_dependencies.items():
+            if str(name).lower() == "python":
+                continue
+            version = _poetry_dependency_version(spec)
+            if version:
+                result.append(_package("PyPI", name, version, manifest))
+    return result
+
+
+def _python_poetry_lock() -> list[dict[str, Any]]:
+    result = []
+    for lockfile in WORKSPACE_ROOT.rglob("poetry.lock"):
+        if not _is_safe_file(lockfile):
+            continue
+        manifest = lockfile.relative_to(WORKSPACE_ROOT).as_posix()
+        name = None
+        version = None
+        for line in lockfile.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip() == "[[package]]":
+                if name and version:
+                    result.append(_package("PyPI", name, version, manifest))
+                name = None
+                version = None
+            elif line.startswith("name = "):
+                name = line.split("=", 1)[1].strip().strip('"')
+            elif line.startswith("version = "):
+                version = line.split("=", 1)[1].strip().strip('"')
+        if name and version:
+            result.append(_package("PyPI", name, version, manifest))
+    return result
+
+
+def _go_mod() -> list[dict[str, Any]]:
+    result = []
+    pattern = re.compile(r"^\s*([A-Za-z0-9_.~/-]+)\s+(v[^\s]+)")
+    for gomod in WORKSPACE_ROOT.rglob("go.mod"):
+        if not _is_safe_file(gomod):
+            continue
+        manifest = gomod.relative_to(WORKSPACE_ROOT).as_posix()
+        for line in gomod.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("//", "module ", "go ", "require (", ")")):
+                continue
+            if stripped.startswith("require "):
+                stripped = stripped.removeprefix("require ").strip()
+            match = pattern.match(stripped)
+            if match:
+                result.append(_package("Go", match.group(1), match.group(2), manifest))
+    return result
+
+
+def _cargo_lock() -> list[dict[str, Any]]:
+    result = []
+    for lockfile in WORKSPACE_ROOT.rglob("Cargo.lock"):
+        if not _is_safe_file(lockfile):
+            continue
+        manifest = lockfile.relative_to(WORKSPACE_ROOT).as_posix()
+        name = None
+        version = None
+        for line in lockfile.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip() == "[[package]]":
+                if name and version:
+                    result.append(_package("crates.io", name, version, manifest))
+                name = None
+                version = None
+            elif line.startswith("name = "):
+                name = line.split("=", 1)[1].strip().strip('"')
+            elif line.startswith("version = "):
+                version = line.split("=", 1)[1].strip().strip('"')
+        if name and version:
+            result.append(_package("crates.io", name, version, manifest))
+    return result
+
+
+def _composer_lock() -> list[dict[str, Any]]:
+    result = []
+    for lockfile in WORKSPACE_ROOT.rglob("composer.lock"):
+        if not _is_safe_file(lockfile):
+            continue
+        try:
+            data = json.loads(lockfile.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            continue
+        manifest = lockfile.relative_to(WORKSPACE_ROOT).as_posix()
+        for body in [*(data.get("packages") or []), *(data.get("packages-dev") or [])]:
+            name = body.get("name") if isinstance(body, dict) else None
+            version = body.get("version") if isinstance(body, dict) else None
+            if name and version:
+                result.append(_package("Packagist", name, str(version).lstrip("v"), manifest))
+    return result
+
+
+def _maven_pom() -> list[dict[str, Any]]:
+    result = []
+    for pom in WORKSPACE_ROOT.rglob("pom.xml"):
+        if not _is_safe_file(pom):
+            continue
+        try:
+            root = ET.fromstring(pom.read_text(encoding="utf-8", errors="replace"))
+        except ET.ParseError:
+            continue
+        manifest = pom.relative_to(WORKSPACE_ROOT).as_posix()
+        properties = _maven_properties(root)
+        for dep in root.findall(".//{*}dependencies/{*}dependency"):
+            group_id = _xml_child_text(dep, "groupId")
+            artifact_id = _xml_child_text(dep, "artifactId")
+            version = _resolve_maven_property(_xml_child_text(dep, "version"), properties)
+            if group_id and artifact_id and version:
+                result.append(_package("Maven", f"{group_id}:{artifact_id}", version, manifest))
+    return result
+
+
+def _package(ecosystem: str, name: str, version: str, manifest: str) -> dict[str, Any]:
+    return {
+        "ecosystem": ecosystem,
+        "name": str(name).strip(),
+        "version": str(version).strip(),
+        "manifest": manifest,
+    }
+
+
+def _npm_name_from_descriptor(descriptor: str) -> str | None:
+    descriptor = descriptor.strip().strip("'\"")
+    if descriptor.startswith("@"):
+        index = descriptor.rfind("@")
+        return descriptor[:index] if index > 0 else None
+    return descriptor.rsplit("@", 1)[0] if "@" in descriptor else descriptor or None
+
+
+def _python_exact_requirement(spec: str) -> tuple[str, str] | None:
+    match = re.match(r"^\s*([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*={2,3}\s*([A-Za-z0-9_.!+-]+)", spec)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def _poetry_dependency_version(spec: Any) -> str | None:
+    if isinstance(spec, str):
+        if spec and not any(spec.startswith(prefix) for prefix in ("^", "~", ">", "<", "*")):
+            return spec.strip("=")
+        parsed = _python_exact_requirement(f"pkg{spec}" if spec.startswith("==") else f"pkg=={spec}")
+        return parsed[1] if parsed and spec.startswith("==") else None
+    if isinstance(spec, dict):
+        return _poetry_dependency_version(spec.get("version"))
+    return None
+
+
+def _maven_properties(root: ET.Element) -> dict[str, str]:
+    properties: dict[str, str] = {}
+    for item in root.findall(".//{*}properties/*"):
+        tag = item.tag.rsplit("}", 1)[-1]
+        if item.text:
+            properties[tag] = item.text.strip()
+    return properties
+
+
+def _xml_child_text(element: ET.Element, name: str) -> str | None:
+    child = element.find(f"{{*}}{name}")
+    return child.text.strip() if child is not None and child.text else None
+
+
+def _resolve_maven_property(value: str | None, properties: dict[str, str]) -> str | None:
+    if not value:
+        return None
+    match = re.fullmatch(r"\$\{([^}]+)}", value.strip())
+    return properties.get(match.group(1)) if match else value.strip()
 
 
 def _is_safe_file(path: Path) -> bool:
