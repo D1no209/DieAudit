@@ -28,6 +28,7 @@ Required before exposing the platform:
 - Set `DIEAUDIT_API_KEY` or create a persisted active API key through the UI/API.
 - Keep `PUBLIC_METRICS=false` unless metrics are protected by a separate private network or auth layer.
 - Keep `PIPELINE_EXECUTION_BACKEND=workflow-worker`; `background-tasks` is only for local debugging.
+- Keep `ENABLE_DEMO_TEMPLATES=false`; mock demo templates are hidden from production runtime APIs by default.
 - Install gVisor `runsc` or another strong container runtime, then set `ENABLE_GVISOR=true` and `DEFAULT_SANDBOX_RUNTIME=runsc`.
 - Keep `ALLOW_RUNC_SANDBOX=false` for untrusted PoC execution.
 - Configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection.
@@ -68,6 +69,7 @@ The command prints the API key once and stores only its hash in Postgres. Use th
 Build the demo Agent/MCP images and start the core platform:
 
 ```powershell
+echo ENABLE_DEMO_TEMPLATES=true >> .env
 docker compose --profile demo build
 docker compose --profile core up -d
 ```

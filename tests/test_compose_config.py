@@ -19,7 +19,7 @@ def test_platform_services_receive_sandbox_runtime_environment() -> None:
         "sandbox-runner",
         "kb-indexer",
     ]
-    required = {"DEFAULT_SANDBOX_RUNTIME", "ENABLE_GVISOR", "ALLOW_RUNC_SANDBOX"}
+    required = {"DEFAULT_SANDBOX_RUNTIME", "ENABLE_GVISOR", "ALLOW_RUNC_SANDBOX", "ENABLE_DEMO_TEMPLATES"}
 
     for service_name in platform_services:
         environment = services[service_name]["environment"]

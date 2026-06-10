@@ -87,6 +87,12 @@ OPTIONAL_HEAVY_MCP_TEMPLATES = {"joern-mcp", "codeql-mcp"}
 
 
 def register_runtime_routes(settings: Settings, runtime_provider: callable) -> APIRouter:
+    def agent_template_store() -> TemplateStore:
+        return TemplateStore(settings.config_root, "agent-templates", include_demo=settings.enable_demo_templates)
+
+    def mcp_template_store() -> TemplateStore:
+        return TemplateStore(settings.config_root, "mcp-templates", include_demo=settings.enable_demo_templates)
+
     async def proxy_gateway(path: str, *, method: str = "GET", json: dict[str, Any] | None = None) -> Any:
         headers = {}
         api_key = get_current_api_key() or settings.dieaudit_api_key
@@ -891,7 +897,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.get("/runtime/protocols")
     async def runtime_protocols() -> dict[str, Any]:
-        templates = TemplateStore(settings.config_root, "agent-templates").list()
+        templates = agent_template_store().list()
         return {
             "sdk_capabilities": serialize_capabilities(),
             "agent_protocols": [classify_agent_protocol(template) for template in templates],
@@ -965,23 +971,23 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.get("/runtime/templates/agents")
     async def list_agent_templates() -> list[dict[str, Any]]:
-        return TemplateStore(settings.config_root, "agent-templates").list()
+        return agent_template_store().list()
 
     @router.post("/runtime/templates/agents")
     async def upsert_agent_template(body: TemplateBody) -> dict[str, Any]:
         try:
-            return TemplateStore(settings.config_root, "agent-templates").upsert(body.template)
+            return agent_template_store().upsert(body.template)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/runtime/templates/mcp")
     async def list_mcp_templates() -> list[dict[str, Any]]:
-        return TemplateStore(settings.config_root, "mcp-templates").list()
+        return mcp_template_store().list()
 
     @router.post("/runtime/templates/mcp")
     async def upsert_mcp_template(body: TemplateBody) -> dict[str, Any]:
         try:
-            return TemplateStore(settings.config_root, "mcp-templates").upsert(body.template)
+            return mcp_template_store().upsert(body.template)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1106,8 +1112,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         )
         checks.extend(
             _template_readiness_checks(
-                TemplateStore(settings.config_root, "agent-templates").list(),
-                TemplateStore(settings.config_root, "mcp-templates").list(),
+                agent_template_store().list(),
+                mcp_template_store().list(),
             )
         )
         fail_count = sum(1 for check in checks if check["status"] == "fail")
@@ -1150,8 +1156,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.get("/runtime/tool-images")
     async def tool_images() -> dict[str, Any]:
-        agents = TemplateStore(settings.config_root, "agent-templates").list()
-        mcps = TemplateStore(settings.config_root, "mcp-templates").list()
+        agents = agent_template_store().list()
+        mcps = mcp_template_store().list()
         return {
             "agent_images": sorted({item["image"] for item in agents if "image" in item}),
             "mcp_images": sorted({item["image"] for item in mcps if "image" in item}),
@@ -1189,6 +1195,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.post("/audit-runs/{audit_run_id}/demo")
     async def start_demo(audit_run_id: str = "demo-run") -> dict[str, Any]:
+        if not settings.enable_demo_templates:
+            raise HTTPException(status_code=403, detail="demo templates are disabled; set ENABLE_DEMO_TEMPLATES=true to run mock demos")
         workspace = settings.workspace_root / "demo-project"
         workspace.mkdir(parents=True, exist_ok=True)
         demo_file = workspace / "app.py"

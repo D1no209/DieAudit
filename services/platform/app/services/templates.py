@@ -5,14 +5,17 @@ import yaml
 
 
 class TemplateStore:
-    def __init__(self, root: Path, folder: str) -> None:
+    def __init__(self, root: Path, folder: str, *, include_demo: bool = False) -> None:
         self.path = root / folder
+        self.include_demo = include_demo
         self.path.mkdir(parents=True, exist_ok=True)
 
     def list(self) -> list[dict[str, Any]]:
         templates: list[dict[str, Any]] = []
         for file in sorted(self.path.glob("*.yaml")):
             data = self._read(file)
+            if not self.include_demo and self.is_demo_template(data):
+                continue
             data["_file"] = file.name
             templates.append(data)
         return templates
@@ -21,7 +24,10 @@ class TemplateStore:
         file = self.path / f"{name}.yaml"
         if not file.exists():
             raise FileNotFoundError(f"template not found: {name}")
-        return self._read(file)
+        data = self._read(file)
+        if not self.include_demo and self.is_demo_template(data):
+            raise FileNotFoundError(f"template not enabled: {name}")
+        return data
 
     def upsert(self, data: dict[str, Any]) -> dict[str, Any]:
         name = data.get("name")
@@ -38,3 +44,15 @@ class TemplateStore:
         if not isinstance(data, dict):
             raise ValueError(f"invalid template: {file}")
         return data
+
+    @staticmethod
+    def is_demo_template(data: dict[str, Any]) -> bool:
+        if data.get("profile") == "demo" or data.get("demo") is True:
+            return True
+        image = str(data.get("image") or "")
+        if "mock-agent" in image or "mock-mcp" in image:
+            return True
+        protocol = data.get("protocol") or {}
+        if isinstance(protocol, dict) and protocol.get("runtime") == "mock":
+            return True
+        return False

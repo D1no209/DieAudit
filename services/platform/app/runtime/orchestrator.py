@@ -32,8 +32,8 @@ class RuntimeOrchestrator:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.docker = DockerClient(settings.docker_host)
-        self.agent_templates = TemplateStore(settings.config_root, "agent-templates")
-        self.mcp_templates = TemplateStore(settings.config_root, "mcp-templates")
+        self.agent_templates = TemplateStore(settings.config_root, "agent-templates", include_demo=settings.enable_demo_templates)
+        self.mcp_templates = TemplateStore(settings.config_root, "mcp-templates", include_demo=settings.enable_demo_templates)
         self.opencode_packages = OpenCodeRuntimePackageBuilder(settings)
         self.opencode_client = OpenCodeAcpClient()
         self.agent_output_ingestor = AgentOutputIngestor()

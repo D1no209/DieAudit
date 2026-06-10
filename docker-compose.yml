@@ -39,6 +39,7 @@ x-platform-env: &platform-env
   PIPELINE_WORKER_POLL_INTERVAL_SECONDS: ${PIPELINE_WORKER_POLL_INTERVAL_SECONDS:-2}
   PIPELINE_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_INTERVAL_SECONDS:-5}
   PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS:-30}
+  ENABLE_DEMO_TEMPLATES: ${ENABLE_DEMO_TEMPLATES:-false}
   NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,minio,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
   no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,minio,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
   CONFIG_ROOT: /app/configs
