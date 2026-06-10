@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     unreferenced_snapshot_retention_days: int = 90
     storage_cleanup_max_entries: int = 500
     pipeline_recovery_on_startup: bool = True
-    pipeline_execution_backend: str = "background-tasks"
+    pipeline_execution_backend: str = "workflow-worker"
     pipeline_worker_poll_interval_seconds: float = 2.0
     pipeline_worker_heartbeat_interval_seconds: float = 5.0
     pipeline_worker_heartbeat_ttl_seconds: float = 30.0

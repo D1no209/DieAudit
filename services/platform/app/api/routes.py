@@ -2044,7 +2044,7 @@ def _pipeline_backend_readiness_check(settings: Settings, worker_health: dict[st
 
 
 def _normalized_pipeline_backend(settings: Settings) -> str:
-    return (settings.pipeline_execution_backend or "background-tasks").strip().lower()
+    return (settings.pipeline_execution_backend or "workflow-worker").strip().lower()
 
 
 async def _get_project(project_id: str) -> dict[str, Any] | None:

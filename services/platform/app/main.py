@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
         await init_db()
     if settings.service_name in {"agent-gateway", "sandbox-runner"}:
         runtime = RuntimeOrchestrator(settings)
-    pipeline_backend = (settings.pipeline_execution_backend or "background-tasks").strip().lower()
+    pipeline_backend = (settings.pipeline_execution_backend or "workflow-worker").strip().lower()
     if (
         settings.service_name == "agent-gateway"
         and settings.pipeline_recovery_on_startup
