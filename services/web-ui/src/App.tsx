@@ -261,6 +261,9 @@ export function App() {
       message.error("请先创建 AuditRun");
       return;
     }
+    if (!ensureSandboxExecutionAvailable()) {
+      return;
+    }
     await runAction(async () => {
       const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/poc`, {
         method: "POST",
@@ -274,7 +277,7 @@ export function App() {
           ],
           allow_external_network: false,
           timeout_seconds: 120,
-          allow_weak_isolation: true,
+          allow_weak_isolation: false,
         }),
       });
       setLastResponse(result);
@@ -289,6 +292,9 @@ export function App() {
       message.error("请先创建 AuditRun");
       return;
     }
+    if (!ensureSandboxExecutionAvailable()) {
+      return;
+    }
     await runAction(async () => {
       const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/service`, {
         method: "POST",
@@ -301,7 +307,7 @@ export function App() {
           allow_external_network: false,
           retain_runtime_on_failure: true,
           startup_timeout_seconds: 30,
-          allow_weak_isolation: true,
+          allow_weak_isolation: false,
         }),
       });
       setSandboxTarget({ network: result.network, target_url: result.target_url });
@@ -321,6 +327,9 @@ export function App() {
       message.error("请先启动 Sandbox Service");
       return;
     }
+    if (!ensureSandboxExecutionAvailable()) {
+      return;
+    }
     await runAction(async () => {
       const result = await readJson(`/gateway/audit-runs/${auditRun.audit_run_id}/sandbox/poc`, {
         method: "POST",
@@ -337,7 +346,7 @@ export function App() {
           allow_external_network: false,
           timeout_seconds: 120,
           expected_exit_code: 0,
-          allow_weak_isolation: true,
+          allow_weak_isolation: false,
         }),
       });
       setLastResponse(result);
@@ -383,6 +392,9 @@ export function App() {
     if (!selectedFinding || !auditRun) {
       return;
     }
+    if (!ensureSandboxExecutionAvailable()) {
+      return;
+    }
     const findingId = selectedFinding.finding.finding_id;
     await runAction(async () => {
       const result = await readJson(`/gateway/findings/${findingId}/poc`, {
@@ -398,7 +410,7 @@ export function App() {
           allow_external_network: false,
           timeout_seconds: 120,
           expected_exit_code: 0,
-          allow_weak_isolation: true,
+          allow_weak_isolation: false,
         }),
       });
       setLastResponse(result);
@@ -602,6 +614,22 @@ export function App() {
     }
   }
 
+  function sandboxUnavailableMessage() {
+    return (
+      sandboxCapabilities?.reason ||
+      sandboxCapabilities?.warnings?.[0] ||
+      "Sandbox execution is not available. Configure gVisor/Kata or an approved sandbox runtime before running PoC containers."
+    );
+  }
+
+  function ensureSandboxExecutionAvailable() {
+    if (sandboxCapabilities?.sandbox_execution_available) {
+      return true;
+    }
+    message.error(sandboxUnavailableMessage());
+    return false;
+  }
+
   useEffect(() => {
     refresh();
   }, []);
@@ -717,6 +745,8 @@ export function App() {
               agentEvents={agentEvents}
               containerLogs={containerLogs}
               loading={loading}
+              sandboxExecutionAvailable={Boolean(sandboxCapabilities?.sandbox_execution_available)}
+              sandboxUnavailableReason={sandboxUnavailableMessage()}
               selectedFinding={selectedFinding}
               onCloseAgentEvents={() => setAgentEvents(undefined)}
               onCloseContainerLogs={() => setContainerLogs(undefined)}

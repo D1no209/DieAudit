@@ -9,6 +9,8 @@ type Props = {
   agentEvents?: Array<Record<string, unknown>>;
   containerLogs?: { title: string; body: string };
   loading: boolean;
+  sandboxExecutionAvailable: boolean;
+  sandboxUnavailableReason: string;
   selectedFinding?: FindingDetail;
   onCloseAgentEvents: () => void;
   onCloseContainerLogs: () => void;
@@ -21,6 +23,8 @@ export function AppDrawers({
   agentEvents,
   containerLogs,
   loading,
+  sandboxExecutionAvailable,
+  sandboxUnavailableReason,
   selectedFinding,
   onCloseAgentEvents,
   onCloseContainerLogs,
@@ -39,7 +43,15 @@ export function AppDrawers({
         {selectedFinding && (
           <Space direction="vertical" size={16} className="drawer-stack">
             <Space wrap>
-              <Button icon={<SafetyCertificateOutlined />} loading={loading} onClick={onRunFindingPoc}>运行 PoC 验证</Button>
+              <Button
+                icon={<SafetyCertificateOutlined />}
+                loading={loading}
+                disabled={!sandboxExecutionAvailable}
+                title={sandboxExecutionAvailable ? undefined : sandboxUnavailableReason}
+                onClick={onRunFindingPoc}
+              >
+                运行 PoC 验证
+              </Button>
             </Space>
             <Descriptions bordered size="small" column={1}>
               <Descriptions.Item label="ID">{selectedFinding.finding.finding_id}</Descriptions.Item>

@@ -163,6 +163,7 @@ export function AppRoutes(props: Props) {
         containers={props.containers}
         loading={props.loading}
         runtimeReadiness={props.runtimeReadiness}
+        sandboxCapabilities={props.sandboxCapabilities}
         sandboxTarget={props.sandboxTarget}
         workerColumns={columns.workerColumns}
         workerHeartbeats={props.workerHeartbeats}
