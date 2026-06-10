@@ -12,6 +12,7 @@ class FakeRuntime:
     def __init__(self) -> None:
         self.agent_runs: list[dict[str, Any]] = []
         self.validator_runs: list[dict[str, Any]] = []
+        self.cleanup_runs: list[str] = []
 
     async def start_agent_run(self, **kwargs: Any) -> dict[str, Any]:
         self.agent_runs.append(kwargs)
@@ -20,6 +21,16 @@ class FakeRuntime:
     async def scale_validators(self, **kwargs: Any) -> dict[str, Any]:
         self.validator_runs.append(kwargs)
         return {"ok": True, "created": len(kwargs.get("findings") or [])}
+
+    async def cleanup_run(self, audit_run_id: str) -> dict[str, Any]:
+        self.cleanup_runs.append(audit_run_id)
+        return {"audit_run_id": audit_run_id, "removed_containers": [], "removed_networks": []}
+
+
+class FailingRuntime(FakeRuntime):
+    async def start_agent_run(self, **kwargs: Any) -> dict[str, Any]:
+        self.agent_runs.append(kwargs)
+        raise RuntimeError("agent crashed")
 
 
 class CallbackRecorder:
@@ -137,5 +148,53 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     assert runtime.agent_runs[0]["agent_name"] == "opencode-orchestrator"
     assert runtime.validator_runs[0]["validator_rounds"] == 2
     assert runtime.validator_runs[0]["max_parallel_validators"] == 3
+    assert runtime.cleanup_runs == ["run-1"]
     assert recorder.summary is not None
     assert recorder.events[-1]["event_type"] == "pipeline_completed"
+    assert recorder.pipeline_events[-1]["event_type"] == "runtime_cleanup_completed"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_cleans_runtime_after_failure_by_default() -> None:
+    runtime = FailingRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+
+    await build_executor(recorder, runtime).execute("run-1")
+
+    assert recorder.statuses == ["running", "failed"]
+    assert runtime.cleanup_runs == ["run-1"]
+    assert recorder.pipeline_events[-1]["event_type"] == "runtime_cleanup_completed"
+    assert recorder.pipeline_events[-1]["payload"]["terminal_status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_retains_runtime_after_failure_when_requested() -> None:
+    runtime = FailingRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": True,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+
+    await build_executor(recorder, runtime).execute("run-1")
+
+    assert recorder.statuses == ["running", "failed"]
+    assert runtime.cleanup_runs == []
+    assert recorder.pipeline_events[-1]["event_type"] == "runtime_cleanup_skipped"
+    assert recorder.pipeline_events[-1]["payload"]["reason"] == "retain_runtime_on_failure"

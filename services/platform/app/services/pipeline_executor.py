@@ -61,6 +61,7 @@ class PipelineExecutor:
             await self.mark_audit_run_status(audit_run_id, "failed")
             await self.set_pipeline_state(audit_run_id, stage="failed", status="failed", error="audit run has no workspace path")
             await self.record_audit_run_event(audit_run_id, "pipeline_failed", {"error": "audit run has no workspace path"})
+            await self._cleanup_terminal_runtime(audit_run_id, terminal_status="failed", audit_run=audit_run)
             return
         await self.mark_audit_run_status(audit_run_id, "running")
         await self.set_pipeline_state(audit_run_id, stage="agent-audit", status="running")
@@ -170,6 +171,7 @@ class PipelineExecutor:
             await self.mark_audit_run_status(audit_run_id, "completed")
             await self.set_pipeline_state(audit_run_id, stage="completed", status="completed")
             await self.record_audit_run_event(audit_run_id, "pipeline_completed", {"report": self.compact_event_payload(report_result)})
+            await self._cleanup_terminal_runtime(audit_run_id, terminal_status="completed", audit_run=audit_run)
         except PipelineCancelled as exc:
             await self.mark_audit_run_status(audit_run_id, "cancelled")
             await self.set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error=str(exc))
@@ -178,6 +180,7 @@ class PipelineExecutor:
                 "pipeline_cancelled",
                 {"reason": str(exc), "steps": [self.compact_event_payload(step) for step in steps]},
             )
+            await self._cleanup_terminal_runtime(audit_run_id, terminal_status="cancelled", audit_run=audit_run)
         except Exception as exc:
             if await self.is_cancel_requested(audit_run_id):
                 reason = await self.cancel_reason(audit_run_id)
@@ -192,6 +195,7 @@ class PipelineExecutor:
                         "steps": [self.compact_event_payload(step) for step in steps],
                     },
                 )
+                await self._cleanup_terminal_runtime(audit_run_id, terminal_status="cancelled", audit_run=audit_run)
                 return
             await self.record_pipeline_event(audit_run_id, "pipeline_failed", {"error": str(exc), "steps": steps})
             await self.set_pipeline_state(audit_run_id, stage="failed", status="failed", error=str(exc))
@@ -201,3 +205,42 @@ class PipelineExecutor:
                 {"error": str(exc), "steps": [self.compact_event_payload(step) for step in steps]},
             )
             await self.mark_audit_run_status(audit_run_id, "failed")
+            await self._cleanup_terminal_runtime(audit_run_id, terminal_status="failed", audit_run=audit_run)
+
+    async def _cleanup_terminal_runtime(
+        self,
+        audit_run_id: str,
+        *,
+        terminal_status: str,
+        audit_run: dict[str, Any],
+    ) -> None:
+        retain_on_failure = bool(audit_run.get("retain_runtime_on_failure"))
+        if terminal_status == "failed" and retain_on_failure:
+            await self.record_pipeline_event(
+                audit_run_id,
+                "runtime_cleanup_skipped",
+                {"reason": "retain_runtime_on_failure", "terminal_status": terminal_status},
+            )
+            return
+        cleanup = getattr(self.runtime, "cleanup_run", None)
+        if cleanup is None:
+            await self.record_pipeline_event(
+                audit_run_id,
+                "runtime_cleanup_skipped",
+                {"reason": "runtime_cleanup_unavailable", "terminal_status": terminal_status},
+            )
+            return
+        try:
+            result = await cleanup(audit_run_id)
+        except Exception as exc:
+            await self.record_pipeline_event(
+                audit_run_id,
+                "runtime_cleanup_failed",
+                {"error": str(exc), "terminal_status": terminal_status},
+            )
+            return
+        await self.record_pipeline_event(
+            audit_run_id,
+            "runtime_cleanup_completed",
+            {"terminal_status": terminal_status, "result": self.compact_event_payload(result)},
+        )
