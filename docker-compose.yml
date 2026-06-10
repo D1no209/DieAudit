@@ -395,6 +395,35 @@ services:
     networks:
       - platform
 
+  tool-mcp-codeql-image:
+    build:
+      context: .
+      dockerfile: services/mcp-tools/Dockerfile.codeql
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+        CODEQL_BUNDLE_VERSION: ${CODEQL_BUNDLE_VERSION:-2.25.6}
+    image: dieaudit/tool-mcp-codeql:local
+    profiles: ["tools"]
+    command: ["python", "/app/tool_mcp.py"]
+    networks:
+      - platform
+
+  tool-mcp-joern-image:
+    build:
+      context: .
+      dockerfile: services/mcp-tools/Dockerfile.joern
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    image: dieaudit/tool-mcp-joern:local
+    profiles: ["tools"]
+    command: ["python3.12", "/app/tool_mcp.py"]
+    networks:
+      - platform
+
   opencode-agent-image:
     build:
       context: .

@@ -1,5 +1,5 @@
 name: joern-mcp
-image: dieaudit/tool-mcp:local
+image: dieaudit/tool-mcp-joern:local
 transport: http
 port: 8001
 mcp_endpoint: /mcp

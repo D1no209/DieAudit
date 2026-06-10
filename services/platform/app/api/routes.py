@@ -1099,7 +1099,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "title": "Sandbox has strong isolation",
                     "status": "pass" if sandbox.get("strong_isolation_available") else "fail",
                     "detail": {
+                        "docker_default_runtime": sandbox.get("docker_default_runtime"),
+                        "docker_runtimes": sandbox.get("docker_runtimes"),
                         "requested_runtime": sandbox.get("requested_runtime"),
+                        "requested_runtime_available": sandbox.get("requested_runtime_available"),
+                        "gvisor_available": sandbox.get("gvisor_available"),
+                        "strong_isolation_available": sandbox.get("strong_isolation_available"),
                         "sandbox_execution_available": sandbox.get("sandbox_execution_available"),
                         "reason": sandbox.get("reason"),
                         "warnings": sandbox.get("warnings"),

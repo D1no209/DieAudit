@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import yaml
+
 from app.api.routes import _template_readiness_checks
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
@@ -58,6 +65,16 @@ def test_heavy_analyzer_readiness_passes_when_required_binaries_available() -> N
     }
 
     assert checks["heavy_analyzers"]["status"] == "pass"
+
+
+def test_heavy_analyzer_templates_use_dedicated_images() -> None:
+    codeql = yaml.safe_load((ROOT / "configs/mcp-templates/codeql-mcp.yaml").read_text(encoding="utf-8"))
+    joern = yaml.safe_load((ROOT / "configs/mcp-templates/joern-mcp.yaml").read_text(encoding="utf-8"))
+
+    assert codeql["image"] == "dieaudit/tool-mcp-codeql:local"
+    assert joern["image"] == "dieaudit/tool-mcp-joern:local"
+    assert codeql["required_binaries"] == ["codeql"]
+    assert joern["required_binaries"] == ["joern"]
 
 
 def test_heavy_analyzer_readiness_warns_when_required_binaries_missing() -> None:

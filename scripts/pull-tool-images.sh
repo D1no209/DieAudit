@@ -14,8 +14,7 @@ images=(
   semgrep/semgrep:latest
   aquasec/trivy:latest
   anchore/syft:latest
-  ghcr.io/joernio/joern:latest
-  ghcr.io/github/codeql-cli/codeql-cli:latest
+  ghcr.io/joernio/joern:master
 )
 
 for image in "${images[@]}"; do

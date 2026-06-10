@@ -1,0 +1,27 @@
+FROM ghcr.io/joernio/joern:master
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    no_proxy=${NO_PROXY} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN microdnf install -y python3.12 python3.12-pip \
+    && microdnf clean all
+
+COPY services/mcp-tools/requirements.txt /app/requirements.txt
+RUN python3.12 -m pip install --no-cache-dir -r /app/requirements.txt
+
+COPY services/mcp-tools/tool_mcp.py /app/tool_mcp.py
+
+EXPOSE 8001
+
+CMD ["python3.12", "/app/tool_mcp.py"]

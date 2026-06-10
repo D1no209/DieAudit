@@ -1,5 +1,5 @@
 name: codeql-mcp
-image: dieaudit/tool-mcp:local
+image: dieaudit/tool-mcp-codeql:local
 transport: http
 port: 8001
 mcp_endpoint: /mcp

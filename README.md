@@ -32,7 +32,7 @@ Required before exposing the platform:
 - Install gVisor `runsc` or another strong container runtime, then set `ENABLE_GVISOR=true` and `DEFAULT_SANDBOX_RUNTIME=runsc`.
 - Keep `ALLOW_RUNC_SANDBOX=false` for untrusted PoC execution.
 - Configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection.
-- Replace or extend the tool MCP image before relying on Joern/CodeQL templates; the default lightweight tool image reports those analyzers as unavailable if their CLIs are missing.
+- Build the optional heavy analyzer MCP images before relying on Joern/CodeQL templates: `docker compose --profile tools build tool-mcp-codeql-image tool-mcp-joern-image`.
 
 Check the live deployment:
 
@@ -56,7 +56,7 @@ Check MCP tool image capabilities:
 Invoke-RestMethod http://localhost:8080/gateway/runtime/tool-capabilities | ConvertTo-Json -Depth 10
 ```
 
-MCP templates can declare `required_binaries`; readiness probes the configured image with a short-lived isolated container and reports missing CLIs such as `codeql` or `joern`.
+MCP templates can declare `required_binaries`; readiness probes the configured image with a short-lived isolated container and reports missing CLIs such as `codeql` or `joern`. CodeQL and Joern use dedicated heavy images (`dieaudit/tool-mcp-codeql:local`, `dieaudit/tool-mcp-joern:local`) so the default tool image stays lightweight.
 
 Create the first persisted admin key from the running Compose environment without opening an unauthenticated browser/API setup flow:
 
@@ -108,7 +108,7 @@ Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/cleanu
 - Agent templates live in `configs/agent-templates`.
 - MCP templates live in `configs/mcp-templates`.
 - Mock Agent images remain only as demo fixtures. Production OpenCode templates are in `configs/agent-templates/opencode-*.yaml`.
-- MCP templates in `configs/mcp-templates` use `dieaudit/tool-mcp:local`; heavy Joern/CodeQL CLIs return structured `available=false` until installed in that image or replaced by dedicated tool images.
+- Standard MCP templates in `configs/mcp-templates` use `dieaudit/tool-mcp:local`; heavy Joern/CodeQL templates use dedicated images built by the `tools` profile.
 
 ## Knowledge Base Embeddings
 

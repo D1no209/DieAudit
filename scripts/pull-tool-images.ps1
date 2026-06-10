@@ -10,11 +10,12 @@ $env:no_proxy = $env:NO_PROXY
 $images = @(
     "dieaudit/mock-agent:local",
     "dieaudit/mock-mcp:local",
+    "dieaudit/tool-mcp-codeql:local",
+    "dieaudit/tool-mcp-joern:local",
     "semgrep/semgrep:latest",
     "aquasec/trivy:latest",
     "anchore/syft:latest",
-    "ghcr.io/joernio/joern:latest",
-    "ghcr.io/github/codeql-cli/codeql-cli:latest"
+    "ghcr.io/joernio/joern:master"
 )
 
 docker compose --profile tools build
