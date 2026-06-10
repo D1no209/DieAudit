@@ -201,6 +201,12 @@ class DockerClient:
                 "NetworkMode": network_mode,
                 "ReadonlyRootfs": True,
                 "AutoRemove": False,
+                "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges:true"],
+                "Memory": 256 * 1024 * 1024,
+                "NanoCpus": 500_000_000,
+                "PidsLimit": 128,
+                "Tmpfs": {"/tmp": "rw,nosuid,size=64m"},
             },
         }
         created = await self.create_container(name, payload)
