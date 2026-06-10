@@ -106,8 +106,33 @@ def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
     assert "readJson(" not in app
     assert app.count("useState") == 0
     assert "<AppRoutes activeView={activeView} dashboard={dashboard} />" in app
-    assert "function refresh()" in controller
-    assert "function runPipeline()" in controller
+    assert "useDashboardRefresh" in controller
+    assert "useAuditRunActions" in controller
+    assert "dashboardApi." not in controller
+    assert "function runPipeline()" not in controller
+
+
+def test_dashboard_controller_uses_domain_action_hooks() -> None:
+    controller = read_source("services/web-ui/src/hooks/useDashboardController.tsx")
+
+    for hook in (
+        "useAdminActions",
+        "useAuditRunActions",
+        "useKnowledgeActions",
+        "useProjectActions",
+        "useRuntimeActions",
+    ):
+        assert hook in controller
+
+    for path in (
+        "services/web-ui/src/hooks/dashboard/useAdminActions.ts",
+        "services/web-ui/src/hooks/dashboard/useAuditRunActions.ts",
+        "services/web-ui/src/hooks/dashboard/useDashboardRefresh.ts",
+        "services/web-ui/src/hooks/dashboard/useKnowledgeActions.ts",
+        "services/web-ui/src/hooks/dashboard/useProjectActions.ts",
+        "services/web-ui/src/hooks/dashboard/useRuntimeActions.ts",
+    ):
+        assert (ROOT / path).is_file()
 
 
 def test_routes_use_dashboard_controller_instead_of_flat_prop_surface() -> None:
