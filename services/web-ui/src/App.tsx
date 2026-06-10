@@ -12,7 +12,8 @@ const { Content } = Layout;
 
 export function App() {
   const [activeView, setActiveView] = useAppRoute();
-  const { actions, columns, forms, state } = useDashboardController();
+  const dashboard = useDashboardController();
+  const { actions, state } = dashboard;
 
   return (
     <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
@@ -40,66 +41,7 @@ export function App() {
                 className="section"
               />
             )}
-            <AppRoutes
-              activeView={activeView}
-              agentRuns={state.agentRuns}
-              apiHealth={state.apiHealth}
-              apiKeyForm={forms.apiKeyForm}
-              apiKeys={state.apiKeys}
-              auditRun={state.auditRun}
-              authStatus={state.authStatus}
-              columns={columns}
-              containers={state.containers}
-              dependencies={state.dependencies}
-              dockerHealth={state.dockerHealth}
-              findings={state.findings}
-              gitForm={forms.gitForm}
-              knowledgeDocuments={state.knowledgeDocuments}
-              knowledgeFiles={state.knowledgeFiles}
-              knowledgeMatches={state.knowledgeMatches}
-              knowledgeSearchForm={forms.knowledgeSearchForm}
-              knowledgeUploadForm={forms.knowledgeUploadForm}
-              lastResponse={state.lastResponse}
-              loading={state.loading}
-              managedRuntime={state.managedRuntime}
-              pipelineStatus={state.pipelineStatus}
-              platformAuditEvents={state.platformAuditEvents}
-              projects={state.projects}
-              reports={state.reports}
-              runtimePolicy={state.runtimePolicy}
-              runtimeReadiness={state.runtimeReadiness}
-              sandboxCapabilities={state.sandboxCapabilities}
-              sandboxTarget={state.sandboxTarget}
-              selectedProject={state.selectedProject}
-              selectedProjectId={state.selectedProjectId}
-              storageSummary={state.storageSummary}
-              workerHeartbeats={state.workerHeartbeats}
-              zipFiles={state.zipFiles}
-              zipForm={forms.zipForm}
-              onCancelAuditRun={actions.cancelAuditRun}
-              onCleanup={actions.cleanup}
-              onCleanupExpiredRuntime={actions.cleanupExpiredRuntime}
-              onCleanupPlatformAuditEvents={actions.cleanupPlatformAuditEvents}
-              onCreateGitProject={actions.createGitProject}
-              onCreateManagedApiKey={actions.createManagedApiKey}
-              onGenerateReport={actions.generateReport}
-              onOpenArtifact={actions.openArtifact}
-              onOpenFinding={actions.openFinding}
-              onPreviewLocalStorageCleanup={actions.previewLocalStorageCleanup}
-              onRunJudge={actions.runJudge}
-              onRunPipeline={actions.runPipeline}
-              onRunPocSmoke={actions.runPocSmoke}
-              onRunSandboxTargetPoc={actions.runSandboxTargetPoc}
-              onRunSca={actions.runSca}
-              onSearchKnowledge={actions.searchKnowledge}
-              onSelectProject={actions.setSelectedProjectId}
-              onSetKnowledgeFiles={actions.setKnowledgeFiles}
-              onSetZipFiles={actions.setZipFiles}
-              onStartAudit={actions.startAudit}
-              onStartSandboxService={actions.startSandboxService}
-              onUploadKnowledgeDocument={actions.uploadKnowledgeDocument}
-              onUploadZipProject={actions.uploadZipProject}
-            />
+            <AppRoutes activeView={activeView} dashboard={dashboard} />
             <AppDrawers
               agentEvents={state.agentEvents}
               containerLogs={state.containerLogs}

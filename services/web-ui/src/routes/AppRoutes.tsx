@@ -1,5 +1,4 @@
-import type { FormInstance } from "antd/es/form";
-import type { UploadFile } from "antd/es/upload/interface";
+import type { DashboardController } from "../hooks/useDashboardController";
 import type { AppView } from "../navigation";
 import { AdminPage } from "../pages/AdminPage";
 import { AgentRunsPage } from "../pages/AgentRunsPage";
@@ -11,105 +10,26 @@ import { OverviewPage } from "../pages/OverviewPage";
 import { ProjectsPage } from "../pages/ProjectsPage";
 import { ReportsPage } from "../pages/ReportsPage";
 import { RuntimePage } from "../pages/RuntimePage";
-import type {
-  AgentRun,
-  ArtifactRef,
-  AuditRun,
-  AuthStatus,
-  DependencyInventory,
-  Finding,
-  KnowledgeDocument,
-  KnowledgeMatch,
-  ManagedRuntime,
-  PipelineStatus,
-  PlatformAuditEvent,
-  Project,
-  ReportArtifact,
-  RuntimePolicy,
-  RuntimeReadiness,
-  SandboxCapabilities,
-  StorageSummary,
-  WorkerHeartbeat,
-  ContainerRow,
-  ApiKeyRecord,
-} from "../types";
-import type { DashboardColumns } from "../hooks/useDashboardColumns";
 
 type Props = {
   activeView: AppView;
-  agentRuns: AgentRun[];
-  apiHealth?: unknown;
-  apiKeyForm: FormInstance;
-  apiKeys: ApiKeyRecord[];
-  auditRun?: AuditRun;
-  authStatus?: AuthStatus;
-  columns: DashboardColumns;
-  containers: ContainerRow[];
-  dependencies?: DependencyInventory;
-  dockerHealth?: unknown;
-  findings: Finding[];
-  gitForm: FormInstance;
-  knowledgeDocuments: KnowledgeDocument[];
-  knowledgeFiles: UploadFile[];
-  knowledgeMatches: KnowledgeMatch[];
-  knowledgeSearchForm: FormInstance;
-  knowledgeUploadForm: FormInstance;
-  lastResponse?: unknown;
-  loading: boolean;
-  managedRuntime?: ManagedRuntime;
-  pipelineStatus?: PipelineStatus;
-  platformAuditEvents: PlatformAuditEvent[];
-  projects: Project[];
-  reports: ReportArtifact[];
-  runtimePolicy?: RuntimePolicy;
-  runtimeReadiness?: RuntimeReadiness;
-  sandboxCapabilities?: SandboxCapabilities;
-  sandboxTarget?: { network: string; target_url: string };
-  selectedProject?: Project;
-  selectedProjectId?: string;
-  storageSummary?: StorageSummary;
-  workerHeartbeats: WorkerHeartbeat[];
-  zipFiles: UploadFile[];
-  zipForm: FormInstance;
-  onCancelAuditRun: () => void;
-  onCleanup: () => void;
-  onCleanupExpiredRuntime: () => void;
-  onCleanupPlatformAuditEvents: () => void;
-  onCreateGitProject: (values: { name: string; git_url: string; ref?: string }) => void;
-  onCreateManagedApiKey: (values: { name: string; scopes?: string }) => void;
-  onGenerateReport: () => void;
-  onOpenArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
-  onOpenFinding: (findingId: string) => void;
-  onPreviewLocalStorageCleanup: () => void;
-  onRunJudge: () => void;
-  onRunPipeline: () => void;
-  onRunPocSmoke: () => void;
-  onRunSandboxTargetPoc: () => void;
-  onRunSca: () => void;
-  onSearchKnowledge: (values: { query: string; project_id?: string; limit?: string }) => void;
-  onSelectProject: (projectId: string) => void;
-  onSetKnowledgeFiles: (files: UploadFile[]) => void;
-  onSetZipFiles: (files: UploadFile[]) => void;
-  onStartAudit: () => void;
-  onStartSandboxService: () => void;
-  onUploadKnowledgeDocument: (values: { title: string; scope?: string; project_id?: string }) => void;
-  onUploadZipProject: (values: { name: string }) => void;
+  dashboard: DashboardController;
 };
 
-export function AppRoutes(props: Props) {
-  const { activeView, columns } = props;
+export function AppRoutes({ activeView, dashboard }: Props) {
+  const { actions, columns, forms, state } = dashboard;
 
   if (activeView === "overview") {
     return (
       <OverviewPage
-        apiHealth={props.apiHealth}
-        authStatus={props.authStatus}
-        dockerHealth={props.dockerHealth}
-        findingsCount={props.findings.length}
-        managedRuntime={props.managedRuntime}
-        projectsCount={props.projects.length}
-        runtimeReadiness={props.runtimeReadiness}
-        sandboxCapabilities={props.sandboxCapabilities}
+        apiHealth={state.apiHealth}
+        authStatus={state.authStatus}
+        dockerHealth={state.dockerHealth}
+        findingsCount={state.findings.length}
+        managedRuntime={state.managedRuntime}
+        projectsCount={state.projects.length}
+        runtimeReadiness={state.runtimeReadiness}
+        sandboxCapabilities={state.sandboxCapabilities}
       />
     );
   }
@@ -117,18 +37,18 @@ export function AppRoutes(props: Props) {
   if (activeView === "projects") {
     return (
       <ProjectsPage
-        gitForm={props.gitForm}
-        loading={props.loading}
+        gitForm={forms.gitForm}
+        loading={state.loading}
         projectColumns={columns.projectColumns}
-        projects={props.projects}
-        selectedProject={props.selectedProject}
-        selectedProjectId={props.selectedProjectId}
-        zipFiles={props.zipFiles}
-        zipForm={props.zipForm}
-        onCreateGitProject={props.onCreateGitProject}
-        onSelectProject={props.onSelectProject}
-        onSetZipFiles={props.onSetZipFiles}
-        onUploadZipProject={props.onUploadZipProject}
+        projects={state.projects}
+        selectedProject={state.selectedProject}
+        selectedProjectId={state.selectedProjectId}
+        zipFiles={state.zipFiles}
+        zipForm={forms.zipForm}
+        onCreateGitProject={actions.createGitProject}
+        onSelectProject={actions.setSelectedProjectId}
+        onSetZipFiles={actions.setZipFiles}
+        onUploadZipProject={actions.uploadZipProject}
       />
     );
   }
@@ -136,43 +56,43 @@ export function AppRoutes(props: Props) {
   if (activeView === "audit-runs") {
     return (
       <AuditRunsPage
-        agentRunsCount={props.agentRuns.length}
-        auditRun={props.auditRun}
-        lastResponse={props.lastResponse}
-        loading={props.loading}
-        pipelineStatus={props.pipelineStatus}
-        reportsCount={props.reports.length}
-        selectedProject={props.selectedProject}
-        onCancelAuditRun={props.onCancelAuditRun}
-        onGenerateReport={props.onGenerateReport}
-        onRunJudge={props.onRunJudge}
-        onRunPipeline={props.onRunPipeline}
-        onRunSca={props.onRunSca}
-        onStartAudit={props.onStartAudit}
+        agentRunsCount={state.agentRuns.length}
+        auditRun={state.auditRun}
+        lastResponse={state.lastResponse}
+        loading={state.loading}
+        pipelineStatus={state.pipelineStatus}
+        reportsCount={state.reports.length}
+        selectedProject={state.selectedProject}
+        onCancelAuditRun={actions.cancelAuditRun}
+        onGenerateReport={actions.generateReport}
+        onRunJudge={actions.runJudge}
+        onRunPipeline={actions.runPipeline}
+        onRunSca={actions.runSca}
+        onStartAudit={actions.startAudit}
       />
     );
   }
 
   if (activeView === "agent-runs") {
-    return <AgentRunsPage agentColumns={columns.agentColumns} agentRuns={props.agentRuns} auditRun={props.auditRun} />;
+    return <AgentRunsPage agentColumns={columns.agentColumns} agentRuns={state.agentRuns} auditRun={state.auditRun} />;
   }
 
   if (activeView === "findings") {
-    return <FindingsPage findings={props.findings} onOpenFinding={props.onOpenFinding} />;
+    return <FindingsPage findings={state.findings} onOpenFinding={actions.openFinding} />;
   }
 
   if (activeView === "dependencies") {
-    return <DependenciesPage dependencies={props.dependencies} />;
+    return <DependenciesPage dependencies={state.dependencies} />;
   }
 
   if (activeView === "reports") {
     return (
       <ReportsPage
-        auditRun={props.auditRun}
-        loading={props.loading}
-        reports={props.reports}
-        onGenerateReport={props.onGenerateReport}
-        onOpenArtifact={props.onOpenArtifact}
+        auditRun={state.auditRun}
+        loading={state.loading}
+        reports={state.reports}
+        onGenerateReport={actions.generateReport}
+        onOpenArtifact={actions.openArtifact}
       />
     );
   }
@@ -181,18 +101,18 @@ export function AppRoutes(props: Props) {
     return (
       <RuntimePage
         containerColumns={columns.containerColumns}
-        containers={props.containers}
-        loading={props.loading}
-        runtimeReadiness={props.runtimeReadiness}
-        sandboxCapabilities={props.sandboxCapabilities}
-        sandboxTarget={props.sandboxTarget}
+        containers={state.containers}
+        loading={state.loading}
+        runtimeReadiness={state.runtimeReadiness}
+        sandboxCapabilities={state.sandboxCapabilities}
+        sandboxTarget={state.sandboxTarget}
         workerColumns={columns.workerColumns}
-        workerHeartbeats={props.workerHeartbeats}
-        onCleanup={props.onCleanup}
-        onCleanupExpiredRuntime={props.onCleanupExpiredRuntime}
-        onRunPocSmoke={props.onRunPocSmoke}
-        onRunSandboxTargetPoc={props.onRunSandboxTargetPoc}
-        onStartSandboxService={props.onStartSandboxService}
+        workerHeartbeats={state.workerHeartbeats}
+        onCleanup={actions.cleanup}
+        onCleanupExpiredRuntime={actions.cleanupExpiredRuntime}
+        onRunPocSmoke={actions.runPocSmoke}
+        onRunSandboxTargetPoc={actions.runSandboxTargetPoc}
+        onStartSandboxService={actions.startSandboxService}
       />
     );
   }
@@ -201,16 +121,16 @@ export function AppRoutes(props: Props) {
     return (
       <KnowledgePage
         knowledgeColumns={columns.knowledgeColumns}
-        knowledgeDocuments={props.knowledgeDocuments}
-        knowledgeFiles={props.knowledgeFiles}
-        knowledgeMatches={props.knowledgeMatches}
-        knowledgeSearchForm={props.knowledgeSearchForm}
-        knowledgeUploadForm={props.knowledgeUploadForm}
-        loading={props.loading}
-        selectedProjectId={props.selectedProjectId}
-        onSearchKnowledge={props.onSearchKnowledge}
-        onSetKnowledgeFiles={props.onSetKnowledgeFiles}
-        onUploadKnowledgeDocument={props.onUploadKnowledgeDocument}
+        knowledgeDocuments={state.knowledgeDocuments}
+        knowledgeFiles={state.knowledgeFiles}
+        knowledgeMatches={state.knowledgeMatches}
+        knowledgeSearchForm={forms.knowledgeSearchForm}
+        knowledgeUploadForm={forms.knowledgeUploadForm}
+        loading={state.loading}
+        selectedProjectId={state.selectedProjectId}
+        onSearchKnowledge={actions.searchKnowledge}
+        onSetKnowledgeFiles={actions.setKnowledgeFiles}
+        onUploadKnowledgeDocument={actions.uploadKnowledgeDocument}
       />
     );
   }
@@ -218,16 +138,16 @@ export function AppRoutes(props: Props) {
   return (
     <AdminPage
       apiKeyColumns={columns.apiKeyColumns}
-      apiKeyForm={props.apiKeyForm}
-      apiKeys={props.apiKeys}
-      loading={props.loading}
+      apiKeyForm={forms.apiKeyForm}
+      apiKeys={state.apiKeys}
+      loading={state.loading}
       platformAuditColumns={columns.platformAuditColumns}
-      platformAuditEvents={props.platformAuditEvents}
-      runtimePolicy={props.runtimePolicy}
-      storageSummary={props.storageSummary}
-      onCleanupPlatformAuditEvents={props.onCleanupPlatformAuditEvents}
-      onCreateManagedApiKey={props.onCreateManagedApiKey}
-      onPreviewLocalStorageCleanup={props.onPreviewLocalStorageCleanup}
+      platformAuditEvents={state.platformAuditEvents}
+      runtimePolicy={state.runtimePolicy}
+      storageSummary={state.storageSummary}
+      onCleanupPlatformAuditEvents={actions.cleanupPlatformAuditEvents}
+      onCreateManagedApiKey={actions.createManagedApiKey}
+      onPreviewLocalStorageCleanup={actions.previewLocalStorageCleanup}
     />
   );
 }

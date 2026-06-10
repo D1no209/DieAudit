@@ -40,5 +40,15 @@ def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
     assert "useDashboardController" in app
     assert "readJson(" not in app
     assert app.count("useState") == 0
+    assert "<AppRoutes activeView={activeView} dashboard={dashboard} />" in app
     assert "function refresh()" in controller
     assert "function runPipeline()" in controller
+
+
+def test_routes_use_dashboard_controller_instead_of_flat_prop_surface() -> None:
+    routes = read_source("services/web-ui/src/routes/AppRoutes.tsx")
+
+    assert "DashboardController" in routes
+    assert "dashboard: DashboardController" in routes
+    assert "onCreateGitProject:" not in routes
+    assert "apiKeyForm: FormInstance" not in routes
