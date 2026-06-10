@@ -25,7 +25,8 @@ import { API_KEY_HEADER, API_KEY_STORAGE_KEY, formatHttpError, readJson, withAut
 import { AppDrawers } from "./components/AppDrawers";
 import { AppHeader } from "./components/AppHeader";
 import { AppNavigation } from "./components/AppNavigation";
-import { navigationItems, type AppView } from "./navigation";
+import { useAppRoute } from "./hooks/useAppRoute";
+import { navigationItems } from "./navigation";
 import { AdminPage } from "./pages/AdminPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
@@ -38,7 +39,7 @@ import { artifactFileName, artifactUrl, isActiveRun, parseScopes, workerStatusCo
 const { Content } = Layout;
 
 function App() {
-  const [activeView, setActiveView] = useState<AppView>("overview");
+  const [activeView, setActiveView] = useAppRoute();
   const [apiHealth, setApiHealth] = useState<any>();
   const [authStatus, setAuthStatus] = useState<AuthStatus>();
   const [dockerHealth, setDockerHealth] = useState<any>();

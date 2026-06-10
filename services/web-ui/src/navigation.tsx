@@ -9,6 +9,34 @@ import {
 
 export type AppView = "overview" | "projects" | "findings" | "runtime" | "knowledge" | "admin";
 
+export const DEFAULT_VIEW: AppView = "overview";
+
+export const APP_VIEW_PATHS: Record<AppView, string> = {
+  overview: "/overview",
+  projects: "/projects",
+  findings: "/findings",
+  runtime: "/runtime",
+  knowledge: "/knowledge",
+  admin: "/admin",
+};
+
+const APP_VIEWS = new Set<AppView>(Object.keys(APP_VIEW_PATHS) as AppView[]);
+
+export function appViewFromHash(hash: string): AppView {
+  const normalized = hash.replace(/^#/, "").trim() || APP_VIEW_PATHS[DEFAULT_VIEW];
+  const directMatch = (Object.entries(APP_VIEW_PATHS) as Array<[AppView, string]>).find(([, path]) => path === normalized);
+  if (directMatch) {
+    return directMatch[0];
+  }
+
+  const fallback = normalized.replace(/^\//, "") as AppView;
+  return APP_VIEWS.has(fallback) ? fallback : DEFAULT_VIEW;
+}
+
+export function hashFromAppView(view: AppView): string {
+  return `#${APP_VIEW_PATHS[view] || APP_VIEW_PATHS[DEFAULT_VIEW]}`;
+}
+
 export const navigationItems = [
   { key: "overview", icon: <ApiOutlined />, label: "Overview" },
   { key: "projects", icon: <FolderOpenOutlined />, label: "Projects & Runs" },
