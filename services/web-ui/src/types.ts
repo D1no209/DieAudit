@@ -419,3 +419,24 @@ export type FindingPocResponse = {
   finding: FindingDetail;
   [key: string]: unknown;
 };
+
+export type SandboxPocFormValues = {
+  image: string;
+  command: string;
+  expected_exit_code?: number;
+  mount_workspace?: boolean;
+  retain_runtime_on_failure?: boolean;
+  target_url?: string;
+  timeout_seconds?: number;
+};
+
+export type SandboxServiceFormValues = {
+  image: string;
+  command: string;
+  healthcheck_path?: string;
+  mount_workspace?: boolean;
+  port?: number;
+  retain_runtime_on_failure?: boolean;
+  service_name?: string;
+  startup_timeout_seconds?: number;
+};

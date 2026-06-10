@@ -93,6 +93,7 @@ export function renderReportsRoute({ actions, state }: DashboardController) {
 export function renderRuntimeRoute({ actions, columns, state }: DashboardController) {
   return (
     <RuntimePage
+      auditRun={state.auditRun}
       containerColumns={columns.containerColumns}
       containers={state.containers}
       loading={state.loading}
@@ -103,7 +104,7 @@ export function renderRuntimeRoute({ actions, columns, state }: DashboardControl
       workerHeartbeats={state.workerHeartbeats}
       onCleanup={actions.cleanup}
       onCleanupExpiredRuntime={actions.cleanupExpiredRuntime}
-      onRunPocSmoke={actions.runPocSmoke}
+      onRunSandboxPoc={actions.runSandboxPoc}
       onRunSandboxTargetPoc={actions.runSandboxTargetPoc}
       onStartSandboxService={actions.startSandboxService}
     />

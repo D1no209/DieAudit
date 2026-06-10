@@ -5,8 +5,11 @@ import { PageHeader } from "../components/PageHeader";
 import { RuntimeActionBar } from "./runtime/RuntimeActionBar";
 import { RuntimeContainersPanel } from "./runtime/RuntimeContainersPanel";
 import { RuntimeReadinessPanel } from "./runtime/RuntimeReadinessPanel";
+import { RuntimeSandboxPanel } from "./runtime/RuntimeSandboxPanel";
+import type { AuditRun, SandboxPocFormValues, SandboxServiceFormValues } from "../types";
 
 type Props = {
+  auditRun?: AuditRun;
   containerColumns: ColumnsType<ContainerRow>;
   containers: ContainerRow[];
   loading: boolean;
@@ -17,12 +20,13 @@ type Props = {
   workerHeartbeats: WorkerHeartbeat[];
   onCleanup: () => void;
   onCleanupExpiredRuntime: () => void;
-  onRunPocSmoke: () => void;
-  onRunSandboxTargetPoc: () => void;
-  onStartSandboxService: () => void;
+  onRunSandboxPoc: (values: SandboxPocFormValues) => void;
+  onRunSandboxTargetPoc: (values: SandboxPocFormValues) => void;
+  onStartSandboxService: (values: SandboxServiceFormValues) => void;
 };
 
 export function RuntimePage({
+  auditRun,
   containerColumns,
   containers,
   loading,
@@ -33,8 +37,8 @@ export function RuntimePage({
   workerHeartbeats,
   onCleanup,
   onCleanupExpiredRuntime,
-  onRunPocSmoke,
   onRunSandboxTargetPoc,
+  onRunSandboxPoc,
   onStartSandboxService,
 }: Props) {
   const sandboxExecutionAvailable = Boolean(sandboxCapabilities?.sandbox_execution_available);
@@ -45,13 +49,8 @@ export function RuntimePage({
   const pageActions = (
     <RuntimeActionBar
       loading={loading}
-      sandboxExecutionAvailable={sandboxExecutionAvailable}
-      sandboxTarget={sandboxTarget}
       onCleanup={onCleanup}
       onCleanupExpiredRuntime={onCleanupExpiredRuntime}
-      onRunPocSmoke={onRunPocSmoke}
-      onRunSandboxTargetPoc={onRunSandboxTargetPoc}
-      onStartSandboxService={onStartSandboxService}
     />
   );
 
@@ -85,6 +84,22 @@ export function RuntimePage({
             key: "containers",
             label: "Containers",
             children: <RuntimeContainersPanel containerColumns={containerColumns} containers={containers} />,
+          },
+          {
+            key: "sandbox",
+            label: "Sandbox",
+            children: (
+              <RuntimeSandboxPanel
+                auditRun={auditRun}
+                loading={loading}
+                sandboxCapabilities={sandboxCapabilities}
+                sandboxTarget={sandboxTarget}
+                sandboxUnavailableReason={sandboxUnavailableReason}
+                onRunSandboxPoc={onRunSandboxPoc}
+                onRunSandboxTargetPoc={onRunSandboxTargetPoc}
+                onStartSandboxService={onStartSandboxService}
+              />
+            ),
           },
         ]}
       />

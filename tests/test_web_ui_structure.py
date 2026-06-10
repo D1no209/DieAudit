@@ -65,11 +65,13 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
     readiness_panel = read_source("services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx")
     readiness_overview = read_source("services/web-ui/src/pages/runtime/ReadinessOverviewPanel.tsx")
     readiness_actions = read_source("services/web-ui/src/pages/runtime/ReadinessNextActionsPanel.tsx")
+    sandbox_panel = read_source("services/web-ui/src/pages/runtime/RuntimeSandboxPanel.tsx")
 
     assert "List.Item.Meta" not in runtime_page
     assert "rowKey=\"Id\"" not in runtime_page
-    for component in ("RuntimeActionBar", "RuntimeReadinessPanel", "RuntimeContainersPanel"):
+    for component in ("RuntimeActionBar", "RuntimeReadinessPanel", "RuntimeContainersPanel", "RuntimeSandboxPanel"):
         assert component in runtime_page
+    assert 'label: "Sandbox"' in runtime_page
 
     assert "List.Item.Meta" not in readiness_panel
     assert "rowKey=\"worker_id\"" not in readiness_panel
@@ -84,11 +86,15 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
     assert "Readiness data is unavailable" in readiness_panel
     assert "Readiness data is unavailable" in readiness_overview
     assert "Readiness data is unavailable" in readiness_actions
+    assert 'name="command"' in sandbox_panel
+    assert "onRunSandboxPoc" in sandbox_panel
+    assert "onStartSandboxService" in sandbox_panel
 
     for path in (
         "services/web-ui/src/pages/runtime/RuntimeActionBar.tsx",
         "services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx",
         "services/web-ui/src/pages/runtime/RuntimeContainersPanel.tsx",
+        "services/web-ui/src/pages/runtime/RuntimeSandboxPanel.tsx",
         "services/web-ui/src/pages/runtime/ReadinessCheckList.tsx",
         "services/web-ui/src/pages/runtime/ReadinessNextActionsPanel.tsx",
         "services/web-ui/src/pages/runtime/ReadinessOverviewPanel.tsx",
@@ -259,12 +265,15 @@ def test_routes_use_dashboard_controller_instead_of_flat_prop_surface() -> None:
 
 def test_app_drawers_delegate_to_focused_drawers() -> None:
     app_drawers = read_source("services/web-ui/src/components/AppDrawers.tsx")
+    finding_drawer = read_source("services/web-ui/src/components/drawers/FindingDrawer.tsx")
 
     assert "Descriptions.Item" not in app_drawers
     assert "List.Item.Meta" not in app_drawers
     assert "FindingDrawer" in app_drawers
     assert "AgentEventsDrawer" in app_drawers
     assert "ContainerLogsDrawer" in app_drawers
+    assert 'label: "PoC Execution"' in finding_drawer
+    assert 'name="command"' in finding_drawer
 
     for path in (
         "services/web-ui/src/components/drawers/FindingDrawer.tsx",

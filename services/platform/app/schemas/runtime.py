@@ -88,14 +88,7 @@ class ValidatorScaleRequest(BaseModel):
 
 class RunPocRequest(BaseModel):
     image: str = "python:3.12-slim"
-    command: list[str] = Field(
-        default_factory=lambda: [
-            "python",
-            "-c",
-            "import os; print('dieaudit poc smoke'); print(os.listdir('/workspace')[:20] if os.path.exists('/workspace') else 'no workspace')",
-        ],
-        min_length=1,
-    )
+    command: list[str] = Field(min_length=1)
     env: dict[str, str] = Field(default_factory=dict)
     allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
@@ -110,10 +103,7 @@ class RunPocRequest(BaseModel):
 
 class StartSandboxServiceRequest(BaseModel):
     image: str = "python:3.12-slim"
-    command: list[str] = Field(
-        default_factory=lambda: ["python", "-m", "http.server", "8080", "--directory", "/workspace"],
-        min_length=1,
-    )
+    command: list[str] = Field(min_length=1)
     env: dict[str, str] = Field(default_factory=dict)
     service_name: str = Field(default="target", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     port: int = Field(default=8080, ge=1, le=65535)

@@ -1,5 +1,6 @@
 import { message } from "antd";
 import * as dashboardApi from "../../client/dashboardApi";
+import type { SandboxPocFormValues, SandboxServiceFormValues } from "../../types";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
@@ -41,7 +42,22 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     setManagedRuntime(managed);
   }
 
-  async function runPocSmoke() {
+  function parseCommand(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return [];
+    }
+    if (trimmed.startsWith("[")) {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+        return parsed;
+      }
+      throw new Error("Command JSON must be an array of strings.");
+    }
+    return trimmed.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  async function runSandboxPoc(values: SandboxPocFormValues) {
     if (!auditRun) {
       message.error("请先创建 AuditRun");
       return;
@@ -50,15 +66,16 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
       return;
     }
     await runner.runAction(async () => {
+      const command = parseCommand(values.command);
       const result = await dashboardApi.runSandboxPoc(auditRun.audit_run_id, {
-        image: "python:3.12-slim",
-        command: [
-          "python",
-          "-c",
-          "import os, json; print('dieaudit poc smoke'); print(json.dumps(os.listdir('/workspace')[:20] if os.path.exists('/workspace') else []))",
-        ],
+        image: values.image,
+        command,
         allow_external_network: false,
-        timeout_seconds: 120,
+        timeout_seconds: values.timeout_seconds ?? 120,
+        expected_exit_code: values.expected_exit_code ?? 0,
+        mount_workspace: values.mount_workspace ?? true,
+        target_url: values.target_url || undefined,
+        retain_runtime_on_failure: values.retain_runtime_on_failure ?? false,
         allow_weak_isolation: false,
       });
       setLastResponse(result);
@@ -67,7 +84,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     });
   }
 
-  async function startSandboxService() {
+  async function startSandboxService(values: SandboxServiceFormValues) {
     if (!auditRun) {
       message.error("请先创建 AuditRun");
       return;
@@ -76,14 +93,17 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
       return;
     }
     await runner.runAction(async () => {
+      const command = parseCommand(values.command);
       const result = await dashboardApi.startSandboxService(auditRun.audit_run_id, {
-        image: "python:3.12-slim",
-        command: ["python", "-m", "http.server", "8080", "--directory", "/workspace"],
-        service_name: "target",
-        port: 8080,
+        image: values.image,
+        command,
+        service_name: values.service_name || "target",
+        port: values.port ?? 8080,
         allow_external_network: false,
-        retain_runtime_on_failure: true,
-        startup_timeout_seconds: 30,
+        mount_workspace: values.mount_workspace ?? true,
+        retain_runtime_on_failure: values.retain_runtime_on_failure ?? true,
+        healthcheck_path: values.healthcheck_path || undefined,
+        startup_timeout_seconds: values.startup_timeout_seconds ?? 30,
         allow_weak_isolation: false,
       });
       setSandboxTarget({ network: result.network, target_url: result.target_url });
@@ -93,7 +113,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     });
   }
 
-  async function runSandboxTargetPoc() {
+  async function runSandboxTargetPoc(values: SandboxPocFormValues) {
     if (!auditRun) {
       message.error("请先创建 AuditRun");
       return;
@@ -106,18 +126,17 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
       return;
     }
     await runner.runAction(async () => {
+      const command = parseCommand(values.command);
       const result = await dashboardApi.runSandboxPoc(auditRun.audit_run_id, {
-        image: "python:3.12-slim",
-        command: [
-          "python",
-          "-c",
-          "import os, urllib.request; url=os.environ['TARGET_URL']; r=urllib.request.urlopen(url, timeout=5); print(url); print(r.status); print(r.read(120).decode('utf-8', 'replace'))",
-        ],
+        image: values.image,
+        command,
         network_name: sandboxTarget.network,
-        target_url: sandboxTarget.target_url,
+        target_url: values.target_url || sandboxTarget.target_url,
         allow_external_network: false,
-        timeout_seconds: 120,
-        expected_exit_code: 0,
+        timeout_seconds: values.timeout_seconds ?? 120,
+        expected_exit_code: values.expected_exit_code ?? 0,
+        mount_workspace: values.mount_workspace ?? true,
+        retain_runtime_on_failure: values.retain_runtime_on_failure ?? false,
         allow_weak_isolation: false,
       });
       setLastResponse(result);
@@ -126,7 +145,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     });
   }
 
-  async function runFindingPoc() {
+  async function runFindingPoc(values: SandboxPocFormValues) {
     if (!selectedFinding || !auditRun) {
       return;
     }
@@ -135,16 +154,15 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     }
     const findingId = selectedFinding.finding.finding_id;
     await runner.runAction(async () => {
+      const command = parseCommand(values.command);
       const result = await dashboardApi.runFindingPoc(findingId, {
-        image: "python:3.12-slim",
-        command: [
-          "python",
-          "-c",
-          "import os, json; print('dieaudit finding poc smoke'); print(json.dumps({'workspace': os.listdir('/workspace')[:20] if os.path.exists('/workspace') else [], 'artifact_dir': os.environ.get('ARTIFACT_DIR')}))",
-        ],
+        image: values.image,
+        command,
         allow_external_network: false,
-        timeout_seconds: 120,
-        expected_exit_code: 0,
+        timeout_seconds: values.timeout_seconds ?? 120,
+        expected_exit_code: values.expected_exit_code ?? 0,
+        mount_workspace: values.mount_workspace ?? true,
+        retain_runtime_on_failure: values.retain_runtime_on_failure ?? false,
         allow_weak_isolation: false,
       });
       setLastResponse(result);
@@ -178,7 +196,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     cleanupExpiredRuntime,
     previewLocalStorageCleanup,
     runFindingPoc,
-    runPocSmoke,
+    runSandboxPoc,
     runSandboxTargetPoc,
     sandboxUnavailableMessage,
     startSandboxService,

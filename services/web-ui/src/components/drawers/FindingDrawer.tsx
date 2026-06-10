@@ -1,6 +1,6 @@
 import { FileTextOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
-import { Button, Collapse, Descriptions, Drawer, List, Space, Tag, Typography } from "antd";
-import type { ArtifactRef, FindingDetail } from "../../types";
+import { Button, Collapse, Descriptions, Drawer, Form, Input, InputNumber, List, Space, Switch, Tag, Typography } from "antd";
+import type { ArtifactRef, FindingDetail, SandboxPocFormValues } from "../../types";
 import { severityColor } from "../../utils/format";
 
 const { Text } = Typography;
@@ -12,7 +12,7 @@ type Props = {
   sandboxUnavailableReason: string;
   onClose: () => void;
   onOpenArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
-  onRunFindingPoc: () => void;
+  onRunFindingPoc: (values: SandboxPocFormValues) => void;
 };
 
 export function FindingDrawer({
@@ -28,17 +28,6 @@ export function FindingDrawer({
     <Drawer title={finding?.finding.title || "Finding"} open={Boolean(finding)} width={720} onClose={onClose}>
       {finding && (
         <Space direction="vertical" size={16} className="drawer-stack">
-          <Space wrap>
-            <Button
-              icon={<SafetyCertificateOutlined />}
-              loading={loading}
-              disabled={!sandboxExecutionAvailable}
-              title={sandboxExecutionAvailable ? undefined : sandboxUnavailableReason}
-              onClick={onRunFindingPoc}
-            >
-              运行 PoC 验证
-            </Button>
-          </Space>
           <Descriptions bordered size="small" column={1}>
             <Descriptions.Item label="ID">{finding.finding.finding_id}</Descriptions.Item>
             <Descriptions.Item label="Severity">
@@ -93,6 +82,56 @@ export function FindingDrawer({
                 key: "attempts",
                 label: `Validation Attempts (${finding.validation_attempts.length})`,
                 children: <pre>{JSON.stringify(finding.validation_attempts, null, 2)}</pre>,
+              },
+              {
+                key: "poc",
+                label: "PoC Execution",
+                children: (
+                  <Form
+                    layout="vertical"
+                    initialValues={{
+                      image: "python:3.12-slim",
+                      expected_exit_code: 0,
+                      mount_workspace: true,
+                      retain_runtime_on_failure: false,
+                      timeout_seconds: 120,
+                    }}
+                    onFinish={onRunFindingPoc}
+                  >
+                    <Form.Item name="image" label="Image" rules={[{ required: true }]}>
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name="command" label="Command" rules={[{ required: true }]}>
+                      <Input.TextArea rows={5} placeholder={"python\n-c\nprint('project-specific PoC')"} />
+                    </Form.Item>
+                    <Space wrap>
+                      <Form.Item name="timeout_seconds" label="Timeout">
+                        <InputNumber min={1} max={3600} />
+                      </Form.Item>
+                      <Form.Item name="expected_exit_code" label="Expected Exit">
+                        <InputNumber />
+                      </Form.Item>
+                    </Space>
+                    <Space wrap>
+                      <Form.Item name="mount_workspace" label="Mount Workspace" valuePropName="checked">
+                        <Switch />
+                      </Form.Item>
+                      <Form.Item name="retain_runtime_on_failure" label="Retain On Failure" valuePropName="checked">
+                        <Switch />
+                      </Form.Item>
+                    </Space>
+                    <Button
+                      icon={<SafetyCertificateOutlined />}
+                      loading={loading}
+                      htmlType="submit"
+                      type="primary"
+                      disabled={!sandboxExecutionAvailable}
+                      title={sandboxExecutionAvailable ? undefined : sandboxUnavailableReason}
+                    >
+                      Run PoC
+                    </Button>
+                  </Form>
+                ),
               },
               {
                 key: "raw",
