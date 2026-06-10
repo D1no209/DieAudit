@@ -77,6 +77,112 @@ def test_reused_sandbox_network_must_be_managed_current_run(monkeypatch) -> None
     asyncio.run(_run_reused_sandbox_network_policy_test(monkeypatch))
 
 
+def test_sandbox_network_creation_and_reuse_policy(monkeypatch) -> None:
+    asyncio.run(_run_sandbox_network_creation_and_reuse_policy_test(monkeypatch))
+
+
+async def _run_sandbox_network_creation_and_reuse_policy_test(monkeypatch) -> None:
+    orchestrator = _orchestrator()
+    events = []
+    networks = {
+        "dieaudit-run-1-sandbox": {
+            "Name": "dieaudit-run-1-sandbox",
+            "Internal": True,
+            "Labels": {
+                "dieaudit.managed": "true",
+                "dieaudit.audit_run_id": "run-1",
+                "dieaudit.project_id": "project-1",
+                "dieaudit.role": "sandbox",
+            },
+        },
+        "dieaudit-run-1-external": {
+            "Name": "dieaudit-run-1-external",
+            "Internal": False,
+            "Labels": {
+                "dieaudit.managed": "true",
+                "dieaudit.audit_run_id": "run-1",
+                "dieaudit.project_id": "project-1",
+                "dieaudit.role": "sandbox",
+            },
+        },
+        "dieaudit-run-1-other-project": {
+            "Name": "dieaudit-run-1-other-project",
+            "Internal": True,
+            "Labels": {
+                "dieaudit.managed": "true",
+                "dieaudit.audit_run_id": "run-1",
+                "dieaudit.project_id": "project-2",
+                "dieaudit.role": "sandbox",
+            },
+        },
+    }
+
+    async def fake_network_exists(name):
+        return networks.get(name)
+
+    async def fake_create_network(name, *, internal=True, labels=None):
+        created = {"Name": name, "Internal": internal, "Labels": labels or {}}
+        networks[name] = created
+        events.append(("create_network", name, internal))
+        return created
+
+    async def fake_record_network(audit_run_id, name, status):
+        events.append(("record_network", audit_run_id, name, status))
+
+    orchestrator.docker = SimpleNamespace(network_exists=fake_network_exists, create_network=fake_create_network)
+    monkeypatch.setattr(orchestrator, "_record_network", fake_record_network)
+
+    created, created_now = await orchestrator._ensure_managed_run_network(
+        network_name="dieaudit-run-1-new",
+        audit_run_id="run-1",
+        project_id="project-1",
+        role="sandbox",
+        allow_external_network=False,
+        labels={
+            "dieaudit.managed": "true",
+            "dieaudit.audit_run_id": "run-1",
+            "dieaudit.project_id": "project-1",
+            "dieaudit.role": "sandbox",
+        },
+    )
+    assert created["Name"] == "dieaudit-run-1-new"
+    assert created["Internal"] is True
+    assert created_now is True
+    assert ("record_network", "run-1", "dieaudit-run-1-new", "created") in events
+
+    reused, created_now = await orchestrator._ensure_managed_run_network(
+        network_name="dieaudit-run-1-sandbox",
+        audit_run_id="run-1",
+        project_id="project-1",
+        role="sandbox",
+        allow_external_network=False,
+        labels={},
+    )
+    assert reused["Name"] == "dieaudit-run-1-sandbox"
+    assert created_now is False
+    assert ("record_network", "run-1", "dieaudit-run-1-sandbox", "reused") in events
+
+    rejected_cases = [
+        ("dieaudit-run-1-sandbox", True),
+        ("dieaudit-run-1-external", False),
+        ("dieaudit-run-1-other-project", False),
+    ]
+    for network_name, allow_external_network in rejected_cases:
+        try:
+            await orchestrator._ensure_managed_run_network(
+                network_name=network_name,
+                audit_run_id="run-1",
+                project_id="project-1",
+                role="sandbox",
+                allow_external_network=allow_external_network,
+                labels={},
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"network should have been rejected: {network_name}")
+
+
 async def _run_reused_sandbox_network_policy_test(monkeypatch) -> None:
     orchestrator = _orchestrator()
     networks = {

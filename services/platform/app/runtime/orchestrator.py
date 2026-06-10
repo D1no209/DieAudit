@@ -670,12 +670,19 @@ class RuntimeOrchestrator:
 
         sandbox_id = str(uuid.uuid4())
         network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}-sandbox"
-        labels = self._labels(audit_run_id, project_id, role="sandbox", ttl=utc_ttl(hours=8))
+        network_labels = self._labels(audit_run_id, project_id, role="sandbox", ttl=utc_ttl(hours=8))
+        network_labels["dieaudit.sandbox_runtime"] = str(capabilities.get("requested_runtime") or self.settings.default_sandbox_runtime)
+        _, created_network = await self._ensure_managed_run_network(
+            network_name=network_name,
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            role="sandbox",
+            allow_external_network=allow_external_network,
+            labels=network_labels,
+        )
+        labels = dict(network_labels)
         labels["dieaudit.sandbox_id"] = sandbox_id
         labels["dieaudit.sandbox_service"] = service_name
-        labels["dieaudit.sandbox_runtime"] = str(capabilities.get("requested_runtime") or self.settings.default_sandbox_runtime)
-        await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
-        await self._record_network(audit_run_id, network_name, "created")
 
         mounts: list[dict[str, Any]] = []
         if mount_workspace and workspace_host_path:
@@ -762,7 +769,7 @@ class RuntimeOrchestrator:
                     if not retain_runtime_on_failure:
                         await self.docker.remove_container(created["Id"], force=True)
                         await self._mark_container_state(created["Id"], "removed", log_artifact=log_artifact)
-            if not retain_runtime_on_failure:
+            if created_network and not retain_runtime_on_failure:
                 await self.docker.remove_network(network_name)
                 await self._mark_network_cleaned(audit_run_id, network_name)
             raise
@@ -1329,6 +1336,34 @@ class RuntimeOrchestrator:
         if role not in {"runtime", "sandbox", "poc"}:
             raise RuntimeError(f"sandbox network has unsupported role label: {role or 'missing'}")
         return network
+
+    async def _ensure_managed_run_network(
+        self,
+        *,
+        network_name: str,
+        audit_run_id: str,
+        project_id: str,
+        role: str,
+        allow_external_network: bool,
+        labels: dict[str, str],
+    ) -> tuple[dict[str, Any], bool]:
+        existing = await self.docker.network_exists(network_name)
+        if existing:
+            network = await self._require_managed_run_network(network_name=network_name, audit_run_id=audit_run_id)
+            existing_labels = network.get("Labels") or {}
+            if existing_labels.get("dieaudit.project_id") != project_id:
+                raise RuntimeError(f"sandbox network belongs to a different project: {network_name}")
+            if existing_labels.get("dieaudit.role") != role:
+                raise RuntimeError(f"sandbox network has unsupported role label: {existing_labels.get('dieaudit.role') or 'missing'}")
+            internal = bool(network.get("Internal"))
+            if internal == allow_external_network:
+                mode = "external" if allow_external_network else "internal"
+                raise RuntimeError(f"sandbox network already exists with incompatible {mode} network policy: {network_name}")
+            await self._record_network(audit_run_id, network_name, "reused")
+            return network, False
+        created = await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
+        await self._record_network(audit_run_id, network_name, "created")
+        return created, True
 
     async def _mark_network_cleaned(self, audit_run_id: str, name: str) -> None:
         async with SessionLocal() as session:
