@@ -92,6 +92,76 @@ def test_embedding_status_passes_for_configured_remote_provider(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_embedding_health_skips_probe_for_hash_provider(tmp_path: Path) -> None:
+    service = KnowledgeService(SimpleNamespace(artifact_root=tmp_path, qdrant_url="http://qdrant:6333"))
+
+    status = await service.embedding_health()
+
+    assert status["status"] == "warn"
+    assert status["probe"]["attempted"] is False
+
+
+@pytest.mark.asyncio
+async def test_embedding_health_probes_remote_provider(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 0.0, 0.0]}]}))
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant:6333",
+            knowledge_collection_name="remote",
+            knowledge_vector_size=3,
+            knowledge_embedding_provider="openai-compatible",
+            knowledge_embedding_base_url="http://embedding.local/v1",
+            knowledge_embedding_api_key="secret",
+            knowledge_embedding_model="embedding-model",
+            knowledge_embedding_timeout_seconds=5,
+        )
+    )
+
+    status = await service.embedding_health()
+
+    assert status["status"] == "pass"
+    assert status["probe"] == {"attempted": True, "ok": True, "dimension": 3}
+
+
+@pytest.mark.asyncio
+async def test_embedding_health_fails_when_remote_probe_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(500, text="provider down"))
+    original_async_client = httpx.AsyncClient
+
+    def async_client_factory(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client_factory)
+    service = KnowledgeService(
+        SimpleNamespace(
+            artifact_root=tmp_path,
+            qdrant_url="http://qdrant:6333",
+            knowledge_collection_name="remote",
+            knowledge_vector_size=3,
+            knowledge_embedding_provider="openai-compatible",
+            knowledge_embedding_base_url="http://embedding.local/v1",
+            knowledge_embedding_api_key="secret",
+            knowledge_embedding_model="embedding-model",
+            knowledge_embedding_timeout_seconds=5,
+        )
+    )
+
+    status = await service.embedding_health()
+
+    assert status["status"] == "fail"
+    assert status["probe"]["attempted"] is True
+    assert status["probe"]["ok"] is False
+    assert "provider failed" in status["probe"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_openai_compatible_embeddings_parse_response(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 

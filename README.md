@@ -121,9 +121,10 @@ KNOWLEDGE_EMBEDDING_API_KEY=...
 KNOWLEDGE_EMBEDDING_MODEL=text-embedding-3-small
 KNOWLEDGE_VECTOR_SIZE=1536
 KNOWLEDGE_COLLECTION_NAME=dieaudit_knowledge_embeddings_v1
+KNOWLEDGE_EMBEDDING_PROBE_ON_READINESS=true
 ```
 
-Do not reuse an existing Qdrant collection when changing embedding dimension or provider. Reindex uploaded knowledge documents after changing these settings.
+`/runtime/readiness` and `/knowledge/status` probe a configured semantic provider by requesting one embedding and checking the returned vector dimension. Do not reuse an existing Qdrant collection when changing embedding dimension or provider. Reindex uploaded knowledge documents after changing these settings.
 
 ## Artifact Access
 

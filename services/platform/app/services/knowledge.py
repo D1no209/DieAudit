@@ -249,6 +249,35 @@ class KnowledgeService:
             status["message"] = "KNOWLEDGE_EMBEDDING_MODEL is required for openai-compatible embeddings"
         return status
 
+    async def embedding_health(self, *, probe: bool = True) -> dict[str, Any]:
+        status = self.embedding_status()
+        status["probe_enabled"] = bool(probe)
+        if status.get("status") != "pass":
+            status["probe"] = {"attempted": False, "reason": status.get("message")}
+            return status
+        if not status.get("semantic"):
+            status["probe"] = {"attempted": False, "reason": "non-semantic local provider"}
+            return status
+        if not probe:
+            status["probe"] = {"attempted": False, "reason": "disabled"}
+            return status
+        try:
+            vectors = await self.embed_texts(["DieAudit embedding readiness probe"])
+        except Exception as exc:
+            status["status"] = "fail"
+            status["configured"] = False
+            status["probe"] = {"attempted": True, "ok": False, "error": str(exc)}
+            status["message"] = "knowledge embedding provider probe failed"
+            return status
+        vector = vectors[0] if vectors else []
+        status["probe"] = {
+            "attempted": True,
+            "ok": True,
+            "dimension": len(vector),
+        }
+        status["message"] = "knowledge embedding provider is configured and probe succeeded"
+        return status
+
     async def _openai_compatible_embeddings(self, texts: list[str]) -> list[list[float]]:
         base_url = str(getattr(self.settings, "knowledge_embedding_base_url", "") or "").rstrip("/")
         api_key = str(getattr(self.settings, "knowledge_embedding_api_key", "") or "")

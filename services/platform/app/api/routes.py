@@ -215,7 +215,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.get("/knowledge/status")
     async def knowledge_status() -> dict[str, Any]:
         service = KnowledgeService(settings)
-        return {"embedding": service.embedding_status()}
+        return {"embedding": await service.embedding_health(probe=settings.knowledge_embedding_probe_on_readiness)}
 
     @router.post("/knowledge/documents")
     async def upload_knowledge_document(
@@ -1108,7 +1108,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             )
         except Exception as exc:
             checks.append({"id": "sandbox_isolation", "title": "Sandbox has strong isolation", "status": "fail", "detail": str(exc)})
-        embedding = KnowledgeService(settings).embedding_status()
+        embedding = await KnowledgeService(settings).embedding_health(probe=settings.knowledge_embedding_probe_on_readiness)
         checks.append(
             {
                 "id": "knowledge_embedding",
