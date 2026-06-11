@@ -2429,6 +2429,18 @@ async def _artifact_references(settings: Settings, artifact_path: Path) -> list[
                     }
                 )
 
+        findings = (await session.execute(select(Finding))).scalars()
+        for row in findings:
+            if artifact_path_matches(settings, f"findings/{row.audit_run_id}/{row.finding_id}/finding.md", artifact_path):
+                references.append(
+                    {
+                        "kind": "finding_markdown",
+                        "project_id": row.project_id,
+                        "audit_run_id": row.audit_run_id,
+                        "record_id": row.finding_id,
+                    }
+                )
+
         documents = (await session.execute(select(KnowledgeDocument).where(KnowledgeDocument.artifact_path.is_not(None)))).scalars()
         for row in documents:
             if artifact_path_matches(settings, row.artifact_path, artifact_path):

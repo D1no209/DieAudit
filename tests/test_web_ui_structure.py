@@ -227,6 +227,8 @@ def test_finding_review_has_dedicated_page_not_global_drawer() -> None:
     assert "PoC Execution" in detail_panel
     assert "Tracking Markdown" in detail_panel
     assert "finding_markdown" in detail_panel
+    assert "onPreviewArtifact" in review_page
+    assert "onPreviewArtifact" in detail_panel
     assert "onRunFindingPoc" in detail_panel
     assert "renderFindingReviewRoute" in renderers
     assert 'onViewChange("findings")' in renderers

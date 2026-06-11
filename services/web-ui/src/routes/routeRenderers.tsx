@@ -88,6 +88,7 @@ export function renderFindingReviewRoute({ actions, state }: DashboardController
       sandboxUnavailableReason={state.sandboxUnavailableReason}
       selectedFinding={state.selectedFinding}
       onOpenArtifact={actions.openArtifact}
+      onPreviewArtifact={actions.previewArtifact}
       onRunFindingPoc={actions.runFindingPoc}
       onViewFindings={() => onViewChange("findings")}
     />

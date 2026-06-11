@@ -208,7 +208,7 @@ class _FakeSession:
 
 
 def _artifact_reference_calls(row):
-    return [[], [], [], [], [], [row]]
+    return [[], [], [], [], [], [], [row]]
 
 
 def test_artifact_reference_check_allows_explicit_orm_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -238,6 +238,33 @@ def test_artifact_reference_check_denies_unreferenced_artifact(monkeypatch: pyte
     monkeypatch.setattr(routes, "SessionLocal", lambda: _FakeSession([[], [], [], [], [], [], []]))
 
     assert not asyncio.run(routes._artifact_is_referenced(settings, artifact.resolve()))
+
+
+def test_artifact_reference_check_allows_finding_tracking_markdown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact = tmp_path / "findings" / "run-1" / "finding-1" / "finding.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("# Finding", encoding="utf-8")
+    settings = SimpleNamespace(artifact_root=tmp_path)
+    finding = SimpleNamespace(
+        audit_run_id="run-1",
+        finding_id="finding-1",
+        project_id="project-1",
+    )
+
+    monkeypatch.setattr(routes, "SessionLocal", lambda: _FakeSession([[], [], [], [], [finding], [], []]))
+
+    references = asyncio.run(routes._artifact_references(settings, artifact.resolve()))
+
+    assert references == [
+        {
+            "kind": "finding_markdown",
+            "project_id": "project-1",
+            "audit_run_id": "run-1",
+            "record_id": "finding-1",
+        }
+    ]
 
 
 def test_principal_artifact_scope_allows_matching_project_or_audit_run() -> None:

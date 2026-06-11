@@ -10,6 +10,7 @@ type Props = {
   sandboxUnavailableReason: string;
   selectedFinding?: FindingDetail;
   onOpenArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
+  onPreviewArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
   onRunFindingPoc: (values: SandboxPocFormValues) => void;
   onViewFindings: () => void;
 };
@@ -20,6 +21,7 @@ export function FindingReviewPage({
   sandboxUnavailableReason,
   selectedFinding,
   onOpenArtifact,
+  onPreviewArtifact,
   onRunFindingPoc,
   onViewFindings,
 }: Props) {
@@ -40,6 +42,7 @@ export function FindingReviewPage({
         sandboxExecutionAvailable={sandboxExecutionAvailable}
         sandboxUnavailableReason={sandboxUnavailableReason}
         onOpenArtifact={onOpenArtifact}
+        onPreviewArtifact={onPreviewArtifact}
         onRunFindingPoc={onRunFindingPoc}
       />
     </>

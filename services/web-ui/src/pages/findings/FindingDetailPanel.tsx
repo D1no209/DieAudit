@@ -11,6 +11,7 @@ type Props = {
   sandboxExecutionAvailable: boolean;
   sandboxUnavailableReason: string;
   onOpenArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
+  onPreviewArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
   onRunFindingPoc: (values: SandboxPocFormValues) => void;
 };
 
@@ -20,6 +21,7 @@ export function FindingDetailPanel({
   sandboxExecutionAvailable,
   sandboxUnavailableReason,
   onOpenArtifact,
+  onPreviewArtifact,
   onRunFindingPoc,
 }: Props) {
   if (!finding) {
@@ -58,6 +60,14 @@ export function FindingDetailPanel({
                 size="small"
                 icon={<FileTextOutlined />}
                 disabled={!finding.finding.finding_markdown}
+                onClick={() => onPreviewArtifact(finding.finding.finding_markdown)}
+              >
+                预览
+              </Button>
+              <Button
+                size="small"
+                icon={<FileTextOutlined />}
+                disabled={!finding.finding.finding_markdown}
                 onClick={() => onOpenArtifact(finding.finding.finding_markdown)}
               >
                 打开
@@ -78,6 +88,15 @@ export function FindingDetailPanel({
                 renderItem={(item) => (
                   <List.Item
                     actions={[
+                      <Button
+                        key="preview"
+                        size="small"
+                        icon={<FileTextOutlined />}
+                        disabled={!item.artifact && !item.artifact_path}
+                        onClick={() => onPreviewArtifact(item.artifact, item.artifact_path)}
+                      >
+                        预览
+                      </Button>,
                       <Button
                         key="artifact"
                         size="small"
