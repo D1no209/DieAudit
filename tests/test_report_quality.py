@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.api.routes import _report_markdown, _report_summary
+from app.api.routes import _finding_artifact_contract, _finding_report_markdown, _report_markdown, _report_summary
 
 
 def test_report_summary_exposes_quality_gaps() -> None:
@@ -50,7 +50,11 @@ def test_report_summary_exposes_quality_gaps() -> None:
 
     summary = _report_summary(
         findings=findings,
-        evidence=[],
+        evidence=[
+            {"kind": "source-sink-chain", "finding_id": "finding-1"},
+            {"kind": "poc-artifact", "finding_id": "finding-1"},
+            {"kind": "poc-verification", "finding_id": "finding-1"},
+        ],
         attempts=attempts,
         agent_runs=agent_runs,
         audit_events=audit_events,
@@ -61,6 +65,9 @@ def test_report_summary_exposes_quality_gaps() -> None:
     )
 
     assert summary["finding_count_by_status"] == {"candidate": 1, "needs_review": 1}
+    assert summary["source_sink_chain_count"] == 1
+    assert summary["poc_artifact_count"] == 1
+    assert summary["poc_verification_count"] == 1
     assert summary["validation_attempt_count_by_status"] == {"failed": 1}
     assert summary["parse_warning_count"] == 1
     assert summary["tool_failure_count"] == 1
@@ -84,6 +91,10 @@ def test_report_markdown_includes_quality_sections() -> None:
             "tool_failure_count": 1,
             "validator_failure_count": 1,
             "unvalidated_findings": 1,
+            "source_sink_chain_count": 1,
+            "poc_artifact_count": 1,
+            "poc_verification_count": 1,
+            "finding_report_count": 1,
             "finding_count_by_status": {"needs_review": 1},
             "validation_attempt_count_by_status": {"failed": 1},
             "parse_warnings": [{"agent_run_id": "agent-1", "status": "parsed_with_warnings"}],
@@ -119,4 +130,52 @@ def test_report_markdown_includes_quality_sections() -> None:
     assert "### Tool Failures" in markdown
     assert "### Unvalidated Findings" in markdown
     assert "### Dependency Coverage" in markdown
+    assert "PoC artifacts" in markdown
+    assert "Source-to-sink chains" in markdown
     assert "completed_with_warnings" in markdown
+
+
+def test_finding_report_markdown_is_finding_scoped() -> None:
+    markdown = _finding_report_markdown(
+        {
+            "finding": {
+                "finding_id": "finding-1",
+                "title": "SQL injection",
+                "severity": "high",
+                "status": "confirmed",
+                "file_path": "src/app.py",
+                "line_start": 42,
+                "source": "source-sink-finder",
+                "description": "tainted request parameter reaches SQL sink",
+            },
+            "evidence": [
+                {
+                    "kind": "source-sink-chain",
+                    "summary": "request.args reaches db.execute",
+                    "artifact": {"artifact_id": "artifact-1"},
+                    "payload": {},
+                },
+                {"kind": "poc-artifact", "summary": "curl reproducer", "payload": {"artifact_id": "poc-1"}},
+            ],
+            "validation_attempts": [
+                {"round_index": 1, "status": "completed", "agent_run_id": "validator-1"},
+            ],
+            "agent_runs": [
+                {"agent_name": "opencode-source-sink-finder", "agent_run_id": "agent-1", "status": "completed"},
+            ],
+        }
+    )
+
+    assert "Finding Report: SQL injection" in markdown
+    assert "source-sink-chain" in markdown
+    assert "poc-artifact" in markdown
+    assert "opencode-source-sink-finder" in markdown
+    assert "validator-1" in markdown
+
+
+def test_finding_artifact_contract_uses_independent_finding_directory() -> None:
+    contract = _finding_artifact_contract("run-1", "finding-1", "source-sink")
+
+    assert contract["finding_directory"] == "findings/run-1/finding-1"
+    assert contract["agent_writable_report_path"] == "/artifacts/source-sink-report.md"
+    assert contract["platform_canonical_directory"] == "findings/run-1/finding-1/agent-reports"

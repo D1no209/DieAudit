@@ -32,11 +32,13 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
                 "opencode-orchestrator",
                 "opencode-code-auditor",
                 "opencode-recon-auditor",
-            "opencode-sca-analyst",
-            "opencode-validator",
-            "opencode-judger",
-            "opencode-poc-writer",
-        ]
+                "opencode-sca-analyst",
+                "opencode-source-sink-finder",
+                "opencode-validator",
+                "opencode-judger",
+                "opencode-poc-writer",
+                "opencode-poc-verifier",
+            ]
     ]
     mcp_templates = [
         {"name": name, "image": "dieaudit/tool-mcp:local"}
@@ -73,9 +75,11 @@ def test_joern_is_production_required_when_required_binaries_available() -> None
                     "opencode-code-auditor",
                     "opencode-recon-auditor",
                     "opencode-sca-analyst",
+                    "opencode-source-sink-finder",
                     "opencode-validator",
                     "opencode-judger",
                     "opencode-poc-writer",
+                    "opencode-poc-verifier",
                 ]
             ],
             [
@@ -122,7 +126,15 @@ def test_joern_template_uses_executable_java_tmpdir() -> None:
 
 
 def test_default_opencode_audit_agents_are_authorized_for_joern() -> None:
-    for name in ["opencode-orchestrator", "opencode-recon-auditor", "opencode-code-auditor", "opencode-validator"]:
+    for name in [
+        "opencode-orchestrator",
+        "opencode-recon-auditor",
+        "opencode-code-auditor",
+        "opencode-source-sink-finder",
+        "opencode-validator",
+        "opencode-judger",
+        "opencode-poc-verifier",
+    ]:
         template = yaml.safe_load((ROOT / f"configs/agent-templates/{name}.yaml").read_text(encoding="utf-8"))
 
         assert "joern-mcp" in template["required_mcp"]
@@ -170,9 +182,11 @@ def test_joern_missing_binary_fails_production_readiness_but_codeql_does_not() -
                     "opencode-code-auditor",
                     "opencode-recon-auditor",
                     "opencode-sca-analyst",
+                    "opencode-source-sink-finder",
                     "opencode-validator",
                     "opencode-judger",
                     "opencode-poc-writer",
+                    "opencode-poc-verifier",
                 ]
             ],
             [

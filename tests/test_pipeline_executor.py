@@ -77,6 +77,10 @@ class CallbackRecorder:
     async def run_code_batch_analysis(self, *args: Any) -> dict[str, Any]:
         return {"ok": True, "planned": 2, "completed": 2, "failed": 0, "findings_created": 1}
 
+    async def run_source_sink_analysis(self, *args: Any) -> dict[str, Any]:
+        findings = next((item for item in reversed(args) if isinstance(item, list)), [])
+        return {"ok": True, "scheduled": len(findings), "completed": len(findings), "failed": 0, "chains_created": len(findings)}
+
     async def run_sca(self, *args: Any) -> dict[str, Any]:
         return {"ok": True, "findings_created": 0}
 
@@ -94,6 +98,12 @@ class CallbackRecorder:
 
     async def judge(self, audit_run_id: str, runtime: Any) -> dict[str, Any]:
         return {"ok": True, "decisions": []}
+
+    async def pocs(self, audit_run_id: str, runtime: Any) -> dict[str, Any]:
+        return {"ok": True, "scheduled": 1, "completed": 1, "failed": 0, "poc_artifact_count": 1}
+
+    async def verify_pocs(self, audit_run_id: str, runtime: Any) -> dict[str, Any]:
+        return {"ok": True, "scheduled": 1, "completed": 1, "failed": 0, "verification_evidence_created": 1}
 
     async def report(self, audit_run_id: str, settings: Any) -> dict[str, Any]:
         return {"ok": True, "report_id": "report-1"}
@@ -115,9 +125,12 @@ def build_executor(recorder: CallbackRecorder, runtime: FakeRuntime | None = Non
         list_findings=recorder.list_findings,
         run_joern=recorder.run_joern,
         run_code_batch_analysis=recorder.run_code_batch_analysis,
+        run_source_sink_analysis=recorder.run_source_sink_analysis,
         run_sca=recorder.run_sca,
         run_semgrep=recorder.run_semgrep,
         judge_audit_run=recorder.judge,
+        generate_pocs=recorder.pocs,
+        verify_pocs=recorder.verify_pocs,
         generate_report=recorder.report,
         compact_event_payload=lambda value: value,
     )
@@ -158,8 +171,11 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
         "code-analysis",
         "sca",
         "semgrep",
+        "source-sink-analysis",
         "validators",
         "judgement",
+        "poc-writing",
+        "poc-verification",
         "report",
         "completed",
     ]

@@ -31,10 +31,13 @@ class PipelineExecutor:
         run_sca: AsyncCallback,
         run_semgrep: AsyncCallback,
         judge_audit_run: AsyncCallback,
+        generate_pocs: AsyncCallback,
+        verify_pocs: AsyncCallback,
         generate_report: AsyncCallback,
         compact_event_payload: Callable[[Any], Any],
         run_joern: AsyncCallback | None = None,
         run_code_batch_analysis: AsyncCallback | None = None,
+        run_source_sink_analysis: AsyncCallback | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -50,9 +53,12 @@ class PipelineExecutor:
         self.list_findings = list_findings
         self.run_joern = run_joern
         self.run_code_batch_analysis = run_code_batch_analysis
+        self.run_source_sink_analysis = run_source_sink_analysis
         self.run_sca = run_sca
         self.run_semgrep = run_semgrep
         self.judge_audit_run = judge_audit_run
+        self.generate_pocs = generate_pocs
+        self.verify_pocs = verify_pocs
         self.generate_report = generate_report
         self.compact_event_payload = compact_event_payload
 
@@ -190,6 +196,37 @@ class PipelineExecutor:
             await self.raise_if_cancelled(audit_run_id)
 
             findings = await self.list_findings(audit_run_id)
+            if self._source_sink_analysis_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="source-sink-analysis", status="running")
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_started",
+                    {"step": "source-sink-analysis", "finding_count": len(findings)},
+                )
+                try:
+                    if self.run_source_sink_analysis is None:
+                        source_sink_result = {"ok": False, "available": False, "error": "source-to-sink callback is not configured"}
+                    else:
+                        source_sink_result = await self.run_source_sink_analysis(
+                            audit_run_id,
+                            audit_run["project_id"],
+                            workspace_path,
+                            self.runtime,
+                            audit_run,
+                            findings,
+                        )
+                except Exception as exc:
+                    source_sink_result = {"ok": False, "error": str(exc)}
+                    await self.record_pipeline_event(audit_run_id, "source_sink_analysis_failed", source_sink_result)
+                steps.append({"step": "source-sink-analysis", "result": source_sink_result})
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "source-sink-analysis", "result": self.compact_event_payload(source_sink_result)},
+                )
+                findings = await self.list_findings(audit_run_id)
+                await self.raise_if_cancelled(audit_run_id)
+
             await self.set_pipeline_state(audit_run_id, stage="validators", status="running")
             await self.record_audit_run_event(
                 audit_run_id,
@@ -227,6 +264,37 @@ class PipelineExecutor:
                 {"step": "judgement", "result": self.compact_event_payload(judge_result)},
             )
             await self.raise_if_cancelled(audit_run_id)
+
+            await self.set_pipeline_state(audit_run_id, stage="poc-writing", status="running")
+            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "poc-writing"})
+            try:
+                poc_result = await self.generate_pocs(audit_run_id, self.runtime)
+            except Exception as exc:
+                poc_result = {"ok": False, "error": str(exc)}
+                await self.record_pipeline_event(audit_run_id, "poc_writing_failed", poc_result)
+            steps.append({"step": "poc-writing", "result": poc_result})
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": "poc-writing", "result": self.compact_event_payload(poc_result)},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+
+            await self.set_pipeline_state(audit_run_id, stage="poc-verification", status="running")
+            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "poc-verification"})
+            try:
+                poc_verify_result = await self.verify_pocs(audit_run_id, self.runtime)
+            except Exception as exc:
+                poc_verify_result = {"ok": False, "error": str(exc)}
+                await self.record_pipeline_event(audit_run_id, "poc_verification_failed", poc_verify_result)
+            steps.append({"step": "poc-verification", "result": poc_verify_result})
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": "poc-verification", "result": self.compact_event_payload(poc_verify_result)},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+
             await self.set_pipeline_state(audit_run_id, stage="report", status="running")
             await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "report"})
             report_result = await self.generate_report(audit_run_id, self.settings)
@@ -373,6 +441,11 @@ class PipelineExecutor:
                 failed = int(result.get("failed") or 0)
                 if skipped or failed:
                     warnings.append({"kind": "code_batch_analysis_incomplete", "skipped": skipped, "failed": failed})
+            elif step_name == "source-sink-analysis":
+                if result.get("ok") is False:
+                    warnings.append({"kind": "source_sink_analysis_failed", "result": result})
+                if result.get("skipped"):
+                    warnings.append({"kind": "source_sink_analysis_skipped", "result": result})
             elif step_name == "validators":
                 status_counts = result.get("status_counts") if isinstance(result.get("status_counts"), dict) else {}
                 failed = int(status_counts.get("failed") or 0)
@@ -383,6 +456,18 @@ class PipelineExecutor:
                 if result.get("scheduled") == 0:
                     metrics["unvalidated_findings"] += 1
                     warnings.append({"kind": "no_validator_attempts_scheduled"})
+            elif step_name == "poc-writing":
+                if result.get("ok") is False:
+                    warnings.append({"kind": "poc_writing_failed", "result": result})
+                failed = int(result.get("failed") or 0)
+                if failed:
+                    warnings.append({"kind": "poc_writing_incomplete", "failed": failed})
+            elif step_name == "poc-verification":
+                if result.get("ok") is False:
+                    warnings.append({"kind": "poc_verification_failed", "result": result})
+                failed = int(result.get("failed") or 0)
+                if failed:
+                    warnings.append({"kind": "poc_verification_incomplete", "failed": failed})
         report_summary = report_result.get("summary") if isinstance(report_result, dict) else {}
         if isinstance(report_summary, dict):
             unvalidated = int(report_summary.get("unvalidated_findings") or 0)
@@ -396,12 +481,22 @@ class PipelineExecutor:
             judger_agent = judge_result.get("agent_run")
             if isinstance(judger_agent, dict) and judger_agent.get("ok") is False:
                 warnings.append({"kind": "judger_agent_failed", "result": judger_agent})
+            judger_agents = judge_result.get("agent_runs")
+            if isinstance(judger_agents, list):
+                failed = [item for item in judger_agents if isinstance(item, dict) and str(item.get("status") or "").lower() == "failed"]
+                if failed:
+                    warnings.append({"kind": "judger_agent_failures", "count": len(failed), "results": failed})
         return {"status": "warn" if warnings else "pass", "warnings": warnings, "metrics": metrics}
 
     @staticmethod
     def _code_batch_analysis_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
         return bool(config.get("enable_code_batch_analysis", True))
+
+    @staticmethod
+    def _source_sink_analysis_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_source_sink_analysis", True))
 
     def _agent_external_network(self, audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}

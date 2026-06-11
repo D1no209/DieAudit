@@ -11,6 +11,7 @@ from app.api.routes import (
     _cancel_reason,
     _compact_event_payload,
     _generate_report_internal,
+    _generate_pocs_internal,
     _get_audit_run,
     _is_cancel_requested,
     _judge_audit_run_internal,
@@ -24,7 +25,9 @@ from app.api.routes import (
     _run_joern_mcp,
     _run_sca_mcp,
     _run_semgrep_mcp,
+    _run_source_sink_analysis,
     _set_pipeline_state,
+    _verify_pocs_internal,
 )
 from app.repositories import init_db
 from app.runtime import RuntimeOrchestrator
@@ -54,9 +57,12 @@ def build_pipeline_executor(settings, runtime: RuntimeOrchestrator) -> PipelineE
         list_findings=_list_findings,
         run_joern=_run_joern_mcp,
         run_code_batch_analysis=_run_code_batch_analysis,
+        run_source_sink_analysis=_run_source_sink_analysis,
         run_sca=_run_sca_mcp,
         run_semgrep=_run_semgrep_mcp,
         judge_audit_run=_judge_audit_run_internal,
+        generate_pocs=_generate_pocs_internal,
+        verify_pocs=_verify_pocs_internal,
         generate_report=_generate_report_internal,
         compact_event_payload=_compact_event_payload,
     )

@@ -13,9 +13,11 @@ PRODUCTION_AGENT_TEMPLATES = {
     "opencode-code-auditor",
     "opencode-recon-auditor",
     "opencode-sca-analyst",
+    "opencode-source-sink-finder",
     "opencode-validator",
     "opencode-judger",
     "opencode-poc-writer",
+    "opencode-poc-verifier",
 }
 PRODUCTION_MCP_TEMPLATES = {
     "filesystem-mcp",

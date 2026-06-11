@@ -155,9 +155,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             list_findings=_list_findings,
             run_joern=_run_joern_mcp,
             run_code_batch_analysis=_run_code_batch_analysis,
+            run_source_sink_analysis=_run_source_sink_analysis,
             run_sca=_run_sca_mcp,
             run_semgrep=_run_semgrep_mcp,
             judge_audit_run=_judge_audit_run_internal,
+            generate_pocs=_generate_pocs_internal,
+            verify_pocs=_verify_pocs_internal,
             generate_report=_generate_report_internal,
             compact_event_payload=_compact_event_payload,
         )
@@ -3335,37 +3338,336 @@ async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str
     findings = await _list_findings(audit_run_id)
     evidence = await _list_evidence(audit_run_id)
     attempts = await _list_validation_attempts(audit_run_id)
-    agent_result: dict[str, Any] | None = None
     parsed_decisions: list[dict[str, Any]] = []
+    agent_results: list[dict[str, Any]] = []
     if findings and workspace_path:
-        try:
-            agent_result = await runtime.start_agent_run(
-                audit_run_id=audit_run_id,
-                project_id=audit_run["project_id"],
-                agent_name="opencode-judger",
-                workspace_host_path=workspace_path,
-                allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
-                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                input_payload={
-                    "goal": (
-                        "Judge the audit findings. Return JSON with decisions: "
-                        "[{\"finding_id\":\"...\",\"status\":\"confirmed|false_positive|needs_review\",\"reason\":\"...\"}]."
-                    ),
-                    "findings": findings,
-                    "evidence": evidence,
-                    "validation_attempts": attempts,
-                },
-            )
-            agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
-            if agent_run_id:
-                parsed_decisions = await _extract_judger_decisions(agent_run_id)
-        except Exception as exc:
-            agent_result = {"ok": False, "error": str(exc)}
-            await _record_pipeline_event(audit_run_id, "judger_failed", agent_result)
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        max_parallel = max(1, int(config.get("max_parallel_judgers") or 2))
+        semaphore = asyncio.Semaphore(max_parallel)
+
+        async def judge_one(finding: dict[str, Any]) -> dict[str, Any]:
+            finding_id = str(finding.get("finding_id") or "")
+            async with semaphore:
+                try:
+                    agent_result = await runtime.start_agent_run(
+                        audit_run_id=audit_run_id,
+                        project_id=audit_run["project_id"],
+                        agent_name=str(config.get("judger_agent_name") or "opencode-judger"),
+                        workspace_host_path=workspace_path,
+                        allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+                        retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+                        input_payload={
+                            "goal": (
+                                "Judge this single Finding after source-to-sink analysis and validation. Return JSON with decisions: "
+                                "[{\"finding_id\":\"...\",\"status\":\"confirmed|false_positive|needs_review\",\"reason\":\"...\"}]."
+                            ),
+                            "audit_phase": "judgement",
+                            "finding": finding,
+                            "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
+                            "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
+                            "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "judger"),
+                            "joern": _latest_joern_context(audit_run),
+                        },
+                    )
+                    agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+                    decisions = await _extract_judger_decisions(agent_run_id) if agent_run_id else []
+                    await _write_finding_agent_report(
+                        audit_run_id=audit_run_id,
+                        finding_id=finding_id,
+                        stage="judger",
+                        agent_run_id=agent_run_id or None,
+                        title="Judger Report",
+                        payload={"decisions": decisions, "agent_result": _compact_event_payload(agent_result)},
+                    )
+                    failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+                    return {
+                        "finding_id": finding_id,
+                        "status": "failed" if failed else "completed",
+                        "agent_run_id": agent_run_id or None,
+                        "decisions": decisions,
+                        "agent_result": _compact_event_payload(agent_result),
+                    }
+                except Exception as exc:
+                    result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
+                    await _record_pipeline_event(audit_run_id, "judger_finding_failed", result)
+                    return result
+
+        agent_results = await asyncio.gather(*(judge_one(finding) for finding in findings))
+        for result in agent_results:
+            parsed_decisions.extend([item for item in result.get("decisions", []) if isinstance(item, dict)])
     decisions = await _apply_judgement(audit_run_id, parsed_decisions)
-    result = {"audit_run_id": audit_run_id, "agent_run": agent_result, "decisions": decisions}
+    result = {"audit_run_id": audit_run_id, "agent_runs": agent_results, "decisions": decisions}
     await _record_pipeline_event(audit_run_id, "judgement_completed", result)
     return result
+
+
+async def _run_source_sink_analysis(
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    runtime: Any,
+    audit_run: dict[str, Any],
+    findings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    findings = findings if findings is not None else await _list_findings(audit_run_id)
+    if not findings:
+        result = {"ok": True, "available": True, "scheduled": 0, "completed": 0, "failed": 0, "skipped": True}
+        await _record_pipeline_event(audit_run_id, "source_sink_analysis_skipped", result)
+        return result
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    max_parallel = max(1, int(config.get("max_parallel_source_sink_finders") or config.get("max_parallel_code_auditors") or 2))
+    max_findings = max(1, int(config.get("max_source_sink_findings") or 50))
+    selected = findings[:max_findings]
+    evidence = await _list_evidence(audit_run_id)
+    attempts = await _list_validation_attempts(audit_run_id)
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def run_one(finding: dict[str, Any]) -> dict[str, Any]:
+        finding_id = str(finding.get("finding_id") or "")
+        async with semaphore:
+            input_payload = {
+                "goal": "For this single Finding, build or reject a source-to-sink attack chain. Return strict JSON with chains[].",
+                "audit_phase": "source-sink-analysis",
+                "finding": finding,
+                "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "source-sink"),
+                "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
+                "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
+                "joern": _latest_joern_context(audit_run),
+                "output_contract": {
+                    "chains": [
+                        {
+                            "finding_id": finding_id,
+                            "status": "chain_found|partial|not_found",
+                            "source": {"file_path": "...", "line_start": 1, "symbol": "...", "description": "..."},
+                            "sink": {"file_path": finding.get("file_path"), "line_start": finding.get("line_start"), "symbol": "...", "description": "..."},
+                            "steps": [],
+                            "sanitizers": [],
+                            "exploitability": "...",
+                            "confidence": "high|medium|low",
+                            "joern_queries": [],
+                        }
+                    ]
+                },
+            }
+            try:
+                agent_result = await runtime.start_agent_run(
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    agent_name=str(config.get("source_sink_finder_agent_name") or "opencode-source-sink-finder"),
+                    workspace_host_path=workspace_path,
+                    allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+                    retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+                    input_payload=input_payload,
+                )
+                agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+                chains = await _extract_agent_structured_list(agent_run_id, "chains")
+                created = await _persist_source_sink_chains(
+                    audit_run_id=audit_run_id,
+                    finding_id=finding_id,
+                    agent_run_id=agent_run_id or None,
+                    chains=chains,
+                )
+                failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+                status = "failed" if failed else "completed"
+                result = {
+                    "finding_id": finding_id,
+                    "status": status,
+                    "agent_run_id": agent_run_id or None,
+                    "chains_created": created,
+                    "agent_result": _compact_event_payload(agent_result),
+                }
+            except Exception as exc:
+                result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
+            await _record_pipeline_event(audit_run_id, "source_sink_finding_completed", result)
+            return result
+
+    results = await asyncio.gather(*(run_one(finding) for finding in selected))
+    status_counts = _count_by(results, "status")
+    completed = int(status_counts.get("completed") or 0)
+    failed = int(status_counts.get("failed") or 0)
+    final = {
+        "ok": failed == 0,
+        "available": True,
+        "scheduled": len(selected),
+        "completed": completed,
+        "failed": failed,
+        "skipped": 0,
+        "status_counts": status_counts,
+        "chains_created": sum(int(item.get("chains_created") or 0) for item in results),
+        "results": results,
+    }
+    await _record_pipeline_event(audit_run_id, "source_sink_analysis_completed", final)
+    return final
+
+
+async def _generate_pocs_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id)
+    if not audit_run:
+        return {"missing": True}
+    workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+    if not workspace_path:
+        return {"ok": False, "error": "audit run has no workspace path"}
+    findings = await _list_findings(audit_run_id)
+    selected = _poc_candidate_findings(findings)
+    if not selected:
+        result = {"ok": True, "scheduled": 0, "completed": 0, "failed": 0, "skipped": True, "reason": "no confirmed findings"}
+        await _record_pipeline_event(audit_run_id, "poc_writing_skipped", result)
+        return result
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    max_parallel = max(1, int(config.get("max_parallel_poc_writers") or 2))
+    max_findings = max(1, int(config.get("max_poc_findings") or 25))
+    selected = selected[:max_findings]
+    evidence = await _list_evidence(audit_run_id)
+    attempts = await _list_validation_attempts(audit_run_id)
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def run_one(finding: dict[str, Any]) -> dict[str, Any]:
+        finding_id = str(finding.get("finding_id") or "")
+        async with semaphore:
+            input_payload = {
+                "goal": "Write a reproducible proof of concept for this single confirmed Finding. Return strict JSON with pocs[].",
+                "audit_phase": "poc-writing",
+                "finding": finding,
+                "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "poc-writer"),
+                "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
+                "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
+                "joern": _latest_joern_context(audit_run),
+            }
+            try:
+                agent_result = await runtime.start_agent_run(
+                    audit_run_id=audit_run_id,
+                    project_id=audit_run["project_id"],
+                    agent_name=str(config.get("poc_writer_agent_name") or "opencode-poc-writer"),
+                    workspace_host_path=workspace_path,
+                    allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+                    retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+                    input_payload=input_payload,
+                )
+                agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+                pocs = await _extract_agent_structured_list(agent_run_id, "pocs")
+                artifacts = await _persist_poc_artifacts(
+                    audit_run=audit_run,
+                    finding=finding,
+                    agent_run_id=agent_run_id or None,
+                    pocs=pocs,
+                )
+                failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+                status = "failed" if failed else "completed"
+                result = {
+                    "finding_id": finding_id,
+                    "status": status,
+                    "agent_run_id": agent_run_id or None,
+                    "poc_artifacts": artifacts,
+                    "agent_result": _compact_event_payload(agent_result),
+                }
+            except Exception as exc:
+                result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
+            await _record_pipeline_event(audit_run_id, "poc_finding_completed", result)
+            return result
+
+    results = await asyncio.gather(*(run_one(finding) for finding in selected))
+    status_counts = _count_by(results, "status")
+    failed = int(status_counts.get("failed") or 0)
+    final = {
+        "ok": failed == 0,
+        "scheduled": len(selected),
+        "completed": int(status_counts.get("completed") or 0),
+        "failed": failed,
+        "status_counts": status_counts,
+        "poc_artifact_count": sum(len(item.get("poc_artifacts") or []) for item in results),
+        "results": results,
+    }
+    await _record_pipeline_event(audit_run_id, "poc_writing_completed", final)
+    return final
+
+
+async def _verify_pocs_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id)
+    if not audit_run:
+        return {"missing": True}
+    workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+    findings = await _list_findings(audit_run_id)
+    evidence = await _list_evidence(audit_run_id)
+    poc_evidence = [item for item in evidence if str(item.get("kind") or "") in {"poc-artifact", "poc-plan"}]
+    if not workspace_path or not poc_evidence:
+        result = {
+            "ok": True,
+            "scheduled": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": True,
+            "reason": "no PoC artifacts or workspace unavailable",
+        }
+        await _record_pipeline_event(audit_run_id, "poc_verification_skipped", result)
+        return result
+    findings_by_id = {str(item.get("finding_id")): item for item in findings}
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in poc_evidence:
+        grouped.setdefault(str(item.get("finding_id") or ""), []).append(item)
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    max_parallel = max(1, int(config.get("max_parallel_poc_verifiers") or 2))
+    semaphore = asyncio.Semaphore(max_parallel)
+
+    async def run_one(finding_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        finding = findings_by_id.get(finding_id)
+        if not finding:
+            return {"finding_id": finding_id, "status": "skipped", "reason": "finding not found"}
+        async with semaphore:
+            input_payload = {
+                "goal": "Verify the generated PoC for this single Finding. Return strict JSON with verifications[].",
+                "audit_phase": "poc-verification",
+                "finding": finding,
+                "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "poc-verifier"),
+                "poc_evidence": items,
+                "source_sink_evidence": [item for item in evidence if item.get("finding_id") == finding_id and item.get("kind") == "source-sink-chain"],
+                "joern": _latest_joern_context(audit_run),
+            }
+            try:
+                agent_result = await runtime.start_agent_run(
+                    audit_run_id=audit_run_id,
+                    project_id=audit_run["project_id"],
+                    agent_name=str(config.get("poc_verifier_agent_name") or "opencode-poc-verifier"),
+                    workspace_host_path=workspace_path,
+                    allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+                    retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+                    input_payload=input_payload,
+                )
+                agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+                verifications = await _extract_agent_structured_list(agent_run_id, "verifications")
+                created = await _persist_poc_verifications(
+                    audit_run_id=audit_run_id,
+                    finding_id=finding_id,
+                    agent_run_id=agent_run_id or None,
+                    verifications=verifications,
+                )
+                failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+                status = "failed" if failed else "completed"
+                result = {
+                    "finding_id": finding_id,
+                    "status": status,
+                    "agent_run_id": agent_run_id or None,
+                    "verification_evidence_created": created,
+                    "agent_result": _compact_event_payload(agent_result),
+                }
+            except Exception as exc:
+                result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
+            await _record_pipeline_event(audit_run_id, "poc_verification_finding_completed", result)
+            return result
+
+    results = await asyncio.gather(*(run_one(finding_id, items) for finding_id, items in grouped.items()))
+    status_counts = _count_by(results, "status")
+    failed = int(status_counts.get("failed") or 0)
+    final = {
+        "ok": failed == 0,
+        "scheduled": len(grouped),
+        "completed": int(status_counts.get("completed") or 0),
+        "failed": failed,
+        "status_counts": status_counts,
+        "verification_evidence_created": sum(int(item.get("verification_evidence_created") or 0) for item in results),
+        "results": results,
+    }
+    await _record_pipeline_event(audit_run_id, "poc_verification_completed", final)
+    return final
 
 
 async def _generate_report_internal(audit_run_id: str, settings: Settings) -> dict[str, Any]:
@@ -3396,6 +3698,18 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
         "audit_events": audit_events,
         "dependencies": dependencies,
     }
+    finding_reports = await _generate_finding_reports(
+        settings=settings,
+        audit_run=audit_run,
+        findings=findings,
+        evidence=evidence,
+        attempts=attempts,
+        agent_runs=agent_runs,
+        audit_events=audit_events,
+    )
+    summary = {**summary, "finding_report_count": len(finding_reports), "finding_reports": finding_reports}
+    payload["summary"] = summary
+    payload["finding_reports"] = finding_reports
     report_id = str(uuid.uuid4())
     store = ArtifactStore(settings)
     markdown_metadata = store.put_text(
@@ -3449,10 +3763,464 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
         "json_path": json_metadata["path"],
         "json_artifact_id": json_metadata["artifact_id"],
         "json_artifact_uri": json_metadata["artifact_uri"],
+        "finding_reports": finding_reports,
         "summary": summary,
     }
     await _record_pipeline_event(audit_run_id, "report_generated", result)
     return result
+
+
+async def _generate_finding_reports(
+    *,
+    settings: Settings,
+    audit_run: dict[str, Any],
+    findings: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+    agent_runs: list[dict[str, Any]],
+    audit_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    store = ArtifactStore(settings)
+    reports: list[dict[str, Any]] = []
+    audit_run_id = audit_run["audit_run_id"]
+    project_id = audit_run["project_id"]
+    for finding in findings:
+        finding_id = str(finding.get("finding_id") or "")
+        if not finding_id:
+            continue
+        finding_evidence = [item for item in evidence if str(item.get("finding_id")) == finding_id]
+        finding_attempts = [item for item in attempts if str(item.get("finding_id")) == finding_id]
+        payload = {
+            "audit_run": audit_run,
+            "finding": finding,
+            "evidence": finding_evidence,
+            "validation_attempts": finding_attempts,
+            "agent_runs": _agent_runs_for_finding(agent_runs, finding, finding_evidence, finding_attempts),
+            "audit_events": _audit_events_for_finding(audit_events, finding_id),
+        }
+        report_id = str(uuid.uuid4())
+        base = f"findings/{audit_run_id}/{finding_id}/reports/{report_id}"
+        markdown_metadata = store.put_text(
+            f"{base}.md",
+            _finding_report_markdown(payload),
+            content_type="text/markdown; charset=utf-8",
+        )
+        json_metadata = store.put_json(f"{base}.json", payload)
+        summary = {
+            "finding_id": finding_id,
+            "title": finding.get("title"),
+            "severity": finding.get("severity"),
+            "status": finding.get("status"),
+            "evidence_count": len(finding_evidence),
+            "validation_attempt_count": len(finding_attempts),
+            "source_sink_chain_count": sum(1 for item in finding_evidence if item.get("kind") == "source-sink-chain"),
+            "poc_artifact_count": sum(1 for item in finding_evidence if item.get("kind") == "poc-artifact"),
+            "poc_verification_count": sum(1 for item in finding_evidence if item.get("kind") == "poc-verification"),
+            "json_path": json_metadata["path"],
+            "json_artifact_id": json_metadata["artifact_id"],
+        }
+        async with SessionLocal() as session:
+            session.add(
+                ReportArtifact(
+                    report_id=report_id,
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    kind="finding-markdown",
+                    path=markdown_metadata["path"],
+                    summary=summary,
+                )
+            )
+            await session.commit()
+        reference = {
+            "kind": "finding_report",
+            "project_id": project_id,
+            "audit_run_id": audit_run_id,
+            "record_id": finding_id,
+            "report_id": report_id,
+        }
+        await _upsert_artifact_record(markdown_metadata, [reference])
+        await _upsert_artifact_record(json_metadata, [{**reference, "kind": "finding_report_json"}])
+        reports.append(
+            {
+                "finding_id": finding_id,
+                "report_id": report_id,
+                "markdown_path": markdown_metadata["path"],
+                "markdown_artifact_id": markdown_metadata["artifact_id"],
+                "json_path": json_metadata["path"],
+                "json_artifact_id": json_metadata["artifact_id"],
+            }
+        )
+    return reports
+
+
+async def _extract_agent_structured_list(agent_run_id: str, key: str) -> list[dict[str, Any]]:
+    if not agent_run_id:
+        return []
+    async with SessionLocal() as session:
+        agent_run = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
+        if not agent_run:
+            return []
+        payload = agent_run.output_summary or {}
+    for candidate in _walk_values(payload):
+        parsed = None
+        if isinstance(candidate, dict) and key in candidate:
+            parsed = candidate
+        elif isinstance(candidate, str) and key in candidate:
+            parsed = _parse_json_object(candidate)
+        if not isinstance(parsed, dict):
+            continue
+        items = parsed.get(key)
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+async def _persist_source_sink_chains(
+    *,
+    audit_run_id: str,
+    finding_id: str,
+    agent_run_id: str | None,
+    chains: list[dict[str, Any]],
+) -> int:
+    if not chains:
+        chains = [{"finding_id": finding_id, "status": "not_found", "notes": "source-sink finder returned no chains"}]
+    created = 0
+    async with SessionLocal() as session:
+        for chain in chains:
+            if str(chain.get("finding_id") or finding_id) != finding_id:
+                continue
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="source-sink-chain",
+                    summary=str(chain.get("exploitability") or chain.get("summary") or chain.get("status") or "source-to-sink chain"),
+                    payload={**chain, "agent_run_id": agent_run_id},
+                )
+            )
+            created += 1
+        await session.commit()
+    await _write_finding_agent_report(
+        audit_run_id=audit_run_id,
+        finding_id=finding_id,
+        stage="source-sink",
+        agent_run_id=agent_run_id,
+        title="Source-to-Sink Analysis",
+        payload={"chains": chains},
+    )
+    return created
+
+
+async def _persist_poc_artifacts(
+    *,
+    audit_run: dict[str, Any],
+    finding: dict[str, Any],
+    agent_run_id: str | None,
+    pocs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    audit_run_id = audit_run["audit_run_id"]
+    finding_id = str(finding.get("finding_id") or "")
+    if not pocs:
+        pocs = [
+            {
+                "finding_id": finding_id,
+                "title": finding.get("title") or "PoC unavailable",
+                "language": "manual",
+                "artifact_name": "poc-unavailable",
+                "content": "PoCWriter did not return a PoC for this finding.",
+                "commands": [],
+                "expected_result": "",
+                "cleanup_steps": [],
+                "safety_notes": "No executable PoC was generated.",
+            }
+        ]
+    store = ArtifactStore(get_settings())
+    artifacts: list[dict[str, Any]] = []
+    for index, poc in enumerate(pocs):
+        if str(poc.get("finding_id") or finding_id) != finding_id:
+            continue
+        artifact_name = _safe_report_name(str(poc.get("artifact_name") or poc.get("title") or f"poc-{index + 1}"))
+        content = _poc_markdown(finding=finding, poc=poc, agent_run_id=agent_run_id)
+        metadata = store.put_text(
+            f"findings/{audit_run_id}/{finding_id}/poc/{artifact_name}.md",
+            content,
+            content_type="text/markdown; charset=utf-8",
+        )
+        json_metadata = store.put_json(
+            f"findings/{audit_run_id}/{finding_id}/poc/{artifact_name}.json",
+            {"finding": finding, "poc": poc, "agent_run_id": agent_run_id},
+        )
+        reference = {
+            "kind": "finding_poc",
+            "project_id": audit_run["project_id"],
+            "audit_run_id": audit_run_id,
+            "record_id": finding_id,
+            "agent_run_id": agent_run_id,
+        }
+        await _upsert_artifact_record(metadata, [reference])
+        await _upsert_artifact_record(json_metadata, [{**reference, "kind": "finding_poc_json"}])
+        async with SessionLocal() as session:
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="poc-artifact",
+                    summary=str(poc.get("expected_result") or poc.get("title") or "PoC artifact"),
+                    artifact_path=metadata["path"],
+                    payload={
+                        "poc": poc,
+                        "agent_run_id": agent_run_id,
+                        "artifact_id": metadata["artifact_id"],
+                        "artifact_uri": metadata["artifact_uri"],
+                        "json_artifact_id": json_metadata["artifact_id"],
+                    },
+                )
+            )
+            await session.commit()
+        artifacts.append(
+            {
+                "finding_id": finding_id,
+                "artifact_id": metadata["artifact_id"],
+                "artifact_uri": metadata["artifact_uri"],
+                "path": metadata["path"],
+                "json_artifact_id": json_metadata["artifact_id"],
+            }
+        )
+    await _write_finding_agent_report(
+        audit_run_id=audit_run_id,
+        finding_id=finding_id,
+        stage="poc-writer",
+        agent_run_id=agent_run_id,
+        title="PoC Writer Report",
+        payload={"pocs": pocs, "artifacts": artifacts},
+    )
+    return artifacts
+
+
+async def _persist_poc_verifications(
+    *,
+    audit_run_id: str,
+    finding_id: str,
+    agent_run_id: str | None,
+    verifications: list[dict[str, Any]],
+) -> int:
+    if not verifications:
+        verifications = [{"finding_id": finding_id, "status": "not_verifiable", "reason": "PoC verifier returned no verification"}]
+    created = 0
+    async with SessionLocal() as session:
+        for verification in verifications:
+            if str(verification.get("finding_id") or finding_id) != finding_id:
+                continue
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="poc-verification",
+                    summary=str(verification.get("reason") or verification.get("status") or "PoC verification"),
+                    payload={**verification, "agent_run_id": agent_run_id},
+                )
+            )
+            created += 1
+        await session.commit()
+    await _write_finding_agent_report(
+        audit_run_id=audit_run_id,
+        finding_id=finding_id,
+        stage="poc-verifier",
+        agent_run_id=agent_run_id,
+        title="PoC Verifier Report",
+        payload={"verifications": verifications},
+    )
+    return created
+
+
+async def _write_finding_agent_report(
+    *,
+    audit_run_id: str,
+    finding_id: str,
+    stage: str,
+    agent_run_id: str | None,
+    title: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id) or {}
+    store = ArtifactStore(get_settings())
+    safe_stage = _safe_report_name(stage)
+    suffix = agent_run_id or uuid.uuid4().hex
+    text = _agent_stage_report_markdown(title=title, finding_id=finding_id, stage=stage, agent_run_id=agent_run_id, payload=payload)
+    metadata = store.put_text(
+        f"findings/{audit_run_id}/{finding_id}/agent-reports/{safe_stage}-{suffix}.md",
+        text,
+        content_type="text/markdown; charset=utf-8",
+    )
+    await _upsert_artifact_record(
+        metadata,
+        [
+            {
+                "kind": f"finding_{safe_stage}_agent_report",
+                "project_id": audit_run.get("project_id"),
+                "audit_run_id": audit_run_id,
+                "record_id": finding_id,
+                "agent_run_id": agent_run_id,
+            }
+        ],
+    )
+    async with SessionLocal() as session:
+        session.add(
+            Evidence(
+                evidence_id=str(uuid.uuid4()),
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                kind=f"{safe_stage}-agent-report",
+                summary=f"{title} ({stage})",
+                artifact_path=metadata["path"],
+                payload={"stage": stage, "agent_run_id": agent_run_id, "artifact_id": metadata["artifact_id"]},
+            )
+        )
+        await session.commit()
+    return metadata
+
+
+def _poc_candidate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates = [item for item in findings if str(item.get("status") or "").lower() == "confirmed"]
+    if candidates:
+        return candidates
+    return [item for item in findings if str(item.get("status") or "").lower() == "needs_review"]
+
+
+def _finding_artifact_contract(audit_run_id: str, finding_id: str, stage: str) -> dict[str, Any]:
+    return {
+        "finding_directory": f"findings/{audit_run_id}/{finding_id}",
+        "agent_writable_report_path": f"/artifacts/{_safe_report_name(stage)}-report.md",
+        "agent_writable_json_path": f"/artifacts/{_safe_report_name(stage)}-result.json",
+        "platform_canonical_directory": f"findings/{audit_run_id}/{finding_id}/agent-reports",
+        "instruction": (
+            "Write any stage-specific narrative report to agent_writable_report_path and return structured JSON. "
+            "The platform will copy the normalized stage report into platform_canonical_directory."
+        ),
+    }
+
+
+def _agent_runs_for_finding(
+    agent_runs: list[dict[str, Any]],
+    finding: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ids: set[str] = set()
+    raw = finding.get("raw") if isinstance(finding.get("raw"), dict) else {}
+    if raw.get("agent_run_id"):
+        ids.add(str(raw["agent_run_id"]))
+    for item in evidence:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        if payload.get("agent_run_id"):
+            ids.add(str(payload["agent_run_id"]))
+    for item in attempts:
+        if item.get("agent_run_id"):
+            ids.add(str(item["agent_run_id"]))
+    return [run for run in agent_runs if str(run.get("agent_run_id")) in ids]
+
+
+def _audit_events_for_finding(audit_events: list[dict[str, Any]], finding_id: str) -> list[dict[str, Any]]:
+    result = []
+    for event in audit_events:
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if finding_id in json.dumps(payload, ensure_ascii=False):
+            result.append(event)
+    return result
+
+
+def _poc_markdown(*, finding: dict[str, Any], poc: dict[str, Any], agent_run_id: str | None) -> str:
+    commands = poc.get("commands") if isinstance(poc.get("commands"), list) else []
+    cleanup = poc.get("cleanup_steps") if isinstance(poc.get("cleanup_steps"), list) else []
+    lines = [
+        f"# PoC: {poc.get('title') or finding.get('title') or finding.get('finding_id')}",
+        "",
+        f"- Finding ID: `{finding.get('finding_id')}`",
+        f"- AgentRun: `{agent_run_id or '-'}`",
+        f"- Language: `{poc.get('language') or 'manual'}`",
+        f"- Expected result: {poc.get('expected_result') or '-'}",
+        "",
+        "## Commands",
+        "",
+    ]
+    lines.extend([f"- `{command}`" for command in commands] or ["- None."])
+    lines.extend(["", "## Content", "", "```", str(poc.get("content") or ""), "```", "", "## Cleanup", ""])
+    lines.extend([f"- `{command}`" for command in cleanup] or ["- None."])
+    lines.extend(["", "## Safety Notes", "", str(poc.get("safety_notes") or "-")])
+    return "\n".join(lines)
+
+
+def _agent_stage_report_markdown(
+    *,
+    title: str,
+    finding_id: str,
+    stage: str,
+    agent_run_id: str | None,
+    payload: dict[str, Any],
+) -> str:
+    return "\n".join(
+        [
+            f"# {title}",
+            "",
+            f"- Finding ID: `{finding_id}`",
+            f"- Stage: `{stage}`",
+            f"- AgentRun: `{agent_run_id or '-'}`",
+            "",
+            "## Payload",
+            "",
+            "```json",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            "```",
+        ]
+    )
+
+
+def _finding_report_markdown(payload: dict[str, Any]) -> str:
+    finding = payload["finding"]
+    evidence = payload["evidence"]
+    attempts = payload["validation_attempts"]
+    agent_runs = payload["agent_runs"]
+    lines = [
+        f"# Finding Report: {finding.get('title') or finding.get('finding_id')}",
+        "",
+        f"- Finding ID: `{finding.get('finding_id')}`",
+        f"- Severity: `{finding.get('severity')}`",
+        f"- Status: `{finding.get('status')}`",
+        f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
+        f"- Source: `{finding.get('source')}`",
+        "",
+        "## Description",
+        "",
+        str(finding.get("description") or ""),
+        "",
+        "## Agent Runs",
+        "",
+    ]
+    lines.extend([f"- `{run.get('agent_name')}` `{run.get('agent_run_id')}` status `{run.get('status')}`" for run in agent_runs] or ["- None linked."])
+    lines.extend(["", "## Evidence", ""])
+    for item in evidence:
+        artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
+        payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        artifact_id = artifact.get("artifact_id") or payload_item.get("artifact_id")
+        suffix = f" artifact `{artifact_id}`" if artifact_id else ""
+        lines.append(f"- `{item.get('kind')}` {item.get('summary') or ''}{suffix}".rstrip())
+    if not evidence:
+        lines.append("- None.")
+    lines.extend(["", "## Validation Attempts", ""])
+    for attempt in attempts:
+        lines.append(f"- Round `{attempt.get('round_index')}` status `{attempt.get('status')}` AgentRun `{attempt.get('agent_run_id') or '-'}`")
+    if not attempts:
+        lines.append("- None.")
+    lines.extend(["", "## Raw Finding", "", "```json", json.dumps(finding, ensure_ascii=False, indent=2, sort_keys=True), "```"])
+    return "\n".join(lines)
+
+
+def _safe_report_name(value: str) -> str:
+    name = "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-")
+    return "-".join(part for part in name.split("-") if part)[:80] or "artifact"
 
 
 def _report_summary(
@@ -3484,6 +4252,9 @@ def _report_summary(
     return {
         "finding_count": len(findings),
         "evidence_count": len(evidence),
+        "source_sink_chain_count": sum(1 for item in evidence if item.get("kind") == "source-sink-chain"),
+        "poc_artifact_count": sum(1 for item in evidence if item.get("kind") == "poc-artifact"),
+        "poc_verification_count": sum(1 for item in evidence if item.get("kind") == "poc-verification"),
         "validation_attempt_count": len(attempts),
         "finding_count_by_status": _count_by(findings, "status"),
         "finding_count_by_severity": _count_by(findings, "severity"),
@@ -3952,6 +4723,10 @@ def _report_markdown(payload: dict[str, Any]) -> str:
         f"- Status: `{audit_run['status']}`",
         f"- Findings: `{len(findings)}`",
         f"- Evidence: `{len(evidence)}`",
+        f"- Source-to-sink chains: `{summary.get('source_sink_chain_count', 0)}`",
+        f"- PoC artifacts: `{summary.get('poc_artifact_count', 0)}`",
+        f"- PoC verifications: `{summary.get('poc_verification_count', 0)}`",
+        f"- Finding reports: `{summary.get('finding_report_count', 0)}`",
         f"- Validation attempts: `{len(attempts)}`",
         f"- Parse warnings: `{summary.get('parse_warning_count', 0)}`",
         f"- Tool failures: `{summary.get('tool_failure_count', 0)}`",
