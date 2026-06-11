@@ -59,6 +59,7 @@ x-platform-env: &platform-env
   CONFIG_ROOT: /app/configs
   WORKSPACE_ROOT: /dieaudit/workspaces
   ARTIFACT_ROOT: /dieaudit/artifacts
+  ARTIFACT_STORAGE_BACKEND: ${ARTIFACT_STORAGE_BACKEND:-local}
   DYNAMIC_CONTAINER_PREFIX: dieaudit
   AGENT_GATEWAY_CONTAINER_NAME: dieaudit-agent-gateway
 

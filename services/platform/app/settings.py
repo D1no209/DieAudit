@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     config_root: Path = Path("/app/configs")
     workspace_root: Path = Path("/dieaudit/workspaces")
     artifact_root: Path = Path("/dieaudit/artifacts")
+    artifact_storage_backend: str = "local"
     docker_host: str = "http://docker-socket-proxy:2375"
     dynamic_container_prefix: str = "dieaudit"
     agent_gateway_container_name: str = "dieaudit-agent-gateway"

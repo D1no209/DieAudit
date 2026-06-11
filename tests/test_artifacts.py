@@ -9,8 +9,10 @@ import pytest
 from app.api import routes
 from app.services.artifacts import (
     ArtifactAccessError,
+    artifact_id_for_relative_path,
     artifact_metadata,
     artifact_path_matches,
+    relative_path_for_artifact_id,
     resolve_artifact_path,
     secure_artifact_headers,
 )
@@ -34,9 +36,30 @@ def test_artifact_metadata_returns_download_url_for_safe_file(tmp_path: Path) ->
     metadata = artifact_metadata(settings, artifact)
 
     assert metadata["relative_path"] == "container-logs/run-1/agent.log"
+    assert metadata["artifact_id"] == artifact_id_for_relative_path("container-logs/run-1/agent.log")
+    assert metadata["artifact_uri"] == "local://artifacts/container-logs/run-1/agent.log"
+    assert metadata["storage_backend"] == "local"
+    assert metadata["content_type"] == "application/octet-stream"
+    assert metadata["sha256"] == "836ff184e7b41b1e13cb5fd89fa1de98dbbab99e9d2918913ff43b86a5c7c213"
     assert metadata["name"] == "agent.log"
     assert metadata["size"] == 3
     assert metadata["download_url"] == "/artifacts/download?path=container-logs/run-1/agent.log"
+    assert metadata["canonical_download_url"].startswith("/artifacts/")
+
+
+def test_artifact_id_round_trips_relative_path() -> None:
+    artifact_id = artifact_id_for_relative_path("reports/run-1/report.md")
+
+    assert relative_path_for_artifact_id(artifact_id) == "reports/run-1/report.md"
+
+
+def test_artifact_id_rejects_invalid_or_absolute_paths() -> None:
+    with pytest.raises(ArtifactAccessError, match="invalid artifact id"):
+        relative_path_for_artifact_id("%%%")
+
+    absolute_id = artifact_id_for_relative_path("/etc/passwd")
+    with pytest.raises(ArtifactAccessError, match="invalid artifact id"):
+        relative_path_for_artifact_id(absolute_id)
 
 
 def test_resolve_artifact_path_rejects_path_escape(tmp_path: Path) -> None:

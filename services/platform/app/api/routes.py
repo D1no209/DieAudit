@@ -42,6 +42,7 @@ from app.api.serializers import (
 from app.domain.models import (
     AgentRun,
     AgentRunEvent,
+    ArtifactRecord,
     ApiKeyRecord,
     AuditRun,
     AuditRunEvent,
@@ -79,6 +80,8 @@ from app.services.artifacts import (
     ArtifactAccessError,
     artifact_metadata,
     artifact_path_matches,
+    artifact_storage_backend,
+    relative_path_for_artifact_id,
     resolve_artifact_path,
     secure_artifact_headers,
 )
@@ -868,33 +871,30 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.get("/artifacts/metadata")
     async def artifact_metadata_endpoint(request: Request, path: str = Query(...)) -> dict[str, Any]:
-        try:
-            artifact_path = resolve_artifact_path(settings, path)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ArtifactAccessError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        references = await _artifact_references(settings, artifact_path)
-        if not references:
-            raise HTTPException(status_code=403, detail="artifact is not referenced by a platform record")
-        if not _principal_can_access_artifact(getattr(request.state, "auth_principal", None), references):
-            raise HTTPException(status_code=403, detail="artifact is outside API key project or audit run scope")
-        return artifact_metadata(settings, artifact_path)
+        return await _artifact_metadata_response(request, settings, path)
 
     @router.get("/artifacts/download")
     async def download_artifact(request: Request, path: str = Query(...)) -> FileResponse:
+        return await _artifact_download_response(request, settings, path)
+
+    @router.get("/artifacts/{artifact_id}/download")
+    async def download_artifact_by_id(request: Request, artifact_id: str) -> FileResponse:
         try:
-            artifact_path = resolve_artifact_path(settings, path)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            relative_path = relative_path_for_artifact_id(artifact_id)
         except ArtifactAccessError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        references = await _artifact_references(settings, artifact_path)
-        if not references:
-            raise HTTPException(status_code=403, detail="artifact is not referenced by a platform record")
-        if not _principal_can_access_artifact(getattr(request.state, "auth_principal", None), references):
-            raise HTTPException(status_code=403, detail="artifact is outside API key project or audit run scope")
-        return FileResponse(artifact_path, filename=artifact_path.name, headers=secure_artifact_headers())
+        return await _artifact_download_response(request, settings, relative_path)
+
+    @router.get("/artifacts/{artifact_id}")
+    async def artifact_by_id(request: Request, artifact_id: str) -> dict[str, Any]:
+        try:
+            relative_path = relative_path_for_artifact_id(artifact_id)
+        except ArtifactAccessError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        metadata = await _artifact_metadata_response(request, settings, relative_path)
+        if metadata["artifact_id"] != artifact_id:
+            raise HTTPException(status_code=400, detail="artifact id does not match artifact path")
+        return metadata
 
     @router.get("/reports/{report_id}/download")
     async def download_report(request: Request, report_id: str) -> FileResponse:
@@ -1276,6 +1276,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "max_rows": settings.platform_audit_event_max_rows,
             },
             "local_storage": {
+                "artifact_storage_backend": artifact_storage_backend(settings),
                 "runtime_package_retention_days": settings.runtime_package_retention_days,
                 "upload_staging_retention_days": settings.upload_staging_retention_days,
                 "unreferenced_workspace_retention_days": settings.unreferenced_workspace_retention_days,
@@ -1351,6 +1352,23 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "pids_limit": settings.default_container_pids_limit,
                     "tmpfs": settings.default_container_tmpfs,
                 },
+            },
+            {
+                "id": "artifact_storage",
+                "title": "Artifact storage backend is production-ready",
+                "status": "pass" if artifact_storage_backend(settings) == "minio" else "warn",
+                "detail": {
+                    "backend": artifact_storage_backend(settings),
+                    "artifact_root": str(settings.artifact_root),
+                    "minio_endpoint": settings.minio_endpoint,
+                    "minio_bucket": settings.minio_bucket_artifacts,
+                },
+                "remediation": []
+                if artifact_storage_backend(settings) == "minio"
+                else [
+                    "Set ARTIFACT_STORAGE_BACKEND=minio before production deployment so reports, logs, and tool outputs are objectized.",
+                    "Keep local artifact storage only for single-node development and smoke tests.",
+                ],
             },
         ]
         checks.append(_http_guardrails_readiness_check(settings))
@@ -1807,6 +1825,66 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         )
 
     return router
+
+
+async def _artifact_metadata_response(request: Request, settings: Settings, path: str) -> dict[str, Any]:
+    artifact_path, references = await _resolve_authorized_artifact(request, settings, path)
+    metadata = artifact_metadata(settings, artifact_path)
+    await _upsert_artifact_record(metadata, references)
+    return metadata
+
+
+async def _artifact_download_response(request: Request, settings: Settings, path: str) -> FileResponse:
+    artifact_path, references = await _resolve_authorized_artifact(request, settings, path)
+    metadata = artifact_metadata(settings, artifact_path)
+    await _upsert_artifact_record(metadata, references)
+    return FileResponse(artifact_path, filename=artifact_path.name, headers=secure_artifact_headers())
+
+
+async def _resolve_authorized_artifact(
+    request: Request,
+    settings: Settings,
+    path: str,
+) -> tuple[Path, list[dict[str, Any]]]:
+    try:
+        artifact_path = resolve_artifact_path(settings, path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ArtifactAccessError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    references = await _artifact_references(settings, artifact_path)
+    if not references:
+        raise HTTPException(status_code=403, detail="artifact is not referenced by a platform record")
+    if not _principal_can_access_artifact(getattr(request.state, "auth_principal", None), references):
+        raise HTTPException(status_code=403, detail="artifact is outside API key project or audit run scope")
+    return artifact_path, references
+
+
+async def _upsert_artifact_record(metadata: dict[str, Any], references: list[dict[str, Any]]) -> None:
+    primary_reference = references[0] if references else {}
+    async with SessionLocal() as session:
+        row = await session.scalar(select(ArtifactRecord).where(ArtifactRecord.artifact_id == metadata["artifact_id"]))
+        values = {
+            "artifact_uri": metadata["artifact_uri"],
+            "storage_backend": metadata["storage_backend"],
+            "path": metadata["path"],
+            "content_type": metadata["content_type"],
+            "sha256": metadata["sha256"],
+            "size": metadata["size"],
+            "audit_run_id": primary_reference.get("audit_run_id"),
+            "project_id": primary_reference.get("project_id"),
+            "metadata_json": {
+                "relative_path": metadata["relative_path"],
+                "name": metadata["name"],
+                "references": references,
+            },
+        }
+        if row:
+            for key, value in values.items():
+                setattr(row, key, value)
+        else:
+            session.add(ArtifactRecord(artifact_id=metadata["artifact_id"], **values))
+        await session.commit()
 
 
 def _delete_knowledge_artifact(settings: Settings, artifact_path: Path) -> bool:

@@ -174,6 +174,21 @@ class RuntimePackage(TimestampMixin, Base):
     manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class ArtifactRecord(TimestampMixin, Base):
+    __tablename__ = "artifact_records"
+
+    artifact_id: Mapped[str] = mapped_column(String(512), primary_key=True)
+    artifact_uri: Mapped[str] = mapped_column(Text)
+    storage_backend: Mapped[str] = mapped_column(String(32), index=True, default="local")
+    path: Mapped[str] = mapped_column(Text)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sha256: Mapped[str] = mapped_column(String(128), index=True)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    audit_run_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    project_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class Finding(TimestampMixin, Base):
     __tablename__ = "findings"
 

@@ -16,6 +16,13 @@ def test_e2e_status_endpoint_is_exposed() -> None:
     assert "workflow_worker" in routes
 
 
+def test_artifact_download_route_precedes_artifact_id_route() -> None:
+    routes = read_source("services/platform/app/api/routes.py")
+
+    assert routes.index('@router.get("/artifacts/download")') < routes.index('@router.get("/artifacts/{artifact_id}")')
+    assert '@router.get("/artifacts/{artifact_id}/download")' in routes
+
+
 def test_e2e_smoke_scripts_use_gateway_and_skip_pipeline_without_model_key() -> None:
     ps1 = read_source("scripts/e2e-smoke.ps1")
     sh = read_source("scripts/e2e-smoke.sh")
