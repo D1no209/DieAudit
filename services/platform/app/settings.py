@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     knowledge_embedding_timeout_seconds: float = 60.0
     knowledge_embedding_probe_on_readiness: bool = True
     agent_gateway_url: str = "http://agent-gateway:8000"
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    local_llm_api_key: str = ""
     dieaudit_api_key: str = ""
     api_key_header: str = "X-DieAudit-Api-Key"
     public_metrics: bool = False

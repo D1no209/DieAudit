@@ -1205,6 +1205,63 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return await proxy_gateway("/runtime/tool-capabilities")
         return await runtime.tool_image_capabilities(mcp_template_store().list())
 
+    @router.get("/runtime/e2e/status")
+    async def runtime_e2e_status() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/e2e/status")
+        docker: dict[str, Any]
+        try:
+            docker = await runtime.docker_health()
+        except Exception as exc:
+            docker = {"ok": False, "error": str(exc)}
+        worker_health = await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
+        agent_templates = agent_template_store().list()
+        mcp_templates = mcp_template_store().list()
+        exposed_mock_agents = [
+            template.get("name")
+            for template in agent_templates
+            if "mock-agent" in str(template.get("image") or "")
+            or (isinstance(template.get("protocol"), dict) and template["protocol"].get("runtime") == "mock")
+        ]
+        exposed_mock_mcps = [
+            template.get("name")
+            for template in mcp_templates
+            if "mock-mcp" in str(template.get("image") or "")
+        ]
+        model_env = {
+            "ANTHROPIC_API_KEY": bool(settings.anthropic_api_key),
+            "OPENAI_API_KEY": bool(settings.openai_api_key),
+            "LOCAL_LLM_API_KEY": bool(settings.local_llm_api_key),
+        }
+        checks = {
+            "docker": bool(docker.get("ok")),
+            "workflow_worker": bool(worker_health.get("ok")),
+            "demo_templates_hidden": not bool(settings.enable_demo_templates or exposed_mock_agents or exposed_mock_mcps),
+            "model_configured": any(model_env.values()),
+            "opencode_templates_present": all(
+                name in {str(template.get("name")) for template in agent_templates}
+                for name in ["opencode-orchestrator", "opencode-validator", "opencode-judger"]
+            ),
+        }
+        return {
+            "ok": all(value for key, value in checks.items() if key != "model_configured"),
+            "service": settings.service_name,
+            "checks": checks,
+            "docker": docker,
+            "worker_health": worker_health,
+            "pipeline_backend": _normalized_pipeline_backend(settings),
+            "demo_templates_enabled": settings.enable_demo_templates,
+            "exposed_mock_agents": exposed_mock_agents,
+            "exposed_mock_mcps": exposed_mock_mcps,
+            "model_env": model_env,
+            "recommended_gateway_base_url": "http://localhost:8080/gateway",
+            "notes": [
+                "Without a model API key the smoke script should skip the real OpenCode pipeline segment.",
+                "Use /runtime/readiness for full production readiness blockers.",
+            ],
+        }
+
     @router.get("/runtime/policy")
     async def runtime_policy() -> dict[str, Any]:
         return {
