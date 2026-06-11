@@ -30,6 +30,11 @@ class CreateAuditRunRequest(BaseModel):
     max_files_per_code_audit_task: int = Field(default=25, ge=1, le=200)
     max_parallel_code_auditors: int = Field(default=2, ge=1, le=20)
     code_auditor_agent_name: str = "opencode-code-auditor"
+    enable_joern: bool = True
+    joern_required: bool = True
+    allow_joern_unavailable: bool = False
+    joern_timeout_seconds: int = Field(default=900, ge=30, le=7200)
+    joern_query_packs: list[str] = Field(default_factory=lambda: ["entrypoints", "authz", "injection", "file-io", "network", "secrets"])
     allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
     input_payload: dict[str, Any] = Field(default_factory=dict)
@@ -42,6 +47,20 @@ class CodeBatchAnalysisRequest(BaseModel):
     max_parallel_agents: int = Field(default=2, ge=1, le=20)
     agent_name: str = "opencode-code-auditor"
     wait_for_completion: bool = True
+
+
+class JoernBuildCpgRequest(BaseModel):
+    workspace_path: str | None = None
+    language: str | None = None
+    timeout_seconds: int = Field(default=900, ge=30, le=7200)
+    allow_unavailable: bool = False
+
+
+class JoernQueryRequest(BaseModel):
+    cpg_path: str
+    script: str | None = None
+    query_pack: str | None = None
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
 
 
 class CreateFindingRequest(BaseModel):

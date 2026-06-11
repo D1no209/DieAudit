@@ -13,7 +13,7 @@ export https_proxy="${HTTPS_PROXY}"
 export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1}"
 export no_proxy="${NO_PROXY}"
 
-docker compose --profile tools build
+docker compose --profile tools build tool-mcp-image tool-mcp-joern-image opencode-agent-image
 if [ "${include_demo}" = "true" ]; then
   docker compose --profile demo build mock-agent-image mock-mcp-image
 fi

@@ -35,7 +35,7 @@ Required before exposing the platform:
 - Keep `ALLOW_RUNC_SANDBOX=false` for untrusted PoC execution.
 - Keep `ALLOW_SANDBOX_EXTERNAL_NETWORK=false` unless a specific sandbox/PoC test requires outbound network access.
 - Configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection.
-- Build the optional heavy analyzer MCP images before relying on Joern/CodeQL templates: `docker compose --profile tools build tool-mcp-codeql-image tool-mcp-joern-image`.
+- Build the required Joern analyzer image before production audits: `docker compose --profile tools build tool-mcp-joern-image`.
 
 Check the live deployment:
 
@@ -59,7 +59,7 @@ Check MCP tool image capabilities:
 Invoke-RestMethod http://localhost:8080/gateway/runtime/tool-capabilities | ConvertTo-Json -Depth 10
 ```
 
-MCP templates can declare `required_binaries`; readiness probes the configured image with a short-lived isolated container and reports missing CLIs such as `codeql` or `joern`. CodeQL and Joern use dedicated heavy images (`dieaudit/tool-mcp-codeql:local`, `dieaudit/tool-mcp-joern:local`) so the default tool image stays lightweight.
+MCP templates can declare `required_binaries`; readiness probes the configured image with a short-lived isolated container and reports missing CLIs such as `joern`, `semgrep`, or `syft`. Joern is part of the production audit path and uses the dedicated `dieaudit/tool-mcp-joern:local` image so the default tool image stays lightweight. CodeQL remains experimental and is not required by production readiness.
 
 Create the first persisted admin key from the running Compose environment without opening an unauthenticated browser/API setup flow:
 
@@ -119,7 +119,7 @@ Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/cleanu
 - Agent templates live in `configs/agent-templates`.
 - MCP templates live in `configs/mcp-templates`.
 - Mock Agent images remain only as demo fixtures. Production OpenCode templates are in `configs/agent-templates/opencode-*.yaml`, with bare role aliases such as `orchestrator` and `validator` also pointing at the OpenCode runtime.
-- Standard MCP templates in `configs/mcp-templates` use `dieaudit/tool-mcp:local`; heavy Joern/CodeQL templates use dedicated images built by the `tools` profile.
+- Standard MCP templates in `configs/mcp-templates` use `dieaudit/tool-mcp:local`; Joern uses the dedicated `dieaudit/tool-mcp-joern:local` image and is required for the production audit path. CodeQL templates are experimental and not part of the default chain.
 
 ## Knowledge Base Embeddings
 

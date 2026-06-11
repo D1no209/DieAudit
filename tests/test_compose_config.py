@@ -87,3 +87,20 @@ def test_docker_socket_proxy_only_exposes_required_api_groups() -> None:
     }
     unexpectedly_enabled = {key for key in forbidden_enabled if environment.get(key) == "1"}
     assert not unexpectedly_enabled, f"docker-socket-proxy exposes unneeded API groups: {sorted(unexpectedly_enabled)}"
+
+
+def test_codeql_tool_image_is_experimental_not_default_tools_profile() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert "tools" in services["tool-mcp-joern-image"]["profiles"]
+    assert "tools" not in services["tool-mcp-codeql-image"]["profiles"]
+    assert set(services["tool-mcp-codeql-image"]["profiles"]) == {"experimental", "codeql"}
+
+
+def test_mock_images_are_demo_only_not_default_tools_profile() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert services["mock-agent-image"]["profiles"] == ["demo"]
+    assert services["mock-mcp-image"]["profiles"] == ["demo"]

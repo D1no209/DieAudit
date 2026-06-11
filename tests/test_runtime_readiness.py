@@ -40,11 +40,12 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
     ]
     mcp_templates = [
         {"name": name, "image": "dieaudit/tool-mcp:local"}
-        for name in [
+            for name in [
             "filesystem-mcp",
             "code-search-mcp",
             "semgrep-mcp",
             "sca-mcp",
+            "joern-mcp",
             "kb-mcp",
             "http-test-mcp",
             "sandbox-mcp",
@@ -57,26 +58,49 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
     assert checks["production_mcp_templates"]["status"] == "pass"
 
 
-def test_heavy_analyzer_readiness_passes_when_required_binaries_available() -> None:
+def test_joern_is_production_required_when_required_binaries_available() -> None:
     checks = {
         check["id"]: check
         for check in _template_readiness_checks(
-            [],
             [
-                {"name": "joern-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"]},
-                {"name": "codeql-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["codeql"]},
+                {
+                    "name": name,
+                    "image": "dieaudit/opencode-agent:local",
+                    "protocol": {"kind": "agent-client-protocol", "runtime": "opencode"},
+                }
+                for name in [
+                    "opencode-orchestrator",
+                    "opencode-code-auditor",
+                    "opencode-recon-auditor",
+                    "opencode-sca-analyst",
+                    "opencode-validator",
+                    "opencode-judger",
+                    "opencode-poc-writer",
+                ]
+            ],
+            [
+                {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"] if name == "joern-mcp" else []}
+                for name in [
+                    "filesystem-mcp",
+                    "code-search-mcp",
+                    "semgrep-mcp",
+                    "sca-mcp",
+                    "joern-mcp",
+                    "kb-mcp",
+                    "http-test-mcp",
+                    "sandbox-mcp",
+                ]
             ],
             {
                 "ok": True,
                 "templates": {
                     "joern-mcp": {"available": True, "missing_binaries": []},
-                    "codeql-mcp": {"available": True, "missing_binaries": []},
                 },
             },
         )
     }
 
-    assert checks["heavy_analyzers"]["status"] == "pass"
+    assert checks["production_mcp_templates"]["status"] == "pass"
 
 
 def test_heavy_analyzer_templates_use_dedicated_images() -> None:
@@ -87,6 +111,13 @@ def test_heavy_analyzer_templates_use_dedicated_images() -> None:
     assert joern["image"] == "dieaudit/tool-mcp-joern:local"
     assert codeql["required_binaries"] == ["codeql"]
     assert joern["required_binaries"] == ["joern"]
+
+
+def test_default_opencode_audit_agents_are_authorized_for_joern() -> None:
+    for name in ["opencode-orchestrator", "opencode-recon-auditor", "opencode-code-auditor", "opencode-validator"]:
+        template = yaml.safe_load((ROOT / f"configs/agent-templates/{name}.yaml").read_text(encoding="utf-8"))
+
+        assert "joern-mcp" in template["required_mcp"]
 
 
 def test_core_tool_templates_declare_required_binaries() -> None:
@@ -116,13 +147,40 @@ def test_mock_orchestrator_is_demo_only() -> None:
     assert template["protocol"]["runtime"] == "mock"
 
 
-def test_heavy_analyzer_readiness_warns_when_required_binaries_missing() -> None:
+def test_joern_missing_binary_fails_production_readiness_but_codeql_does_not() -> None:
     checks = {
         check["id"]: check
         for check in _template_readiness_checks(
-            [],
             [
-                {"name": "joern-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"]},
+                {
+                    "name": name,
+                    "image": "dieaudit/opencode-agent:local",
+                    "protocol": {"kind": "agent-client-protocol", "runtime": "opencode"},
+                }
+                for name in [
+                    "opencode-orchestrator",
+                    "opencode-code-auditor",
+                    "opencode-recon-auditor",
+                    "opencode-sca-analyst",
+                    "opencode-validator",
+                    "opencode-judger",
+                    "opencode-poc-writer",
+                ]
+            ],
+            [
+                {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"] if name == "joern-mcp" else []}
+                for name in [
+                    "filesystem-mcp",
+                    "code-search-mcp",
+                    "semgrep-mcp",
+                    "sca-mcp",
+                    "joern-mcp",
+                    "kb-mcp",
+                    "http-test-mcp",
+                    "sandbox-mcp",
+                ]
+            ]
+            + [
                 {"name": "codeql-mcp", "image": "dieaudit/tool-mcp:local", "required_binaries": ["codeql"]},
             ],
             {
@@ -135,11 +193,9 @@ def test_heavy_analyzer_readiness_warns_when_required_binaries_missing() -> None
         )
     }
 
-    assert checks["heavy_analyzers"]["status"] == "warn"
-    assert checks["heavy_analyzers"]["detail"]["missing_binaries"] == {
-        "codeql-mcp": ["codeql"],
-        "joern-mcp": ["joern"],
-    }
+    assert checks["production_mcp_templates"]["status"] == "fail"
+    assert checks["production_mcp_templates"]["detail"]["missing_binaries"] == {"joern-mcp": ["joern"]}
+    assert "heavy_analyzers" not in checks
 
 
 def test_template_readiness_fails_missing_or_mock_production_templates() -> None:

@@ -22,6 +22,7 @@ runtime_mount:
 required_mcp:
   - filesystem-mcp
   - code-search-mcp
+  - joern-mcp
   - kb-mcp
 network_policy:
   allow_gateway: true

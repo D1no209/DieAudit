@@ -23,6 +23,10 @@ healthcheck:
   Retries: 10
 tools:
   - joern_query
+  - joern_build_cpg
+  - joern_list_cpgs
+  - joern_run_script
+  - joern_common_queries
 required_binaries:
   - joern
 permissions:

@@ -33,6 +33,7 @@ class PipelineExecutor:
         judge_audit_run: AsyncCallback,
         generate_report: AsyncCallback,
         compact_event_payload: Callable[[Any], Any],
+        run_joern: AsyncCallback | None = None,
         run_code_batch_analysis: AsyncCallback | None = None,
     ) -> None:
         self.settings = settings
@@ -47,6 +48,7 @@ class PipelineExecutor:
         self.is_cancel_requested = is_cancel_requested
         self.cancel_reason = cancel_reason
         self.list_findings = list_findings
+        self.run_joern = run_joern
         self.run_code_batch_analysis = run_code_batch_analysis
         self.run_sca = run_sca
         self.run_semgrep = run_semgrep
@@ -66,12 +68,52 @@ class PipelineExecutor:
             await self._cleanup_terminal_runtime(audit_run_id, terminal_status="failed", audit_run=audit_run)
             return
         await self.mark_audit_run_status(audit_run_id, "running")
-        await self.set_pipeline_state(audit_run_id, stage="agent-audit", status="running")
-        await self.record_audit_run_event(audit_run_id, "pipeline_started", {"stage": "agent-audit"})
+        initial_stage = "joern-cpg" if self._joern_enabled(audit_run) else "agent-audit"
+        await self.record_audit_run_event(audit_run_id, "pipeline_started", {"stage": initial_stage})
         steps: list[dict[str, Any]] = []
         try:
             await self.raise_if_cancelled(audit_run_id)
+            if self._joern_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="joern-cpg", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "joern-cpg"})
+                try:
+                    if self.run_joern is None:
+                        joern_result = {"ok": False, "available": False, "error": "Joern callback is not configured"}
+                    else:
+                        joern_result = await self.run_joern(
+                            audit_run_id,
+                            audit_run["project_id"],
+                            workspace_path,
+                            self.runtime,
+                            audit_run,
+                        )
+                except Exception as exc:
+                    joern_result = {"ok": False, "available": False, "error": str(exc)}
+                    await self.record_pipeline_event(audit_run_id, "joern_failed", joern_result)
+                steps.append({"step": "joern-cpg", "result": joern_result})
+                if isinstance(audit_run.get("config"), dict):
+                    audit_run["config"] = {**audit_run["config"], "joern_context": joern_result}
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "joern-cpg", "result": self.compact_event_payload(joern_result)},
+                )
+                if self._joern_required(audit_run) and not joern_result.get("ok"):
+                    raise RuntimeError(str(joern_result.get("error") or joern_result.get("reason") or "Joern CPG build failed"))
+                await self.raise_if_cancelled(audit_run_id)
+
+            await self.set_pipeline_state(audit_run_id, stage="agent-audit", status="running")
             await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "agent-audit"})
+            agent_input_payload = audit_run.get("config", {}).get("input_payload") or {
+                "goal": (
+                    "Run a structured security audit pass. Return JSON with summary, findings, and evidence. "
+                    "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
+                )
+            }
+            if isinstance(agent_input_payload, dict):
+                joern_context = self._agent_joern_context(audit_run)
+                if joern_context["enabled"]:
+                    agent_input_payload = {**agent_input_payload, "joern": joern_context}
             agent_result = await self.runtime.start_agent_run(
                 audit_run_id=audit_run_id,
                 project_id=audit_run["project_id"],
@@ -79,13 +121,7 @@ class PipelineExecutor:
                 workspace_host_path=workspace_path,
                 allow_external_network=audit_run["allow_external_network"],
                 retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                input_payload=audit_run.get("config", {}).get("input_payload")
-                or {
-                    "goal": (
-                        "Run a structured security audit pass. Return JSON with summary, findings, and evidence. "
-                        "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
-                    )
-                },
+                input_payload=agent_input_payload,
             )
             steps.append({"step": "agent-audit", "result": agent_result})
             await self.record_audit_run_event(
@@ -318,6 +354,10 @@ class PipelineExecutor:
                     )
                 if ingest and int(ingest.get("findings_created") or 0) == 0:
                     warnings.append({"kind": "agent_created_no_findings"})
+            elif step_name == "joern-cpg":
+                if result.get("ok") is False:
+                    metrics["tool_failures"] += 1
+                    warnings.append({"kind": "joern_cpg_failed", "result": result})
             elif step_name in {"sca", "semgrep"}:
                 tool_status = str(result.get("status") or "")
                 if result.get("ok") is False or result.get("available") is False or tool_status in {"syft_unavailable", "osv_unreachable", "unavailable", "failed"}:
@@ -359,3 +399,36 @@ class PipelineExecutor:
     def _code_batch_analysis_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
         return bool(config.get("enable_code_batch_analysis", True))
+
+    @staticmethod
+    def _joern_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_joern", True))
+
+    @staticmethod
+    def _joern_required(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False))
+
+    @classmethod
+    def _agent_joern_context(cls, audit_run: dict[str, Any]) -> dict[str, Any]:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        result = config.get("joern_context") if isinstance(config.get("joern_context"), dict) else {}
+        query_packs = config.get("joern_query_packs")
+        if query_packs is None:
+            query_packs = ["entrypoints", "authz", "injection", "file-io", "network", "secrets"]
+        elif isinstance(query_packs, str):
+            query_packs = [item.strip() for item in query_packs.split(",") if item.strip()]
+        elif not isinstance(query_packs, list):
+            query_packs = list(query_packs or [])
+        return {
+            "enabled": cls._joern_enabled(audit_run),
+            "required": cls._joern_required(audit_run),
+            "mcp": "joern-mcp",
+            "cpg_path": result.get("cpg_path"),
+            "cpg_artifact_id": result.get("artifact_id") or result.get("cpg_artifact_id"),
+            "artifact_path": result.get("artifact_path"),
+            "status": result.get("status"),
+            "ok": result.get("ok"),
+            "recommended_query_packs": query_packs,
+        }

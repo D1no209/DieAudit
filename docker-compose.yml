@@ -374,7 +374,7 @@ services:
         HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: dieaudit/mock-agent:local
-    profiles: ["demo", "tools"]
+    profiles: ["demo"]
     command: ["python", "/app/mock_agent.py", "--idle"]
     networks:
       - platform
@@ -388,7 +388,7 @@ services:
         HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: dieaudit/mock-mcp:local
-    profiles: ["demo", "tools"]
+    profiles: ["demo"]
     command: ["python", "/app/mock_mcp.py"]
     networks:
       - platform
@@ -417,7 +417,7 @@ services:
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
         CODEQL_BUNDLE_VERSION: ${CODEQL_BUNDLE_VERSION:-2.25.6}
     image: dieaudit/tool-mcp-codeql:local
-    profiles: ["tools"]
+    profiles: ["experimental", "codeql"]
     command: ["python", "/app/tool_mcp.py"]
     networks:
       - platform

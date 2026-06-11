@@ -22,11 +22,12 @@ PRODUCTION_MCP_TEMPLATES = {
     "code-search-mcp",
     "semgrep-mcp",
     "sca-mcp",
+    "joern-mcp",
     "kb-mcp",
     "http-test-mcp",
     "sandbox-mcp",
 }
-OPTIONAL_HEAVY_MCP_TEMPLATES = {"joern-mcp", "codeql-mcp"}
+OPTIONAL_HEAVY_MCP_TEMPLATES: set[str] = set()
 
 
 def http_guardrails_readiness_check(settings: Settings) -> dict[str, Any]:
@@ -256,13 +257,13 @@ def template_readiness_checks(
         for name in PRODUCTION_MCP_TEMPLATES & set(mcps)
         if "mock-mcp" in str(mcps[name].get("image") or "")
     )
-    optional_heavy = sorted(OPTIONAL_HEAVY_MCP_TEMPLATES & set(mcps))
-    heavy_missing = {
+    production_missing_binaries = {
         name: (tool_capabilities.get("templates", {}).get(name) or {}).get("missing_binaries", [])
-        for name in optional_heavy
+        for name in sorted(PRODUCTION_MCP_TEMPLATES & set(mcps))
+        if (tool_capabilities.get("templates", {}).get(name) or {}).get("missing_binaries")
     } if tool_capabilities else {}
-    heavy_unavailable = sorted(name for name, missing in heavy_missing.items() if missing)
-    heavy_probe_error = bool(tool_capabilities and tool_capabilities.get("error"))
+    production_unavailable_tools = sorted(production_missing_binaries)
+    production_probe_error = bool(tool_capabilities and tool_capabilities.get("error"))
     legacy_mock_agents = sorted(
         name
         for name, template in agents.items()
@@ -288,14 +289,27 @@ def template_readiness_checks(
         {
             "id": "production_mcp_templates",
             "title": "Production MCP templates are configured",
-            "status": "fail" if missing_mcps or mock_mcps else "pass",
+            "status": "fail" if missing_mcps or mock_mcps or production_unavailable_tools or production_probe_error else "pass",
             "detail": {
                 "required": sorted(PRODUCTION_MCP_TEMPLATES),
                 "missing": missing_mcps,
                 "mock_images": mock_mcps,
+                "missing_binaries": production_missing_binaries,
+                "tool_capabilities": tool_capabilities,
             },
+            "remediation": [] if not production_unavailable_tools and not production_probe_error else [
+                "Build required production MCP tool images before production readiness, especially dieaudit/tool-mcp-joern:local.",
+                "Verify Joern is available in the joern-mcp image and rerun /runtime/readiness.",
+            ],
         },
     ]
+    optional_heavy = sorted(OPTIONAL_HEAVY_MCP_TEMPLATES & set(mcps))
+    heavy_missing = {
+        name: (tool_capabilities.get("templates", {}).get(name) or {}).get("missing_binaries", [])
+        for name in optional_heavy
+    } if tool_capabilities else {}
+    heavy_unavailable = sorted(name for name, missing in heavy_missing.items() if missing)
+    heavy_probe_error = bool(tool_capabilities and tool_capabilities.get("error"))
     if optional_heavy:
         status = "pass"
         message = "Heavy analyzer templates have required CLIs available in their configured tool images."

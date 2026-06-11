@@ -73,6 +73,8 @@ from app.schemas import (
     CreateApiKeyRequest,
     CreateFindingRequest,
     CreateProjectRequest,
+    JoernBuildCpgRequest,
+    JoernQueryRequest,
     KnowledgeSearchRequest,
     RunPocRequest,
     StartSandboxComposeRequest,
@@ -151,6 +153,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             is_cancel_requested=_is_cancel_requested,
             cancel_reason=_cancel_reason,
             list_findings=_list_findings,
+            run_joern=_run_joern_mcp,
             run_code_batch_analysis=_run_code_batch_analysis,
             run_sca=_run_sca_mcp,
             run_semgrep=_run_semgrep_mcp,
@@ -616,6 +619,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
                     "max_parallel_code_auditors": body.max_parallel_code_auditors,
                     "code_auditor_agent_name": body.code_auditor_agent_name,
+                    "enable_joern": body.enable_joern,
+                    "joern_required": body.joern_required,
+                    "allow_joern_unavailable": body.allow_joern_unavailable,
+                    "joern_timeout_seconds": body.joern_timeout_seconds,
+                    "joern_query_packs": body.joern_query_packs,
                 },
             )
             session.add(audit_run)
@@ -721,6 +729,121 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             },
         )
         return result
+
+    @router.post("/audit-runs/{audit_run_id}/joern/build-cpg")
+    async def build_joern_cpg(request: Request, audit_run_id: str, body: JoernBuildCpgRequest) -> dict[str, Any]:
+        runtime = runtime_provider()
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/joern/build-cpg", method="POST", json=body.model_dump())
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        if not workspace_path:
+            raise HTTPException(status_code=400, detail="audit run has no workspace path")
+        config = dict(audit_run.get("config") or {})
+        result = await _run_joern_mcp(
+            audit_run_id,
+            audit_run["project_id"],
+            workspace_path,
+            runtime,
+            {
+                **audit_run,
+                "config": {
+                    **config,
+                    "joern_timeout_seconds": body.timeout_seconds,
+                    "allow_joern_unavailable": body.allow_unavailable,
+                    **({"joern_language": body.language} if body.language else {}),
+                    **({"joern_workspace_path": body.workspace_path} if body.workspace_path else {}),
+                },
+            },
+        )
+        if not result.get("ok") and not body.allow_unavailable:
+            raise HTTPException(status_code=502, detail=result)
+        return result
+
+    @router.get("/audit-runs/{audit_run_id}/joern/cpgs")
+    async def list_joern_cpgs(request: Request, audit_run_id: str) -> dict[str, Any]:
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        events = await _list_audit_run_events(audit_run_id)
+        cpgs = []
+        for event in events:
+            if event.get("event_type") != "joern_cpg_completed":
+                continue
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            cpg_path = payload.get("cpg_path")
+            if cpg_path:
+                cpgs.append(
+                    {
+                        "cpg_path": cpg_path,
+                        "cpg_artifact_id": payload.get("cpg_artifact_id"),
+                        "artifact_path": payload.get("artifact_path"),
+                        "artifact": payload.get("artifact"),
+                        "query_packs": payload.get("query_packs") or [],
+                        "created_at": event.get("created_at"),
+                    }
+                )
+        return {"audit_run_id": audit_run_id, "cpgs": cpgs, "count": len(cpgs)}
+
+    @router.post("/audit-runs/{audit_run_id}/joern/query")
+    async def query_joern(request: Request, audit_run_id: str, body: JoernQueryRequest) -> dict[str, Any]:
+        runtime = runtime_provider()
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/joern/query", method="POST", json=body.model_dump())
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        if not workspace_path:
+            raise HTTPException(status_code=400, detail="audit run has no workspace path")
+        if not body.script and not body.query_pack:
+            raise HTTPException(status_code=400, detail="script or query_pack is required")
+        tool_path = "/tools/joern_common_queries" if body.query_pack else "/tools/joern_run_script"
+        payload = {
+            "cpg_path": body.cpg_path,
+            "timeout_seconds": body.timeout_seconds,
+            **({"query_pack": body.query_pack} if body.query_pack else {}),
+            **({"script": body.script} if body.script else {}),
+        }
+        try:
+            mcp_result = await runtime.run_mcp_tool(
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                mcp_name="joern-mcp",
+                tool_path=tool_path,
+                workspace_host_path=workspace_path,
+                payload=payload,
+                allow_external_network=False,
+                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+            )
+        except Exception as exc:
+            result = {"ok": False, "available": False, "error": str(exc)}
+            await _record_pipeline_event(audit_run_id, "joern_query_failed", result)
+            raise HTTPException(status_code=502, detail=result) from exc
+        result = mcp_result.get("result", {})
+        await _record_pipeline_event(audit_run_id, "joern_query_completed", _compact_event_payload(result))
+        return {"ok": bool(mcp_result.get("ok")) and bool(result.get("ok")), "result": result, "mcp": mcp_result.get("mcp")}
+
+    @router.get("/runtime/joern/health")
+    async def runtime_joern_health() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/joern/health")
+        templates = [template for template in mcp_template_store().list() if template.get("name") == "joern-mcp"]
+        capabilities = await runtime.tool_image_capabilities(templates)
+        joern = (capabilities.get("templates") or {}).get("joern-mcp") or {}
+        missing = joern.get("missing_binaries") or []
+        return {
+            "ok": bool(joern.get("available")) and not missing,
+            "required": bool(settings.enable_joern and settings.joern_required),
+            "template": joern,
+            "capabilities": capabilities,
+        }
 
     @router.post("/audit-runs/{audit_run_id}/sca")
     async def run_sca(request: Request, audit_run_id: str) -> dict[str, Any]:
@@ -2886,6 +3009,83 @@ async def _run_sca_mcp(
     return summary
 
 
+async def _run_joern_mcp(
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    runtime: Any,
+    audit_run: dict[str, Any],
+) -> dict[str, Any]:
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    query_packs = _joern_query_packs(config)
+    timeout_seconds = int(config.get("joern_timeout_seconds") or 900)
+    language = config.get("joern_language")
+    workspace_input = str(config.get("joern_workspace_path") or ".")
+    payload = {
+        "workspace_path": workspace_input,
+        "language": language,
+        "timeout_seconds": timeout_seconds,
+        "query_packs": query_packs,
+    }
+    try:
+        mcp_result = await runtime.run_mcp_tool(
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            mcp_name="joern-mcp",
+            tool_path="/tools/joern_build_cpg",
+            workspace_host_path=workspace_path,
+            payload=payload,
+            allow_external_network=False,
+            retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+        )
+    except Exception as exc:
+        result = {"ok": False, "available": False, "error": str(exc), "query_packs": query_packs}
+        await _record_pipeline_event(audit_run_id, "joern_cpg_failed", result)
+        return result
+
+    result = mcp_result.get("result", {}) if isinstance(mcp_result, dict) else {}
+    if not isinstance(result, dict):
+        result = {"ok": False, "available": False, "error": "Joern MCP returned a non-object result"}
+    cpg_artifact = result.get("artifact") if isinstance(result.get("artifact"), dict) else {}
+    summary = {
+        "ok": bool(mcp_result.get("ok")) and bool(result.get("ok")),
+        "available": result.get("available", bool(mcp_result.get("ok"))),
+        "status": "completed" if result.get("ok") else "failed",
+        "reason": None if result.get("ok") else result.get("error") or result.get("stderr") or "Joern CPG build failed",
+        "cpg_path": result.get("cpg_path"),
+        "artifact_path": result.get("artifact_path") or result.get("cpg_path"),
+        "artifact": cpg_artifact,
+        "cpg_artifact_id": cpg_artifact.get("sha256") if isinstance(cpg_artifact, dict) else None,
+        "language": result.get("language"),
+        "query_packs": _compact_joern_query_packs(result.get("query_packs")),
+        "command": result.get("command"),
+        "exit_code": result.get("exit_code"),
+    }
+    artifact_path = _platform_joern_artifact_path(audit_run_id, summary.get("artifact_path"))
+    if artifact_path:
+        summary["artifact_path"] = str(artifact_path)
+    if artifact_path:
+        with contextlib.suppress(Exception):
+            metadata = _artifact_store_metadata(get_settings(), Path(str(artifact_path)))
+            await _upsert_artifact_record(
+                metadata,
+                [
+                    {
+                        "kind": "joern_cpg",
+                        "project_id": project_id,
+                        "audit_run_id": audit_run_id,
+                        "record_id": audit_run.get("snapshot_id"),
+                    }
+                ],
+            )
+            summary["artifact_id"] = metadata["artifact_id"]
+            summary["artifact_uri"] = metadata["artifact_uri"]
+            summary["cpg_artifact_id"] = metadata["artifact_id"]
+    event_type = "joern_cpg_completed" if summary["ok"] else "joern_cpg_failed"
+    await _record_pipeline_event(audit_run_id, event_type, summary)
+    return summary
+
+
 async def _run_semgrep_mcp(
     audit_run_id: str,
     project_id: str,
@@ -3029,6 +3229,101 @@ def _semgrep_status(result: dict[str, Any]) -> dict[str, Any]:
     if findings:
         return {"ok": True, "status": "has_findings", "reason": None}
     return {"ok": True, "status": "no_findings", "reason": None}
+
+
+def _joern_query_packs(config: dict[str, Any]) -> list[str]:
+    configured = config.get("joern_query_packs")
+    if configured is None:
+        configured = get_settings().joern_query_packs
+    if isinstance(configured, str):
+        raw = configured.split(",")
+    else:
+        raw = list(configured or [])
+    packs: list[str] = []
+    for item in raw:
+        pack = str(item).strip()
+        if pack and pack not in packs:
+            packs.append(pack)
+    return packs
+
+
+def _latest_joern_context(audit_run: dict[str, Any]) -> dict[str, Any]:
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    pipeline = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
+    for step in pipeline.get("steps") or []:
+        if not isinstance(step, dict) or step.get("step") != "joern-cpg":
+            continue
+        result = step.get("result") if isinstance(step.get("result"), dict) else {}
+        return {
+            "enabled": bool(config.get("enable_joern", True)),
+            "required": bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False)),
+            "mcp": "joern-mcp",
+            "cpg_path": result.get("cpg_path"),
+            "cpg_artifact_id": result.get("artifact_id") or result.get("cpg_artifact_id"),
+            "artifact_path": result.get("artifact_path"),
+            "status": result.get("status"),
+            "ok": result.get("ok"),
+            "query_packs": _compact_joern_query_packs(result.get("query_packs")),
+            "recommended_query_packs": _joern_query_packs(config),
+        }
+    joern_context = config.get("joern_context") if isinstance(config.get("joern_context"), dict) else {}
+    if joern_context:
+        return {
+            "enabled": bool(config.get("enable_joern", True)),
+            "required": bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False)),
+            "mcp": "joern-mcp",
+            "cpg_path": joern_context.get("cpg_path"),
+            "cpg_artifact_id": joern_context.get("artifact_id") or joern_context.get("cpg_artifact_id"),
+            "artifact_path": joern_context.get("artifact_path"),
+            "status": joern_context.get("status"),
+            "ok": joern_context.get("ok"),
+            "query_packs": _compact_joern_query_packs(joern_context.get("query_packs")),
+            "recommended_query_packs": _joern_query_packs(config),
+        }
+    return {
+        "enabled": bool(config.get("enable_joern", True)),
+        "required": bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False)),
+        "mcp": "joern-mcp",
+        "cpg_path": None,
+        "cpg_artifact_id": None,
+        "query_packs": [],
+        "recommended_query_packs": _joern_query_packs(config),
+    }
+
+
+def _compact_joern_query_packs(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    packs = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        packs.append(
+            {
+                "query_pack": item.get("query_pack"),
+                "ok": item.get("ok"),
+                "available": item.get("available"),
+                "artifact_path": item.get("artifact_path"),
+                "artifact": item.get("artifact"),
+                "exit_code": item.get("exit_code"),
+                "error": item.get("error"),
+            }
+        )
+    return packs
+
+
+def _platform_joern_artifact_path(audit_run_id: str, artifact_path: Any) -> Path | None:
+    if not artifact_path:
+        return None
+    raw = str(artifact_path)
+    marker = "/artifacts/"
+    settings = get_settings()
+    if raw.startswith(marker):
+        return settings.artifact_root / "joern" / audit_run_id / raw.removeprefix(marker)
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    return settings.artifact_root / path
 
 
 async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
@@ -3236,14 +3531,14 @@ def _tool_failures(audit_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for event in audit_events:
         event_type = str(event.get("event_type") or "")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        if event_type in {"sca_failed", "semgrep_failed", "semgrep_skipped", "tool_unavailable"}:
+        if event_type in {"joern_cpg_failed", "joern_failed", "sca_failed", "semgrep_failed", "semgrep_skipped", "tool_unavailable"}:
             failures.append({"event_type": event_type, "payload": payload})
             continue
         if event_type != "pipeline_step_completed":
             continue
         step = str(payload.get("step") or "")
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-        if step in {"sca", "semgrep"} and (result.get("ok") is False or result.get("available") is False):
+        if step in {"joern-cpg", "sca", "semgrep"} and (result.get("ok") is False or result.get("available") is False):
             failures.append({"event_type": event_type, "step": step, "payload": result})
     return failures
 
@@ -3352,6 +3647,7 @@ async def _run_code_batch_analysis(
         task_db_id = f"{audit_run_id}-{plan.task_id}"
         async with semaphore:
             await mark_task(task_db_id, "running", {"risk_keywords": plan.risk_keywords, "metadata": plan.metadata})
+            joern_context = _latest_joern_context(audit_run)
             input_payload = {
                 "goal": (
                     "Perform focused code vulnerability analysis for this batch. "
@@ -3375,9 +3671,11 @@ async def _run_code_batch_analysis(
                         "source",
                     ],
                 },
+                "joern": joern_context,
                 "analysis_guidance": [
                     "Prioritize authentication, authorization, injection, file/path, SSRF, deserialization, crypto, secret handling, and business logic flaws.",
                     "Use the complete workspace and MCP code search as needed, but keep findings tied to concrete files and lines.",
+                    "Use Joern MCP and the CPG artifact for entrypoint, source/sink, call-chain, and data-flow confirmation when Joern is available.",
                     "If a suspected issue spans files, include the primary sink/source file and describe the chain in evidence.",
                     "Do not report dependency CVEs here unless they directly enable a code path vulnerability.",
                 ],

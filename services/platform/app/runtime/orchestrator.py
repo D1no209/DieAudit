@@ -1009,7 +1009,10 @@ class RuntimeOrchestrator:
         labels["dieaudit.mcp"] = template["name"]
         labels["dieaudit.agent_run_id"] = agent_run_id
 
-        mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / agent_run_id / template["name"]
+        if template["name"] == "joern-mcp":
+            mcp_artifact_path = self.settings.artifact_root / "joern" / audit_run_id
+        else:
+            mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / agent_run_id / template["name"]
         mcp_artifact_path.mkdir(parents=True, exist_ok=True)
         mounts = await self._mounts(workspace_host_path, template, artifact_host_path=mcp_artifact_path)
         env = await self._mcp_env(

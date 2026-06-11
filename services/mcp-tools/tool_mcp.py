@@ -156,6 +156,49 @@ async def joern_query_route(request):
     )
 
 
+@mcp.custom_route("/tools/joern_build_cpg", methods=["POST"])
+async def joern_build_cpg_route(request):
+    body = await request.json()
+    return JSONResponse(
+        joern_build_cpg(
+            workspace_path=body.get("workspace_path", "."),
+            language=body.get("language"),
+            timeout_seconds=int(body.get("timeout_seconds", 900)),
+            query_packs=body.get("query_packs"),
+        )
+    )
+
+
+@mcp.custom_route("/tools/joern_list_cpgs", methods=["POST"])
+async def joern_list_cpgs_route(request):
+    body = await request.json()
+    return JSONResponse(joern_list_cpgs(audit_run_id=body.get("audit_run_id")))
+
+
+@mcp.custom_route("/tools/joern_run_script", methods=["POST"])
+async def joern_run_script_route(request):
+    body = await request.json()
+    return JSONResponse(
+        joern_run_script(
+            cpg_path=body.get("cpg_path", ""),
+            script=body.get("script", ""),
+            timeout_seconds=int(body.get("timeout_seconds", 300)),
+        )
+    )
+
+
+@mcp.custom_route("/tools/joern_common_queries", methods=["POST"])
+async def joern_common_queries_route(request):
+    body = await request.json()
+    return JSONResponse(
+        joern_common_queries(
+            cpg_path=body.get("cpg_path", ""),
+            query_pack=body.get("query_pack", "entrypoints"),
+            timeout_seconds=int(body.get("timeout_seconds", 300)),
+        )
+    )
+
+
 @mcp.tool()
 def list_files(path: str = ".", max_results: int = 200) -> dict[str, Any]:
     """List files under the authorized workspace."""
@@ -645,6 +688,114 @@ def joern_query(query: str, cpg_path: str | None = None, timeout_seconds: int = 
     script_path.write_text(script, encoding="utf-8")
     command = [joern, "--script", str(script_path)]
     return _run_tool_command("joern", command, output_path, timeout_seconds)
+
+
+@mcp.tool()
+def joern_build_cpg(
+    workspace_path: str = ".",
+    language: str | None = None,
+    timeout_seconds: int = 900,
+    query_packs: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a Joern CPG for the authorized workspace and persist it as an artifact."""
+    joern = shutil.which("joern")
+    joern_parse = shutil.which("joern-parse")
+    if not joern and not joern_parse:
+        return _tool_unavailable("joern", "neither joern nor joern-parse is installed in this MCP image")
+    source_root = _safe_path(workspace_path)
+    if not source_root.is_dir():
+        raise ValueError(f"workspace path is not a directory: {workspace_path}")
+    artifact_dir = _artifact_dir("joern")
+    cpg_path = artifact_dir / "cpg.bin.zip"
+    if joern_parse:
+        command = [joern_parse, str(source_root), "--out", str(cpg_path)]
+        if language:
+            command.extend(["--language", str(language)])
+        result = _run_tool_command("joern", command, cpg_path, timeout_seconds)
+    else:
+        script_path = artifact_dir / "build-cpg.sc"
+        script_path.write_text(
+            f'importCode("{source_root.as_posix()}")\nsave("{cpg_path.as_posix()}")\n',
+            encoding="utf-8",
+        )
+        result = _run_tool_command("joern", [joern, "--script", str(script_path)], cpg_path, timeout_seconds)
+    result["cpg_path"] = str(cpg_path)
+    result["language"] = language
+    result["workspace_path"] = str(source_root)
+    normalized_packs = _normalize_joern_query_packs(query_packs)
+    result["query_packs"] = []
+    if result.get("ok") and normalized_packs:
+        for pack in normalized_packs:
+            try:
+                pack_result = joern_common_queries(str(cpg_path), pack, timeout_seconds=min(int(timeout_seconds), 300))
+            except Exception as exc:
+                pack_result = {"ok": False, "available": True, "tool": "joern", "query_pack": pack, "error": str(exc)}
+            result["query_packs"].append(pack_result)
+    return result
+
+
+@mcp.tool()
+def joern_list_cpgs(audit_run_id: str | None = None) -> dict[str, Any]:
+    """List CPG artifacts produced by this Joern MCP."""
+    root = _artifact_dir("joern")
+    entries = []
+    for path in sorted(root.glob("**/*.bin.zip")):
+        artifact = _artifact_evidence(path)
+        if audit_run_id and audit_run_id not in str(path):
+            continue
+        entries.append({"cpg_path": str(path), "artifact": artifact})
+    return {"ok": True, "tool": "joern", "cpgs": entries, "count": len(entries)}
+
+
+@mcp.tool()
+def joern_run_script(cpg_path: str, script: str, timeout_seconds: int = 300) -> dict[str, Any]:
+    """Run an arbitrary Joern script after importing an authorized CPG artifact."""
+    if not script.strip():
+        raise ValueError("script is required")
+    cpg = _safe_artifact_path(cpg_path)
+    return joern_query(script, cpg_path=str(cpg), timeout_seconds=timeout_seconds)
+
+
+@mcp.tool()
+def joern_common_queries(cpg_path: str, query_pack: str = "entrypoints", timeout_seconds: int = 300) -> dict[str, Any]:
+    """Run a built-in Joern query pack against an authorized CPG artifact."""
+    cpg = _safe_artifact_path(cpg_path)
+    pack = str(query_pack or "entrypoints").strip().lower()
+    script = _joern_query_pack(pack)
+    result = joern_query(script, cpg_path=str(cpg), timeout_seconds=timeout_seconds)
+    result["query_pack"] = pack
+    return result
+
+
+def _joern_query_pack(query_pack: str) -> str:
+    packs = {
+        "entrypoints": 'cpg.method.name("(?i).*(main|route|controller|handler|endpoint|server|app).*").take(200).map(m => s"${m.fullName}:${m.filename}:${m.lineNumber}").mkString("\\n")',
+        "authz": 'cpg.call.name("(?i).*(auth|login|session|jwt|oauth|permission|role|acl|policy).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
+        "injection": 'cpg.call.name("(?i).*(query|execute|exec|eval|render|template|sql|command|spawn|system).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
+        "file-io": 'cpg.call.name("(?i).*(open|read|write|upload|download|archive|extract|path|file).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
+        "network": 'cpg.call.name("(?i).*(http|request|fetch|url|uri|client|socket|connect).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
+        "secrets": 'cpg.literal.code("(?i).*(secret|token|password|passwd|api[_-]?key|credential).*").take(200).map(l => s"${l.code}:${l.method.fullName}:${l.location.filename}:${l.lineNumber}").mkString("\\n")',
+    }
+    if query_pack not in packs:
+        raise ValueError(f"unknown Joern query pack: {query_pack}")
+    return packs[query_pack]
+
+
+def _normalize_joern_query_packs(query_packs: list[str] | str | None) -> list[str]:
+    if not query_packs:
+        return []
+    if isinstance(query_packs, str):
+        values = query_packs.split(",")
+    else:
+        values = [str(item) for item in query_packs]
+    normalized: list[str] = []
+    for value in values:
+        pack = value.strip().lower()
+        if not pack or pack in normalized:
+            continue
+        _joern_query_pack(pack)
+        normalized.append(pack)
+    return normalized
 
 
 def _safe_path(path: str) -> Path:

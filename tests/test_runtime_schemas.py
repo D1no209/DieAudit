@@ -43,6 +43,16 @@ def test_code_batch_analysis_defaults_are_bounded_and_enabled_on_audit_runs() ->
     assert code_batch.agent_name == "opencode-code-auditor"
 
 
+def test_joern_defaults_are_enabled_and_required_on_audit_runs() -> None:
+    audit_run = CreateAuditRunRequest()
+
+    assert audit_run.enable_joern is True
+    assert audit_run.joern_required is True
+    assert audit_run.allow_joern_unavailable is False
+    assert audit_run.joern_timeout_seconds == 900
+    assert audit_run.joern_query_packs == ["entrypoints", "authz", "injection", "file-io", "network", "secrets"]
+
+
 def test_sandbox_execution_requests_require_explicit_commands() -> None:
     with pytest.raises(ValidationError):
         RunPocRequest()
