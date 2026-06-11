@@ -268,8 +268,8 @@ class RuntimeOrchestrator:
         network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}"
         labels = self._labels(audit_run_id, project_id, role="runtime", ttl=utc_ttl())
 
-        await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
-        await self.docker.connect_network(network_name, self.settings.agent_gateway_container_name, aliases=["agent-gateway"])
+        await self._ensure_agent_run_network(network_name, allow_external_network=allow_external_network, labels=labels)
+        await self._connect_runtime_controllers(network_name)
         await self._record_network(audit_run_id, network_name, "created")
 
         agent = self.agent_templates.get(agent_name)
@@ -303,7 +303,7 @@ class RuntimeOrchestrator:
                     endpoint = mcp.get("mcp_endpoint", "")
                     mcp_servers[mcp["name"]] = {
                         "transport": mcp.get("transport", "http"),
-                        "url": f"http://{mcp_container['name']}:{mcp.get('port', 8001)}{endpoint}",
+                        "url": f"{self._mcp_base_url(mcp_container, mcp)}{endpoint}",
                     }
 
             runtime_package: dict[str, Any] | None = None
@@ -428,7 +428,7 @@ class RuntimeOrchestrator:
             network_name = network.get("Name")
             if not network_name:
                 continue
-            await self.docker.disconnect_network(network_name, self.settings.agent_gateway_container_name)
+            await self._disconnect_runtime_controllers(network_name)
             await self.docker.remove_network(network_name)
             await self._mark_network_cleaned(audit_run_id, network_name)
             removed_networks.append(network_name)
@@ -502,11 +502,12 @@ class RuntimeOrchestrator:
         )
         labels = self._labels(audit_run_id, project_id, role="runtime", ttl=utc_ttl())
         await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
-        await self.docker.connect_network(network_name, self.settings.agent_gateway_container_name, aliases=["agent-gateway"])
+        await self._connect_runtime_controllers(network_name)
         await self._record_network(audit_run_id, network_name, "created")
         template = self.mcp_templates.get(mcp_name)
         container: dict[str, Any] | None = None
         container_cleaned = False
+        tool_succeeded = False
         try:
             container = await self._start_mcp(
                 audit_run_id=audit_run_id,
@@ -516,25 +517,27 @@ class RuntimeOrchestrator:
                 workspace_host_path=workspace_host_path,
                 template=template,
             )
-            url = f"http://{container['name']}:{template.get('port', 8001)}{tool_path}"
+            url = f"{self._mcp_base_url(container, template)}{tool_path}"
             async with httpx.AsyncClient(timeout=template.get("tool_timeout_seconds", 900), trust_env=False) as client:
                 response = await client.post(url, json=payload or {})
             if response.status_code >= 400:
                 raise RuntimeError(f"{mcp_name} {tool_path} failed: {response.status_code} {response.text}")
             result = response.json()
+            tool_succeeded = True
             return {"ok": True, "mcp": container, "result": result}
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
         finally:
-            if not retain_runtime_on_failure and container and not container_cleaned:
+            should_retain = bool(retain_runtime_on_failure and not tool_succeeded)
+            if not should_retain and container and not container_cleaned:
                 await self._capture_and_remove_container(
                     audit_run_id=audit_run_id,
                     container_id=container["id"],
                     container_name=container.get("name"),
                 )
                 container_cleaned = True
-            if dedicated_network and not retain_runtime_on_failure:
-                await self.docker.disconnect_network(network_name, self.settings.agent_gateway_container_name)
+            if dedicated_network and not should_retain:
+                await self._disconnect_runtime_controllers(network_name)
                 await self.docker.remove_network(network_name)
                 await self._mark_network_cleaned(audit_run_id, network_name)
 
@@ -605,7 +608,12 @@ class RuntimeOrchestrator:
         )
 
         await self.docker.pull_image(image)
-        name = f"{self.settings.dynamic_container_prefix}-{audit_run_id}-poc-{poc_run_id[:8]}"
+        name = self._runtime_container_name(
+            audit_run_id=audit_run_id,
+            role="poc",
+            template_name="poc",
+            run_id=poc_run_id,
+        )
         created: dict[str, Any] | None = None
         log_artifact: str | None = None
         status = "created"
@@ -748,7 +756,12 @@ class RuntimeOrchestrator:
         )
 
         await self.docker.pull_image(image)
-        name = f"{self.settings.dynamic_container_prefix}-{audit_run_id}-sandbox-{service_name}-{sandbox_id[:8]}"
+        name = self._runtime_container_name(
+            audit_run_id=audit_run_id,
+            role="sandbox",
+            template_name=service_name,
+            run_id=sandbox_id,
+        )
         created: dict[str, Any] | None = None
         try:
             created = await self.docker.create_container(name, payload)
@@ -1004,7 +1017,12 @@ class RuntimeOrchestrator:
     ) -> dict[str, Any]:
         image = template["image"]
         await self.docker.pull_image(image)
-        name = f"{self.settings.dynamic_container_prefix}-{audit_run_id}-{template['name']}-{agent_run_id[:8]}"
+        name = self._runtime_container_name(
+            audit_run_id=audit_run_id,
+            role="mcp",
+            template_name=template["name"],
+            run_id=agent_run_id,
+        )
         labels = self._labels(audit_run_id, project_id, role="mcp", ttl=utc_ttl())
         labels["dieaudit.mcp"] = template["name"]
         labels["dieaudit.agent_run_id"] = agent_run_id
@@ -1030,15 +1048,15 @@ class RuntimeOrchestrator:
             aliases=[name, template["name"]],
             mounts=mounts,
             read_only=template.get("read_only", True),
-            healthcheck=template.get("healthcheck"),
+            healthcheck=None,
             resources=template.get("resources"),
         )
         created = await self.docker.create_container(name, payload)
         await self.docker.start_container(created["Id"])
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "mcp", labels, "starting")
-        await self.docker.wait_for_healthy(created["Id"], timeout_seconds=template.get("health_timeout_seconds", 45))
+        await self._wait_for_mcp_http(name, template, timeout_seconds=template.get("health_timeout_seconds", 45))
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "mcp", labels, "running")
-        return {"id": created["Id"], "name": name, "image": image, "role": "mcp", "template": template["name"]}
+        return {"id": created["Id"], "name": name, "host": name, "image": image, "role": "mcp", "template": template["name"]}
 
     async def _mcp_env(self, *, template: dict[str, Any], audit_run_id: str, project_id: str, agent_run_id: str) -> dict[str, Any]:
         env = {
@@ -1117,7 +1135,12 @@ class RuntimeOrchestrator:
     ) -> dict[str, Any]:
         image = template["image"]
         await self.docker.pull_image(image)
-        name = f"{self.settings.dynamic_container_prefix}-{audit_run_id}-{template['name']}-{agent_run_id[:8]}"
+        name = self._runtime_container_name(
+            audit_run_id=audit_run_id,
+            role="agent",
+            template_name=template["name"],
+            run_id=agent_run_id,
+        )
         labels = self._labels(audit_run_id, project_id, role="agent", ttl=utc_ttl())
         labels["dieaudit.agent"] = template["name"]
         labels["dieaudit.agent_run_id"] = agent_run_id
@@ -1171,7 +1194,19 @@ class RuntimeOrchestrator:
         container_id: str,
         artifact_dir: Path,
     ) -> dict[str, Any]:
-        wait_result = await self.docker.wait_container(container_id)
+        wait_error: str | None = None
+        try:
+            wait_result = await asyncio.wait_for(
+                self.docker.wait_container(container_id),
+                timeout=getattr(self.settings, "opencode_agent_timeout_seconds", 600),
+            )
+        except asyncio.TimeoutError:
+            wait_error = f"OpenCode agent timed out after {getattr(self.settings, 'opencode_agent_timeout_seconds', 600)}s"
+            await self.docker.stop_container(container_id, timeout_seconds=3)
+            wait_result = {"StatusCode": 124, "error": wait_error}
+        except Exception as exc:
+            wait_error = str(exc)
+            wait_result = {"StatusCode": 1, "error": wait_error}
         status_code = int(wait_result.get("StatusCode") or 0)
         log_artifact = await self._capture_container_logs(
             audit_run_id=audit_run_id,
@@ -1191,12 +1226,14 @@ class RuntimeOrchestrator:
             "artifact": str(result_file),
             "log_artifact": log_artifact,
         }
+        if wait_error:
+            payload["error"] = wait_error
         if result_file.exists():
             try:
                 payload.update(json.loads(result_file.read_text(encoding="utf-8")))
             except json.JSONDecodeError as exc:
                 payload["error"] = f"invalid agent_result.json: {exc}"
-        else:
+        elif not wait_error:
             payload["error"] = "agent_result.json not found"
 
         for event in payload.get("events", []):
@@ -1703,6 +1740,102 @@ class RuntimeOrchestrator:
                 merged.append(host)
         env["NO_PROXY"] = ",".join(merged)
         env["no_proxy"] = env["NO_PROXY"]
+
+    def _runtime_container_name(self, *, audit_run_id: str, role: str, template_name: str, run_id: str) -> str:
+        prefix = self._dns_label_part(str(getattr(self.settings, "dynamic_container_prefix", "dieaudit")), max_length=10) or "dieaudit"
+        role_part = self._dns_label_part(role, max_length=8) or "run"
+        template_part = self._dns_label_part(template_name, max_length=18) or "item"
+        run_part = self._dns_label_part(run_id.replace("-", ""), max_length=12) or uuid.uuid4().hex[:12]
+        audit_hash = uuid.uuid5(uuid.NAMESPACE_URL, str(audit_run_id)).hex[:8]
+        return f"{prefix}-{audit_hash}-{role_part}-{template_part}-{run_part}"[:63].rstrip("-")
+
+    async def _connect_runtime_controllers(self, network_name: str) -> None:
+        for container_name, alias in self._runtime_controller_targets():
+            await self.docker.connect_network(network_name, container_name, aliases=[alias])
+
+    async def _disconnect_runtime_controllers(self, network_name: str) -> None:
+        for container_name, _alias in self._runtime_controller_targets():
+            await self.docker.disconnect_network(network_name, container_name)
+        for container_name in self._known_runtime_controller_container_names():
+            await self.docker.disconnect_network(network_name, container_name)
+
+    async def _ensure_agent_run_network(
+        self,
+        network_name: str,
+        *,
+        allow_external_network: bool,
+        labels: dict[str, str],
+    ) -> dict[str, Any]:
+        existing = await self.docker.network_exists(network_name)
+        if existing:
+            internal = bool(existing.get("Internal"))
+            if internal != allow_external_network:
+                return existing
+            await self._disconnect_runtime_controllers(network_name)
+            await self.docker.remove_network(network_name)
+        return await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
+
+    def _runtime_controller_targets(self) -> list[tuple[str, str]]:
+        targets = [(self.settings.agent_gateway_container_name, "agent-gateway")]
+        current = self._current_runtime_controller_container_name()
+        if current and current != self.settings.agent_gateway_container_name:
+            targets.append((current, self._dns_label_part(str(self.settings.service_name), max_length=32) or "runtime-controller"))
+        deduped: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for container_name, alias in targets:
+            if container_name and container_name not in seen:
+                deduped.append((container_name, alias))
+                seen.add(container_name)
+        return deduped
+
+    def _current_runtime_controller_container_name(self) -> str | None:
+        configured = str(getattr(self.settings, "runtime_controller_container_name", "") or "").strip()
+        if configured:
+            return configured
+        service_name = str(getattr(self.settings, "service_name", "") or "").strip()
+        if not service_name:
+            return None
+        return f"{getattr(self.settings, 'dynamic_container_prefix', 'dieaudit')}-{service_name}"
+
+    def _known_runtime_controller_container_names(self) -> list[str]:
+        prefix = getattr(self.settings, "dynamic_container_prefix", "dieaudit")
+        names = [
+            self.settings.agent_gateway_container_name,
+            f"{prefix}-workflow-worker",
+            f"{prefix}-sandbox-runner",
+        ]
+        current = self._current_runtime_controller_container_name()
+        if current:
+            names.append(current)
+        return list(dict.fromkeys(name for name in names if name))
+
+    @staticmethod
+    def _dns_label_part(value: str, *, max_length: int) -> str:
+        text = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
+        text = re.sub(r"-+", "-", text)
+        return text[:max_length].strip("-")
+
+    @staticmethod
+    def _mcp_base_url(container: dict[str, Any], template: dict[str, Any]) -> str:
+        host = container.get("host") or container.get("name")
+        return f"http://{host}:{template.get('port', 8001)}"
+
+    async def _wait_for_mcp_http(self, host: str, template: dict[str, Any], *, timeout_seconds: int = 45) -> dict[str, Any]:
+        health_path = str(template.get("healthcheck_path") or "/health")
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        url = f"http://{host}:{template.get('port', 8001)}{health_path}"
+        last_error = ""
+        async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
+            while asyncio.get_running_loop().time() < deadline:
+                try:
+                    response = await client.get(url)
+                    if response.status_code < 400:
+                        return {"url": url, "status_code": response.status_code}
+                    last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+                except Exception as exc:
+                    last_error = str(exc)
+                await asyncio.sleep(1)
+        raise RuntimeError(f"MCP {template.get('name', host)} not healthy at {url}: {last_error}")
 
     @staticmethod
     def _is_opencode_agent(template: dict[str, Any]) -> bool:

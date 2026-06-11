@@ -11,6 +11,10 @@ def _orchestrator() -> RuntimeOrchestrator:
     orchestrator = RuntimeOrchestrator.__new__(RuntimeOrchestrator)
     orchestrator.settings = SimpleNamespace(
         api_key_header="X-DieAudit-Api-Key",
+        dynamic_container_prefix="dieaudit",
+        agent_gateway_container_name="dieaudit-agent-gateway",
+        runtime_controller_container_name="",
+        service_name="agent-gateway",
         default_container_memory="512m",
         default_container_cpus=0.5,
         default_container_pids_limit=128,
@@ -68,6 +72,101 @@ def test_runtime_container_payload_allows_template_resource_overrides() -> None:
     assert host_config["NanoCpus"] == 2_000_000_000
     assert host_config["PidsLimit"] == 64
     assert host_config["Tmpfs"] == {"/tmp": "rw,noexec,nosuid,size=32m"}
+
+
+def test_runtime_container_name_is_short_dns_safe() -> None:
+    name = _orchestrator()._runtime_container_name(
+        audit_run_id="da1bfe9f-d7d2-490c-83b6-e321f4d16f11",
+        role="mcp",
+        template_name="joern-mcp",
+        run_id="tool-f8568ce6-e6b6-48c2-beeb-a9ac169bf605",
+    )
+
+    assert len(name) <= 63
+    assert name == name.lower()
+    assert name.strip("-") == name
+    assert all(char.isalnum() or char == "-" for char in name)
+
+
+def test_mcp_base_url_uses_dns_safe_runtime_host() -> None:
+    container = {
+        "name": "dieaudit-da1bfe9f-d7d2-490c-83b6-e321f4d16f11-joern-mcp-tool-f85",
+        "host": "dieaudit-a1b2c3d4-mcp-joern-mcp-f8568ce6e6b6",
+    }
+    template = {"port": 8001}
+
+    url = _orchestrator()._mcp_base_url(container, template)
+
+    assert url == "http://dieaudit-a1b2c3d4-mcp-joern-mcp-f8568ce6e6b6:8001"
+
+
+def test_runtime_controller_targets_include_current_worker() -> None:
+    orchestrator = _orchestrator()
+    orchestrator.settings.service_name = "workflow-worker"
+
+    assert orchestrator._runtime_controller_targets() == [
+        ("dieaudit-agent-gateway", "agent-gateway"),
+        ("dieaudit-workflow-worker", "workflow-worker"),
+    ]
+
+
+def test_known_runtime_controllers_include_cleanup_candidates() -> None:
+    orchestrator = _orchestrator()
+
+    assert orchestrator._known_runtime_controller_container_names() == [
+        "dieaudit-agent-gateway",
+        "dieaudit-workflow-worker",
+        "dieaudit-sandbox-runner",
+    ]
+
+
+def test_agent_run_network_recreated_when_external_policy_changes(monkeypatch) -> None:
+    asyncio.run(_run_agent_network_policy_upgrade_test(monkeypatch))
+
+
+async def _run_agent_network_policy_upgrade_test(monkeypatch) -> None:
+    orchestrator = _orchestrator()
+    events = []
+    networks = {
+        "dieaudit-run-1": {
+            "Name": "dieaudit-run-1",
+            "Internal": True,
+            "Labels": {"dieaudit.managed": "true"},
+        }
+    }
+
+    async def fake_network_exists(name):
+        return networks.get(name)
+
+    async def fake_create_network(name, *, internal=True, labels=None):
+        created = {"Name": name, "Internal": internal, "Labels": labels or {}}
+        networks[name] = created
+        events.append(("create_network", name, internal))
+        return created
+
+    async def fake_disconnect_network(name, container):
+        events.append(("disconnect_network", name, container))
+
+    async def fake_remove_network(name):
+        events.append(("remove_network", name))
+        networks.pop(name, None)
+
+    orchestrator.docker = SimpleNamespace(
+        network_exists=fake_network_exists,
+        create_network=fake_create_network,
+        disconnect_network=fake_disconnect_network,
+        remove_network=fake_remove_network,
+    )
+
+    network = await orchestrator._ensure_agent_run_network(
+        "dieaudit-run-1",
+        allow_external_network=True,
+        labels={"dieaudit.managed": "true"},
+    )
+
+    assert network["Internal"] is False
+    assert ("remove_network", "dieaudit-run-1") in events
+    assert ("create_network", "dieaudit-run-1", False) in events
 
 
 def test_ephemeral_container_payload_is_hardened(monkeypatch) -> None:

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     docker_host: str = "http://docker-socket-proxy:2375"
     dynamic_container_prefix: str = "dieaudit"
     agent_gateway_container_name: str = "dieaudit-agent-gateway"
+    runtime_controller_container_name: str = ""
     minio_endpoint: str = "http://minio:9000"
     minio_access_key: str = "dieaudit"
     minio_secret_key: str = "dieaudit-secret"
@@ -50,6 +51,8 @@ class Settings(BaseSettings):
     enable_gvisor: bool = False
     allow_runc_sandbox: bool = False
     allow_sandbox_external_network: bool = False
+    allow_agent_external_network: bool = True
+    opencode_agent_timeout_seconds: int = 600
     default_container_memory: str = "1024m"
     default_container_cpus: float = 1.0
     default_container_pids_limit: int = 512

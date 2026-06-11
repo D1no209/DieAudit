@@ -672,7 +672,12 @@ def codeql_query(database: str, query: str, timeout_seconds: int = 300) -> dict[
 
 
 @mcp.tool()
-def joern_query(query: str, cpg_path: str | None = None, timeout_seconds: int = 300) -> dict[str, Any]:
+def joern_query(
+    query: str,
+    cpg_path: str | None = None,
+    timeout_seconds: int = 300,
+    output_name: str = "joern-query.txt",
+) -> dict[str, Any]:
     """Run a Joern script/query when Joern is installed in this MCP image."""
     joern = shutil.which("joern")
     if not joern:
@@ -680,14 +685,23 @@ def joern_query(query: str, cpg_path: str | None = None, timeout_seconds: int = 
     if not query.strip():
         raise ValueError("query is required")
     artifact_dir = _artifact_dir("joern")
-    script_path = artifact_dir / "query.sc"
-    output_path = artifact_dir / "joern-query.txt"
+    safe_output_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", output_name).strip("-") or "joern-query.txt"
+    script_path = artifact_dir / f"{Path(safe_output_name).stem}.sc"
+    output_path = artifact_dir / safe_output_name
+    log_path = artifact_dir / f"{Path(safe_output_name).stem}.log"
     script = query
     if cpg_path:
-        script = f'importCpg("{_safe_path(cpg_path).as_posix()}")\n{query}'
+        script = f'importCpg("{_safe_artifact_path(cpg_path).as_posix()}")\n{query}'
     script_path.write_text(script, encoding="utf-8")
     command = [joern, "--script", str(script_path)]
-    return _run_tool_command("joern", command, output_path, timeout_seconds)
+    return _run_tool_command(
+        "joern",
+        command,
+        output_path,
+        timeout_seconds,
+        stdout_path=log_path,
+        write_stdout=not output_path.exists(),
+    )
 
 
 @mcp.tool()
@@ -708,17 +722,33 @@ def joern_build_cpg(
     artifact_dir = _artifact_dir("joern")
     cpg_path = artifact_dir / "cpg.bin.zip"
     if joern_parse:
-        command = [joern_parse, str(source_root), "--out", str(cpg_path)]
+        command = [joern_parse, str(source_root), "--output", str(cpg_path)]
         if language:
             command.extend(["--language", str(language)])
-        result = _run_tool_command("joern", command, cpg_path, timeout_seconds)
+        log_path = artifact_dir / "build-cpg.log"
+        result = _run_tool_command(
+            "joern",
+            command,
+            cpg_path,
+            timeout_seconds,
+            stdout_path=log_path,
+            write_stdout=False,
+        )
     else:
         script_path = artifact_dir / "build-cpg.sc"
         script_path.write_text(
             f'importCode("{source_root.as_posix()}")\nsave("{cpg_path.as_posix()}")\n',
             encoding="utf-8",
         )
-        result = _run_tool_command("joern", [joern, "--script", str(script_path)], cpg_path, timeout_seconds)
+        log_path = artifact_dir / "build-cpg.log"
+        result = _run_tool_command(
+            "joern",
+            [joern, "--script", str(script_path)],
+            cpg_path,
+            timeout_seconds,
+            stdout_path=log_path,
+            write_stdout=False,
+        )
     result["cpg_path"] = str(cpg_path)
     result["language"] = language
     result["workspace_path"] = str(source_root)
@@ -761,13 +791,24 @@ def joern_common_queries(cpg_path: str, query_pack: str = "entrypoints", timeout
     """Run a built-in Joern query pack against an authorized CPG artifact."""
     cpg = _safe_artifact_path(cpg_path)
     pack = str(query_pack or "entrypoints").strip().lower()
-    script = _joern_query_pack(pack)
-    result = joern_query(script, cpg_path=str(cpg), timeout_seconds=timeout_seconds)
+    output_name = f"joern-query-{pack}.txt"
+    output_path = _artifact_dir("joern") / output_name
+    script = _joern_query_pack(pack, output_path)
+    result = joern_query(script, cpg_path=str(cpg), timeout_seconds=timeout_seconds, output_name=output_name)
     result["query_pack"] = pack
     return result
 
 
-def _joern_query_pack(query_pack: str) -> str:
+def _joern_query_pack(query_pack: str, output_path: Path | None = None) -> str:
+    def emit(expr: str) -> str:
+        if output_path is None:
+            return expr
+        escaped_path = output_path.as_posix().replace("\\", "\\\\").replace('"', '\\"')
+        return f"""val dieAuditResult = {expr}
+import java.nio.file.{{Files, Paths}}
+Files.writeString(Paths.get("{escaped_path}"), dieAuditResult)
+"""
+
     packs = {
         "entrypoints": 'cpg.method.name("(?i).*(main|route|controller|handler|endpoint|server|app).*").take(200).map(m => s"${m.fullName}:${m.filename}:${m.lineNumber}").mkString("\\n")',
         "authz": 'cpg.call.name("(?i).*(auth|login|session|jwt|oauth|permission|role|acl|policy).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
@@ -778,7 +819,7 @@ def _joern_query_pack(query_pack: str) -> str:
     }
     if query_pack not in packs:
         raise ValueError(f"unknown Joern query pack: {query_pack}")
-    return packs[query_pack]
+    return emit(packs[query_pack])
 
 
 def _normalize_joern_query_packs(query_packs: list[str] | str | None) -> list[str]:
@@ -1319,7 +1360,15 @@ def _artifact_evidence(path: Path | None) -> dict[str, Any] | None:
     }
 
 
-def _run_tool_command(tool: str, command: list[str], output_path: Path, timeout_seconds: int) -> dict[str, Any]:
+def _run_tool_command(
+    tool: str,
+    command: list[str],
+    output_path: Path,
+    timeout_seconds: int,
+    *,
+    stdout_path: Path | None = None,
+    write_stdout: bool = True,
+) -> dict[str, Any]:
     timeout_seconds = min(max(int(timeout_seconds), 5), 1800)
     evidence = _command_evidence(tool, command, timeout_seconds=timeout_seconds, output_path=output_path)
     try:
@@ -1334,9 +1383,13 @@ def _run_tool_command(tool: str, command: list[str], output_path: Path, timeout_
             "stderr": _tail_text(exc.stderr),
             "artifact_path": None,
             "artifact": _artifact_evidence(output_path),
+            "stdout_artifact_path": str(stdout_path) if stdout_path and stdout_path.exists() else None,
+            "stdout_artifact": _artifact_evidence(stdout_path),
         }
-    if result.stdout:
+    if result.stdout and write_stdout and not output_path.exists():
         output_path.write_text(result.stdout, encoding="utf-8", errors="replace")
+    if stdout_path is not None:
+        stdout_path.write_text(result.stdout or "", encoding="utf-8", errors="replace")
     return {
         "ok": result.returncode == 0,
         "available": True,
@@ -1346,6 +1399,8 @@ def _run_tool_command(tool: str, command: list[str], output_path: Path, timeout_
         "stderr": result.stderr[-4000:],
         "artifact_path": str(output_path) if output_path.exists() else None,
         "artifact": _artifact_evidence(output_path),
+        "stdout_artifact_path": str(stdout_path) if stdout_path and stdout_path.exists() else None,
+        "stdout_artifact": _artifact_evidence(stdout_path),
     }
 
 

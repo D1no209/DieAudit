@@ -113,6 +113,14 @@ def test_heavy_analyzer_templates_use_dedicated_images() -> None:
     assert joern["required_binaries"] == ["joern"]
 
 
+def test_joern_template_uses_executable_java_tmpdir() -> None:
+    joern = yaml.safe_load((ROOT / "configs/mcp-templates/joern-mcp.yaml").read_text(encoding="utf-8"))
+
+    assert joern["env"]["JAVA_TOOL_OPTIONS"] == "-Djava.io.tmpdir=/joern-tmp"
+    assert "noexec" not in joern["resources"]["tmpfs"]["/joern-tmp"]
+    assert "exec" in joern["resources"]["tmpfs"]["/joern-tmp"]
+
+
 def test_default_opencode_audit_agents_are_authorized_for_joern() -> None:
     for name in ["opencode-orchestrator", "opencode-recon-auditor", "opencode-code-auditor", "opencode-validator"]:
         template = yaml.safe_load((ROOT / f"configs/agent-templates/{name}.yaml").read_text(encoding="utf-8"))

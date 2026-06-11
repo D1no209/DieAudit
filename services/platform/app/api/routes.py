@@ -2551,6 +2551,11 @@ def _effective_sandbox_external_network(settings: Settings, requested: bool) -> 
     return bool(requested)
 
 
+def _effective_agent_external_network(audit_run: dict[str, Any], settings: Settings) -> bool:
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    return bool(config.get("allow_agent_external_network", settings.allow_agent_external_network))
+
+
 def _is_sandbox_unavailable_error(message: str) -> bool:
     normalized = message.lower()
     return any(
@@ -3093,6 +3098,7 @@ async def _run_semgrep_mcp(
     runtime: Any,
     audit_run: dict[str, Any],
 ) -> dict[str, Any]:
+    allow_network = bool(audit_run.get("config", {}).get("allow_semgrep_external_network", True))
     mcp_result = await runtime.run_mcp_tool(
         audit_run_id=audit_run_id,
         project_id=project_id,
@@ -3100,7 +3106,7 @@ async def _run_semgrep_mcp(
         tool_path="/tools/semgrep_scan",
         workspace_host_path=workspace_path,
         payload={"config": "auto", "output_format": "json", "timeout_seconds": 300},
-        allow_external_network=False,
+        allow_external_network=allow_network,
         retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
     )
     result = mcp_result.get("result", {})
@@ -3343,7 +3349,7 @@ async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str
                 project_id=audit_run["project_id"],
                 agent_name="opencode-judger",
                 workspace_host_path=workspace_path,
-                allow_external_network=audit_run["allow_external_network"],
+                allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
                 retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                 input_payload={
                     "goal": (
@@ -3686,7 +3692,7 @@ async def _run_code_batch_analysis(
                     project_id=project_id,
                     agent_name=agent_name,
                     workspace_host_path=workspace_path,
-                    allow_external_network=bool(audit_run.get("allow_external_network")),
+                    allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
                     retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
                     input_payload=input_payload,
                 )

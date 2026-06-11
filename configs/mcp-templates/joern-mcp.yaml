@@ -7,6 +7,7 @@ env:
   MCP_NAME: joern-mcp
   WORKSPACE_ROOT: /workspace
   ARTIFACT_ROOT: /artifacts
+  JAVA_TOOL_OPTIONS: -Djava.io.tmpdir=/joern-tmp
 workspace_mount:
   target: /workspace
   read_only: true
@@ -16,6 +17,9 @@ artifact_mount:
 mounts: []
 resources:
   memory: 4g
+  tmpfs:
+    /tmp: rw,exec,nosuid,size=256m
+    /joern-tmp: rw,exec,nosuid,size=512m
 healthcheck:
   Test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health').read()"]
   Interval: 10000000000

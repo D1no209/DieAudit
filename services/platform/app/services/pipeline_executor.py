@@ -114,12 +114,13 @@ class PipelineExecutor:
                 joern_context = self._agent_joern_context(audit_run)
                 if joern_context["enabled"]:
                     agent_input_payload = {**agent_input_payload, "joern": joern_context}
+            agent_external_network = self._agent_external_network(audit_run)
             agent_result = await self.runtime.start_agent_run(
                 audit_run_id=audit_run_id,
                 project_id=audit_run["project_id"],
                 agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
                 workspace_host_path=workspace_path,
-                allow_external_network=audit_run["allow_external_network"],
+                allow_external_network=agent_external_network,
                 retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                 input_payload=agent_input_payload,
             )
@@ -129,6 +130,8 @@ class PipelineExecutor:
                 "pipeline_step_completed",
                 {"step": "agent-audit", "result": self.compact_event_payload(agent_result)},
             )
+            if self._agent_run_failed(agent_result):
+                raise RuntimeError(self._agent_run_error(agent_result) or "agent-audit failed")
             await self.raise_if_cancelled(audit_run_id)
 
             if self._code_batch_analysis_enabled(audit_run):
@@ -201,7 +204,7 @@ class PipelineExecutor:
                 validator_rounds=audit_run["validator_rounds"],
                 max_parallel_validators=audit_run["max_parallel_validators"],
                 validator_agent_name="opencode-validator",
-                allow_external_network=audit_run["allow_external_network"],
+                allow_external_network=agent_external_network,
                 retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                 wait_for_completion=True,
                 cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
@@ -399,6 +402,24 @@ class PipelineExecutor:
     def _code_batch_analysis_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
         return bool(config.get("enable_code_batch_analysis", True))
+
+    def _agent_external_network(self, audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("allow_agent_external_network", getattr(self.settings, "allow_agent_external_network", True)))
+
+    @staticmethod
+    def _agent_run_failed(agent_result: dict[str, Any]) -> bool:
+        status = str(agent_result.get("opencode_status") or agent_result.get("status") or "").lower()
+        return status == "failed" or bool(agent_result.get("error"))
+
+    @staticmethod
+    def _agent_run_error(agent_result: dict[str, Any]) -> str | None:
+        if agent_result.get("error"):
+            return str(agent_result["error"])
+        result = agent_result.get("opencode_result")
+        if isinstance(result, dict) and result.get("error"):
+            return str(result["error"])
+        return None
 
     @staticmethod
     def _joern_enabled(audit_run: dict[str, Any]) -> bool:

@@ -101,7 +101,7 @@ class CallbackRecorder:
 
 def build_executor(recorder: CallbackRecorder, runtime: FakeRuntime | None = None) -> PipelineExecutor:
     return PipelineExecutor(
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(allow_agent_external_network=True),
         runtime=runtime or FakeRuntime(),
         get_audit_run=recorder.get_audit_run,
         mark_audit_run_status=recorder.mark_status,
@@ -164,6 +164,7 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
         "completed",
     ]
     assert runtime.agent_runs[0]["agent_name"] == "opencode-orchestrator"
+    assert runtime.agent_runs[0]["allow_external_network"] is True
     joern_input = runtime.agent_runs[0]["input_payload"]["joern"]
     assert joern_input["mcp"] == "joern-mcp"
     assert joern_input["cpg_path"] == "/artifacts/joern/cpg.bin.zip"
@@ -171,12 +172,37 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     assert joern_input["recommended_query_packs"] == ["entrypoints", "authz", "injection", "file-io", "network", "secrets"]
     assert runtime.validator_runs[0]["validator_rounds"] == 2
     assert runtime.validator_runs[0]["max_parallel_validators"] == 3
+    assert runtime.validator_runs[0]["allow_external_network"] is True
     assert callable(runtime.validator_runs[0]["cancel_requested"])
     assert callable(runtime.validator_runs[0]["cancel_reason"])
     assert runtime.cleanup_runs == ["run-1"]
     assert recorder.summary is not None
     assert recorder.events[-1]["event_type"] == "pipeline_completed"
     assert recorder.pipeline_events[-1]["event_type"] == "runtime_cleanup_completed"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_can_disable_agent_external_network_per_audit_run() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {
+                "workspace_host_path": "/workspace/project",
+                "allow_agent_external_network": False,
+            },
+            "allow_external_network": True,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+
+    await build_executor(recorder, runtime).execute("run-1")
+
+    assert runtime.agent_runs[0]["allow_external_network"] is False
+    assert runtime.validator_runs[0]["allow_external_network"] is False
 
 
 @pytest.mark.asyncio
@@ -210,6 +236,30 @@ async def test_pipeline_executor_marks_completed_with_warnings_for_parse_warning
     assert recorder.events[-1]["event_type"] == "pipeline_completed_with_warnings"
     assert recorder.summary is not None
     assert recorder.summary["result_quality"]["status"] == "warn"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_fails_fast_when_agent_audit_fails() -> None:
+    runtime = FakeRuntime()
+    runtime.agent_result = {"ok": True, "agent_run_id": "agent-1", "opencode_status": "failed", "error": "OpenCode timed out"}
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+
+    await build_executor(recorder, runtime).execute("run-1")
+
+    assert recorder.statuses == ["running", "failed"]
+    assert recorder.pipeline_states[-1]["stage"] == "failed"
+    assert "OpenCode timed out" in recorder.pipeline_states[-1]["error"]
+    assert runtime.validator_runs == []
 
 
 @pytest.mark.asyncio
