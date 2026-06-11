@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.integrations.docker.client import DockerClient
@@ -10,6 +11,7 @@ from app.runtime.orchestrator import RuntimeOrchestrator
 def _orchestrator() -> RuntimeOrchestrator:
     orchestrator = RuntimeOrchestrator.__new__(RuntimeOrchestrator)
     orchestrator.settings = SimpleNamespace(
+        artifact_root=Path("E:/Dino/DieAudit/data/artifacts"),
         api_key_header="X-DieAudit-Api-Key",
         dynamic_container_prefix="dieaudit",
         agent_gateway_container_name="dieaudit-agent-gateway",
@@ -193,6 +195,57 @@ def test_validator_scaling_stops_starting_agents_after_cancel(monkeypatch) -> No
     asyncio.run(_run_validator_scaling_cancel_test(monkeypatch))
 
 
+def test_finding_mount_from_input_uses_finding_artifact_contract(tmp_path) -> None:
+    orchestrator = _orchestrator()
+    orchestrator.settings.artifact_root = tmp_path
+
+    mount = orchestrator._finding_mount_from_input(
+        {
+            "finding_artifact_contract": {
+                "finding_directory": "findings/run-1/finding-1",
+            }
+        }
+    )
+
+    assert mount == (tmp_path / "findings" / "run-1" / "finding-1").resolve()
+
+
+def test_finding_mount_from_input_rejects_path_escape(tmp_path) -> None:
+    orchestrator = _orchestrator()
+    orchestrator.settings.artifact_root = tmp_path
+
+    assert orchestrator._finding_mount_from_input({"finding_artifact_contract": {"finding_directory": "../outside"}}) is None
+    assert orchestrator._finding_mount_from_input({"finding_artifact_contract": {"finding_directory": "findings/run-1/../x"}}) is None
+
+
+def test_ensure_finding_workspace_files_creates_agent_managed_markdown(tmp_path) -> None:
+    finding_dir = tmp_path / "findings" / "run-1" / "finding-1"
+
+    RuntimeOrchestrator._ensure_finding_workspace_files(
+        finding_dir,
+        "run-1",
+        {
+            "finding": {
+                "finding_id": "finding-1",
+                "title": "Path traversal",
+                "severity": "high",
+                "status": "candidate",
+                "source": "semgrep",
+                "rule_id": "path-traversal",
+                "file_path": "app.py",
+                "line_start": 8,
+                "description": "request parameter reaches open",
+            }
+        },
+    )
+
+    text = (finding_dir / "finding.md").read_text(encoding="utf-8")
+    assert "Path traversal" in text
+    assert "maintained by Finding-scoped Agents" in text
+    assert (finding_dir / "agent-reports").is_dir()
+    assert (finding_dir / "poc").is_dir()
+
+
 async def _run_validator_scaling_cancel_test(monkeypatch) -> None:
     orchestrator = _orchestrator()
     attempts = []
@@ -248,6 +301,8 @@ async def _run_validator_scaling_cancel_test(monkeypatch) -> None:
     )
 
     assert len(started_agents) == 1
+    assert started_agents[0]["input_payload"]["finding_artifact_contract"]["finding_directory"] == "findings/run-1/finding-1"
+    assert started_agents[0]["input_payload"]["finding_artifact_contract"]["finding_markdown_path"] == "/finding/finding.md"
     assert result["status_counts"] == {"completed": 1, "cancelled": 1}
     assert any(item["status"] == "cancelled" and item["finding_id"] == "finding-2" for item in attempts)
     assert any(item["kind"] == "validator-cancelled" and item["finding_id"] == "finding-2" for item in evidence)

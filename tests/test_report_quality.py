@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.api import routes
 from app.api.routes import (
     _copy_finding_agent_artifact,
+    _ensure_finding_state_markdown,
     _finding_agent_source_artifacts,
     _finding_artifact_contract,
     _finding_report_markdown,
@@ -199,8 +200,38 @@ def test_finding_artifact_contract_uses_independent_finding_directory() -> None:
     contract = _finding_artifact_contract("run-1", "finding-1", "source-sink")
 
     assert contract["finding_directory"] == "findings/run-1/finding-1"
+    assert contract["finding_markdown_path"] == "/finding/finding.md"
+    assert contract["canonical_finding_markdown"] == "findings/run-1/finding-1/finding.md"
     assert contract["agent_writable_report_path"] == "/artifacts/source-sink-report.md"
     assert contract["platform_canonical_directory"] == "findings/run-1/finding-1/agent-reports"
+
+
+def test_finding_state_markdown_initializes_shared_agent_workspace(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(artifact_root=tmp_path))
+
+    path = _ensure_finding_state_markdown(
+        "run-1",
+        {
+            "finding_id": "finding-1",
+            "title": "Path traversal",
+            "severity": "high",
+            "status": "candidate",
+            "source": "semgrep",
+            "rule_id": "path-traversal",
+            "file_path": "app.py",
+            "line_start": 8,
+            "description": "request parameter reaches open",
+        },
+        evidence=[{"kind": "semgrep-result", "summary": "open(path)"}],
+        attempts=[],
+    )
+
+    assert path == tmp_path / "findings" / "run-1" / "finding-1" / "finding.md"
+    text = path.read_text(encoding="utf-8")
+    assert "Path traversal" in text
+    assert "Each Agent must read this file" in text
+    assert (path.parent / "agent-reports").is_dir()
+    assert (path.parent / "poc").is_dir()
 
 
 def test_finding_agent_source_artifacts_resolve_agent_written_files(tmp_path, monkeypatch) -> None:

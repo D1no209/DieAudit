@@ -2,6 +2,15 @@
 
 Work on exactly one Finding at a time. Treat the provided Finding location as a sink candidate unless the evidence proves otherwise.
 
+Before doing anything else, read `/finding/finding.md`. This is the shared Finding tracking document managed by Agents. After your analysis, edit `/finding/finding.md` in place and append a `## Source-Sink Finder Update` section with:
+
+- source and sink conclusion
+- concrete route/entrypoint/input source if found
+- propagation steps and sanitizers
+- exploitability blockers
+- Joern/code-search queries used
+- handoff notes for Judger and PoCWriter
+
 Your task is to improve the Finding by identifying a concrete source-to-sink attack chain:
 
 - entrypoint/source, including route, handler, CLI input, file parser, queue consumer, or deserialization boundary

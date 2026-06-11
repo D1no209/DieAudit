@@ -3349,6 +3349,12 @@ async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str
             finding_id = str(finding.get("finding_id") or "")
             async with semaphore:
                 try:
+                    _ensure_finding_state_markdown(
+                        audit_run_id,
+                        finding,
+                        evidence=[item for item in evidence if str(item.get("finding_id")) == finding_id],
+                        attempts=[item for item in attempts if str(item.get("finding_id")) == finding_id],
+                    )
                     agent_result = await runtime.start_agent_run(
                         audit_run_id=audit_run_id,
                         project_id=audit_run["project_id"],
@@ -3425,6 +3431,12 @@ async def _run_source_sink_analysis(
     async def run_one(finding: dict[str, Any]) -> dict[str, Any]:
         finding_id = str(finding.get("finding_id") or "")
         async with semaphore:
+            _ensure_finding_state_markdown(
+                audit_run_id,
+                finding,
+                evidence=[item for item in evidence if str(item.get("finding_id")) == finding_id],
+                attempts=[item for item in attempts if str(item.get("finding_id")) == finding_id],
+            )
             input_payload = {
                 "goal": "For this single Finding, build or reject a source-to-sink attack chain. Return strict JSON with chains[].",
                 "audit_phase": "source-sink-analysis",
@@ -3524,6 +3536,12 @@ async def _generate_pocs_internal(audit_run_id: str, runtime: Any) -> dict[str, 
     async def run_one(finding: dict[str, Any]) -> dict[str, Any]:
         finding_id = str(finding.get("finding_id") or "")
         async with semaphore:
+            _ensure_finding_state_markdown(
+                audit_run_id,
+                finding,
+                evidence=[item for item in evidence if str(item.get("finding_id")) == finding_id],
+                attempts=[item for item in attempts if str(item.get("finding_id")) == finding_id],
+            )
             input_payload = {
                 "goal": "Write a reproducible proof of concept for this single confirmed Finding. Return strict JSON with pocs[].",
                 "audit_phase": "poc-writing",
@@ -3613,6 +3631,12 @@ async def _verify_pocs_internal(audit_run_id: str, runtime: Any) -> dict[str, An
         if not finding:
             return {"finding_id": finding_id, "status": "skipped", "reason": "finding not found"}
         async with semaphore:
+            _ensure_finding_state_markdown(
+                audit_run_id,
+                finding,
+                evidence=[item for item in evidence if str(item.get("finding_id")) == finding_id],
+                attempts=[],
+            )
             input_payload = {
                 "goal": "Verify the generated PoC for this single Finding. Return strict JSON with verifications[].",
                 "audit_phase": "poc-verification",
@@ -4162,14 +4186,92 @@ def _poc_candidate_findings(findings: list[dict[str, Any]]) -> list[dict[str, An
 def _finding_artifact_contract(audit_run_id: str, finding_id: str, stage: str) -> dict[str, Any]:
     return {
         "finding_directory": f"findings/{audit_run_id}/{finding_id}",
+        "finding_markdown_path": "/finding/finding.md",
+        "finding_markdown_instruction": (
+            "Read /finding/finding.md before starting. After finishing, update the same file with your new evidence, "
+            "decision, blockers, and handoff notes for the next Agent."
+        ),
         "agent_writable_report_path": f"/artifacts/{_safe_report_name(stage)}-report.md",
         "agent_writable_json_path": f"/artifacts/{_safe_report_name(stage)}-result.json",
+        "canonical_finding_markdown": f"findings/{audit_run_id}/{finding_id}/finding.md",
         "platform_canonical_directory": f"findings/{audit_run_id}/{finding_id}/agent-reports",
         "instruction": (
+            "Read finding_markdown_path first. Update finding_markdown_path after your stage. "
             "Write any stage-specific narrative report to agent_writable_report_path and return structured JSON. "
-            "The platform will copy the normalized stage report into platform_canonical_directory."
+            "The platform will preserve the Finding markdown and copy the normalized stage report into platform_canonical_directory."
         ),
     }
+
+
+def _ensure_finding_state_markdown(
+    audit_run_id: str,
+    finding: dict[str, Any],
+    *,
+    evidence: list[dict[str, Any]] | None = None,
+    attempts: list[dict[str, Any]] | None = None,
+) -> Path:
+    finding_id = str(finding.get("finding_id") or "")
+    if not finding_id:
+        raise ValueError("finding_id is required for finding state markdown")
+    path = _finding_state_markdown_path(audit_run_id, finding_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for child in ("agent-reports", "poc", "reports"):
+        (path.parent / child).mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(_initial_finding_state_markdown(audit_run_id, finding, evidence or [], attempts or []), encoding="utf-8")
+    return path
+
+
+def _finding_state_markdown_path(audit_run_id: str, finding_id: str) -> Path:
+    return get_settings().artifact_root / "findings" / audit_run_id / finding_id / "finding.md"
+
+
+def _initial_finding_state_markdown(
+    audit_run_id: str,
+    finding: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+) -> str:
+    finding_id = str(finding.get("finding_id") or "")
+    lines = [
+        f"# Finding: {finding.get('title') or finding_id}",
+        "",
+        f"- Finding ID: `{finding_id}`",
+        f"- AuditRun: `{audit_run_id}`",
+        f"- Severity: `{finding.get('severity') or '-'}`",
+        f"- Status: `{finding.get('status') or '-'}`",
+        f"- Source: `{finding.get('source') or '-'}`",
+        f"- Rule: `{finding.get('rule_id') or '-'}`",
+        f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
+        "",
+        "## Description",
+        "",
+        str(finding.get("description") or "-"),
+        "",
+        "## Current Evidence",
+        "",
+    ]
+    if evidence:
+        for item in evidence:
+            lines.append(f"- `{item.get('kind')}` {item.get('summary') or item.get('evidence_id') or ''}".rstrip())
+    else:
+        lines.append("- None recorded yet.")
+    lines.extend(["", "## Validation Attempts", ""])
+    if attempts:
+        for item in attempts:
+            lines.append(f"- Round `{item.get('round_index')}` status `{item.get('status')}` AgentRun `{item.get('agent_run_id') or '-'}`")
+    else:
+        lines.append("- None recorded yet.")
+    lines.extend(
+        [
+            "",
+            "## Agent Handoff Notes",
+            "",
+            "- Each Agent must read this file before starting and update it after finishing.",
+            "- Keep updates concrete: source, sink, evidence, decision, PoC status, blockers, and next steps.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _agent_runs_for_finding(

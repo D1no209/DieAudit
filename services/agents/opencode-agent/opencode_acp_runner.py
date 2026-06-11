@@ -128,19 +128,31 @@ def _load_mcp_servers() -> list[Any]:
 
 def _prompt(input_payload: dict[str, Any]) -> str:
     payload = input_payload.get("payload", input_payload)
-    if isinstance(payload, dict) and payload.get("goal"):
-        goal = payload["goal"]
-    else:
-        goal = json.dumps(payload, indent=2, sort_keys=True)
+    task_json = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
+    goal = payload.get("goal") if isinstance(payload, dict) else None
+    finding_contract = payload.get("finding_artifact_contract") if isinstance(payload, dict) else None
+    finding_guidance = ""
+    if isinstance(finding_contract, dict) and finding_contract.get("finding_markdown_path"):
+        finding_guidance = (
+            "\nFinding shared workspace:\n"
+            "- `/finding` is mounted read/write and persists for this specific Finding across Validator, Judger, PoCWriter, and Verifier Agents.\n"
+            f"- Before analysis, read `{finding_contract['finding_markdown_path']}` and inspect relevant files under `/finding`.\n"
+            f"- After analysis, edit `{finding_contract['finding_markdown_path']}` in place with your conclusions, evidence, blockers, and next-agent handoff notes.\n"
+            "- Store Finding-specific notes, PoC drafts, and helper artifacts under `/finding` when useful.\n"
+            f"- Also write your stage report to `{finding_contract.get('agent_writable_report_path', '/artifacts/stage-report.md')}`.\n"
+        )
     return (
         "You are running inside DieAudit. Analyze only the mounted /workspace source tree. "
         "Use authorized MCP servers when useful. Write concise structured output. "
+        "The full task payload is authoritative; do not rely only on the goal text. "
         "When reporting vulnerabilities, include a JSON object with this shape: "
         '{"summary": "...", "findings": [{"title": "...", "severity": "high|medium|low|unknown", '
         '"file_path": "relative/path", "line_start": 1, "line_end": 1, "description": "...", '
         '"confidence": 0.0, "source": "agent", "evidence": [{"kind": "code", "summary": "...", "payload": {}}]}], '
         '"evidence": []}. Do not omit required finding fields.\n\n'
-        f"Task:\n{goal}"
+        f"Goal:\n{goal or 'See full task payload.'}\n"
+        f"{finding_guidance}\n"
+        f"Full task payload:\n```json\n{task_json}\n```"
     )
 
 

@@ -922,6 +922,7 @@ class RuntimeOrchestrator:
                     "finding": finding,
                     "round": round_index,
                     "validator_rounds": validator_rounds,
+                    "finding_artifact_contract": self._finding_artifact_contract(audit_run_id, finding_id, f"validator-round-{round_index}"),
                 }
                 try:
                     result = await self.start_agent_run(
@@ -1166,6 +1167,12 @@ class RuntimeOrchestrator:
         artifact_host_path.mkdir(parents=True, exist_ok=True)
         mounts.append(self._bind_mount(await self._host_path_for(artifact_host_path), artifact_target, read_only=False))
         env["ARTIFACT_DIR"] = artifact_target
+        finding_mount = self._finding_mount_from_input(input_payload)
+        if finding_mount:
+            self._ensure_finding_workspace_files(finding_mount, audit_run_id, input_payload)
+            mounts.append(self._bind_mount(await self._host_path_for(finding_mount), "/finding", read_only=False))
+            env["FINDING_DIR"] = "/finding"
+            env["FINDING_MARKDOWN"] = "/finding/finding.md"
         if runtime_host_path:
             target = template.get("runtime_mount", {}).get("target", "/dieaudit/runtime")
             mounts.append(self._bind_mount(await self._host_path_for(Path(runtime_host_path)), target, read_only=True))
@@ -1599,6 +1606,65 @@ class RuntimeOrchestrator:
 
     def _agent_artifact_dir(self, audit_run_id: str, agent_run_id: str) -> Path:
         return self.settings.artifact_root / "agent-runs" / audit_run_id / agent_run_id
+
+    def _finding_mount_from_input(self, input_payload: dict[str, Any]) -> Path | None:
+        contract = input_payload.get("finding_artifact_contract") if isinstance(input_payload, dict) else None
+        if not isinstance(contract, dict):
+            return None
+        finding_directory = str(contract.get("finding_directory") or "").replace("\\", "/").strip("/")
+        if not finding_directory.startswith("findings/") or "/../" in f"/{finding_directory}/":
+            return None
+        root = self.settings.artifact_root.resolve()
+        candidate = (root / finding_directory).resolve()
+        if candidate != root and root in candidate.parents:
+            return candidate
+        return None
+
+    @staticmethod
+    def _ensure_finding_workspace_files(finding_mount: Path, audit_run_id: str, input_payload: dict[str, Any]) -> None:
+        finding_mount.mkdir(parents=True, exist_ok=True)
+        for child in ("agent-reports", "poc", "reports"):
+            (finding_mount / child).mkdir(parents=True, exist_ok=True)
+        finding_md = finding_mount / "finding.md"
+        if finding_md.exists():
+            return
+        finding = input_payload.get("finding") if isinstance(input_payload, dict) else {}
+        if not isinstance(finding, dict):
+            finding = {}
+        finding_id = str(finding.get("finding_id") or finding_mount.name)
+        lines = [
+            f"# Finding: {finding.get('title') or finding_id}",
+            "",
+            f"- Finding ID: `{finding_id}`",
+            f"- AuditRun: `{audit_run_id}`",
+            f"- Severity: `{finding.get('severity') or '-'}`",
+            f"- Status: `{finding.get('status') or '-'}`",
+            f"- Source: `{finding.get('source') or '-'}`",
+            f"- Rule: `{finding.get('rule_id') or '-'}`",
+            f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
+            "",
+            "## Description",
+            "",
+            str(finding.get("description") or "-"),
+            "",
+            "## Agent Handoff Notes",
+            "",
+            "- This file is maintained by Finding-scoped Agents.",
+            "- Read it before work and update it after work with evidence, decisions, PoC notes, blockers, and next steps.",
+        ]
+        finding_md.write_text("\n".join(lines), encoding="utf-8")
+
+    @staticmethod
+    def _finding_artifact_contract(audit_run_id: str, finding_id: str, stage: str) -> dict[str, str]:
+        safe_stage = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in stage.strip().lower()).strip("-") or "stage"
+        return {
+            "finding_directory": f"findings/{audit_run_id}/{finding_id}",
+            "finding_markdown_path": "/finding/finding.md",
+            "finding_workspace_path": "/finding",
+            "agent_writable_report_path": f"/artifacts/{safe_stage}-report.md",
+            "agent_writable_json_path": f"/artifacts/{safe_stage}-result.json",
+            "instruction": "Read and update /finding/finding.md. Use /finding for all Finding-specific notes and artifacts.",
+        }
 
     @staticmethod
     def _container_run_to_dict(row: ContainerRun, live: dict[str, Any] | None = None) -> dict[str, Any]:
