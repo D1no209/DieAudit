@@ -292,7 +292,8 @@ class PipelineExecutor:
                 if ingest and int(ingest.get("findings_created") or 0) == 0:
                     warnings.append({"kind": "agent_created_no_findings"})
             elif step_name in {"sca", "semgrep"}:
-                if result.get("ok") is False or result.get("available") is False:
+                tool_status = str(result.get("status") or "")
+                if result.get("ok") is False or result.get("available") is False or tool_status in {"syft_unavailable", "osv_unreachable", "unavailable", "failed"}:
                     metrics["tool_failures"] += 1
                     warnings.append({"kind": "tool_failure", "step": step_name, "result": result})
             elif step_name == "validators":

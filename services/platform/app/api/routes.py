@@ -2304,16 +2304,20 @@ async def _run_sca_mcp(
         sbom_result = {"ok": False, "error": str(exc)}
         await _record_pipeline_event(audit_run_id, "sca_sbom_failed", sbom_result)
 
-    osv_result = await runtime.run_mcp_tool(
-        audit_run_id=audit_run_id,
-        project_id=project_id,
-        mcp_name="sca-mcp",
-        tool_path="/tools/query_osv",
-        workspace_host_path=workspace_path,
-        payload={"max_packages": int(audit_run.get("config", {}).get("sca_max_packages", 200))},
-        allow_external_network=allow_network,
-        retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-    )
+    try:
+        osv_result = await runtime.run_mcp_tool(
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            mcp_name="sca-mcp",
+            tool_path="/tools/query_osv",
+            workspace_host_path=workspace_path,
+            payload={"max_packages": int(audit_run.get("config", {}).get("sca_max_packages", 200))},
+            allow_external_network=allow_network,
+            retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+        )
+    except Exception as exc:
+        osv_result = {"ok": False, "result": {"ok": False, "available": False, "error": str(exc), "packages": [], "vulnerabilities": [], "findings": []}}
+        await _record_pipeline_event(audit_run_id, "sca_osv_failed", osv_result)
     result = osv_result.get("result", {})
     artifact_path = None
     if isinstance(sbom_result, dict):
@@ -2341,13 +2345,26 @@ async def _run_sca_mcp(
             "osv": _tool_result_metadata(result),
         },
     )
+    sbom_payload = (sbom_result or {}).get("result") if isinstance(sbom_result, dict) else {}
+    status = _sca_status(sbom_payload if isinstance(sbom_payload, dict) else {}, result if isinstance(result, dict) else {}, packages)
     summary = {
-        "ok": bool(osv_result.get("ok")),
+        "ok": status["ok"],
+        "status": status["status"],
+        "reason": status["reason"],
+        "coverage": {
+            "package_count": len(packages),
+            "dependency_record_count": dependency_records,
+            "vulnerable_package_count": sum(1 for item in vulnerabilities if isinstance(item, dict)),
+            "vulnerability_count": len(vulnerabilities),
+            "sbom_available": bool((sbom_payload or {}).get("ok")) if isinstance(sbom_payload, dict) else False,
+            "osv_available": bool(result.get("available", osv_result.get("ok"))) if isinstance(result, dict) else bool(osv_result.get("ok")),
+        },
         "packages": len(packages),
         "vulnerabilities": len(vulnerabilities),
         "dependency_records": dependency_records,
         "findings_created": created,
         "sbom": sbom_result,
+        "osv": _tool_result_metadata(result),
     }
     await _record_pipeline_event(audit_run_id, "sca_completed", summary)
     return summary
@@ -2380,11 +2397,16 @@ async def _run_semgrep_mcp(
         artifact_path=result.get("artifact_path") if isinstance(result, dict) else None,
         tool_execution=_tool_result_metadata(result),
     )
+    status = _semgrep_status(result if isinstance(result, dict) else {"ok": bool(mcp_result.get("ok"))})
     summary = {
-        "ok": bool(result.get("ok")) if isinstance(result, dict) else bool(mcp_result.get("ok")),
+        "ok": status["ok"],
+        "status": status["status"],
+        "reason": status["reason"],
         "available": result.get("available") if isinstance(result, dict) else None,
         "artifact_path": result.get("artifact_path") if isinstance(result, dict) else None,
+        "artifact": result.get("artifact") if isinstance(result, dict) else None,
         "findings_created": created,
+        "raw_finding_count": len(result.get("findings") or []) if isinstance(result, dict) else 0,
     }
     await _record_pipeline_event(audit_run_id, "semgrep_completed", summary)
     return summary
@@ -2472,6 +2494,27 @@ def _tool_evidence_payload(finding: dict[str, Any], tool_execution: dict[str, An
     return payload
 
 
+def _sca_status(sbom_result: dict[str, Any], osv_result: dict[str, Any], packages: list[Any]) -> dict[str, Any]:
+    if sbom_result and sbom_result.get("available") is False:
+        return {"ok": False, "status": "syft_unavailable", "reason": sbom_result.get("error") or "syft unavailable"}
+    if osv_result.get("available") is False or osv_result.get("ok") is False:
+        return {"ok": False, "status": "osv_unreachable", "reason": osv_result.get("error") or "OSV query failed"}
+    if not packages:
+        return {"ok": True, "status": "no_dependencies", "reason": "no supported dependency manifests with pinned versions were detected"}
+    return {"ok": True, "status": "completed", "reason": None}
+
+
+def _semgrep_status(result: dict[str, Any]) -> dict[str, Any]:
+    if result.get("available") is False:
+        return {"ok": False, "status": "unavailable", "reason": result.get("error") or "semgrep unavailable"}
+    if result.get("ok") is False:
+        return {"ok": False, "status": "failed", "reason": result.get("error") or result.get("stderr") or "semgrep scan failed"}
+    findings = result.get("findings") if isinstance(result.get("findings"), list) else []
+    if findings:
+        return {"ok": True, "status": "has_findings", "reason": None}
+    return {"ok": True, "status": "no_findings", "reason": None}
+
+
 async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
     audit_run = await _get_audit_run(audit_run_id)
     if not audit_run:
@@ -2522,12 +2565,14 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
     attempts = await _list_validation_attempts(audit_run_id)
     agent_runs = await _list_agent_runs(audit_run_id)
     audit_events = await _list_audit_run_events(audit_run_id)
+    dependencies = await _list_dependency_records(audit_run_id)
     summary = _report_summary(
         findings=findings,
         evidence=evidence,
         attempts=attempts,
         agent_runs=agent_runs,
         audit_events=audit_events,
+        dependencies=dependencies,
     )
     payload = {
         "audit_run": audit_run,
@@ -2537,6 +2582,7 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
         "validation_attempts": attempts,
         "agent_runs": agent_runs,
         "audit_events": audit_events,
+        "dependencies": dependencies,
     }
     report_id = str(uuid.uuid4())
     report_dir = settings.artifact_root / "reports" / audit_run_id
@@ -2570,7 +2616,9 @@ def _report_summary(
     attempts: list[dict[str, Any]],
     agent_runs: list[dict[str, Any]],
     audit_events: list[dict[str, Any]],
+    dependencies: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    dependencies = dependencies or []
     attempts_by_finding: dict[str, list[dict[str, Any]]] = {}
     for attempt in attempts:
         attempts_by_finding.setdefault(str(attempt.get("finding_id") or ""), []).append(attempt)
@@ -2602,6 +2650,7 @@ def _report_summary(
         "validator_failure_count": len(validator_failures),
         "unvalidated_findings": len(unvalidated),
         "unvalidated_finding_ids": [str(item.get("finding_id")) for item in unvalidated],
+        "dependency_coverage": _dependency_coverage(dependencies, audit_events),
     }
 
 
@@ -2657,6 +2706,37 @@ def _compact_validation_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
         "status": attempt.get("status"),
         "agent_run_id": attempt.get("agent_run_id"),
         "error": (attempt.get("result") or {}).get("error") if isinstance(attempt.get("result"), dict) else None,
+    }
+
+
+def _dependency_coverage(dependencies: list[dict[str, Any]], audit_events: list[dict[str, Any]]) -> dict[str, Any]:
+    by_ecosystem: dict[str, int] = {}
+    vulnerable_packages = 0
+    vulnerability_count = 0
+    for dependency in dependencies:
+        ecosystem = str(dependency.get("ecosystem") or "unknown")
+        by_ecosystem[ecosystem] = by_ecosystem.get(ecosystem, 0) + 1
+        vuln_count = int(dependency.get("vulnerability_count") or 0)
+        vulnerability_count += vuln_count
+        if vuln_count:
+            vulnerable_packages += 1
+    sca_events = []
+    for event in audit_events:
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if event.get("event_type") == "sca_completed":
+            sca_events.append(
+                {
+                    "status": payload.get("status"),
+                    "reason": payload.get("reason"),
+                    "coverage": payload.get("coverage"),
+                }
+            )
+    return {
+        "dependency_count": len(dependencies),
+        "vulnerable_package_count": vulnerable_packages,
+        "vulnerability_count": vulnerability_count,
+        "by_ecosystem": dict(sorted(by_ecosystem.items())),
+        "sca_events": sca_events,
     }
 
 
@@ -2924,6 +3004,13 @@ def _report_markdown(payload: dict[str, Any]) -> str:
             lines.append(f"- `{finding_id}`")
     else:
         lines.append("- None.")
+    coverage = summary.get("dependency_coverage") or {}
+    lines.extend(["", "### Dependency Coverage", ""])
+    lines.append(f"- Dependencies: `{coverage.get('dependency_count', 0)}`")
+    lines.append(f"- Vulnerable packages: `{coverage.get('vulnerable_package_count', 0)}`")
+    lines.append(f"- Vulnerabilities: `{coverage.get('vulnerability_count', 0)}`")
+    for ecosystem, count in (coverage.get("by_ecosystem") or {}).items():
+        lines.append(f"- `{ecosystem}`: `{count}`")
     lines.extend(
         [
             "",

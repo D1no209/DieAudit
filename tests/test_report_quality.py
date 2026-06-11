@@ -54,6 +54,10 @@ def test_report_summary_exposes_quality_gaps() -> None:
         attempts=attempts,
         agent_runs=agent_runs,
         audit_events=audit_events,
+        dependencies=[
+            {"ecosystem": "npm", "vulnerability_count": 2},
+            {"ecosystem": "PyPI", "vulnerability_count": 0},
+        ],
     )
 
     assert summary["finding_count_by_status"] == {"candidate": 1, "needs_review": 1}
@@ -63,6 +67,13 @@ def test_report_summary_exposes_quality_gaps() -> None:
     assert summary["validator_failure_count"] == 1
     assert summary["unvalidated_findings"] == 1
     assert summary["unvalidated_finding_ids"] == ["finding-1"]
+    assert summary["dependency_coverage"] == {
+        "dependency_count": 2,
+        "vulnerable_package_count": 1,
+        "vulnerability_count": 2,
+        "by_ecosystem": {"PyPI": 1, "npm": 1},
+        "sca_events": [],
+    }
 
 
 def test_report_markdown_includes_quality_sections() -> None:
@@ -79,6 +90,12 @@ def test_report_markdown_includes_quality_sections() -> None:
             "tool_failures": [{"event_type": "semgrep_failed"}],
             "validator_failures": [{"finding_id": "finding-1", "round_index": 1, "status": "failed"}],
             "unvalidated_finding_ids": ["finding-1"],
+            "dependency_coverage": {
+                "dependency_count": 2,
+                "vulnerable_package_count": 1,
+                "vulnerability_count": 2,
+                "by_ecosystem": {"npm": 2},
+            },
         },
         "findings": [
             {
@@ -101,4 +118,5 @@ def test_report_markdown_includes_quality_sections() -> None:
     assert "## Result Quality" in markdown
     assert "### Tool Failures" in markdown
     assert "### Unvalidated Findings" in markdown
+    assert "### Dependency Coverage" in markdown
     assert "completed_with_warnings" in markdown
