@@ -6,10 +6,6 @@ x-platform-env: &platform-env
   POSTGRES_ASYNC_DSN: postgresql+psycopg://${POSTGRES_USER:-dieaudit}:${POSTGRES_PASSWORD:-dieaudit}@postgres:5432/${POSTGRES_DB:-dieaudit}
   REDIS_URL: redis://redis:6379/0
   NATS_URL: nats://${NATS_USER:-dieaudit}:${NATS_PASSWORD:-dieaudit}@nats:4222
-  MINIO_ENDPOINT: http://minio:9000
-  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-dieaudit}
-  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-dieaudit-secret}
-  MINIO_BUCKET_ARTIFACTS: ${MINIO_BUCKET_ARTIFACTS:-dieaudit-artifacts}
   QDRANT_URL: http://qdrant:6333
   KNOWLEDGE_COLLECTION_NAME: ${KNOWLEDGE_COLLECTION_NAME:-dieaudit_knowledge_v1}
   KNOWLEDGE_VECTOR_SIZE: ${KNOWLEDGE_VECTOR_SIZE:-1024}
@@ -39,7 +35,7 @@ x-platform-env: &platform-env
   DEFAULT_CONTAINER_TMPFS: ${DEFAULT_CONTAINER_TMPFS:-/tmp:rw,nosuid,size=128m}
   DEFAULT_SANDBOX_RUNTIME: ${DEFAULT_SANDBOX_RUNTIME:-runc}
   ENABLE_GVISOR: ${ENABLE_GVISOR:-false}
-  ALLOW_RUNC_SANDBOX: ${ALLOW_RUNC_SANDBOX:-false}
+  ALLOW_RUNC_SANDBOX: ${ALLOW_RUNC_SANDBOX:-true}
   ALLOW_SANDBOX_EXTERNAL_NETWORK: ${ALLOW_SANDBOX_EXTERNAL_NETWORK:-false}
   PLATFORM_AUDIT_EVENT_RETENTION_DAYS: ${PLATFORM_AUDIT_EVENT_RETENTION_DAYS:-30}
   PLATFORM_AUDIT_EVENT_MAX_ROWS: ${PLATFORM_AUDIT_EVENT_MAX_ROWS:-10000}
@@ -54,8 +50,8 @@ x-platform-env: &platform-env
   PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS:-30}
   PIPELINE_WORKER_HEARTBEAT_RETENTION_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_RETENTION_SECONDS:-3600}
   ENABLE_DEMO_TEMPLATES: ${ENABLE_DEMO_TEMPLATES:-false}
-  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,minio,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
-  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,minio,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
+  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
   CONFIG_ROOT: /app/configs
   WORKSPACE_ROOT: /dieaudit/workspaces
   ARTIFACT_ROOT: /dieaudit/artifacts
@@ -126,8 +122,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_healthy
       nats:
         condition: service_healthy
       qdrant:
@@ -189,10 +183,6 @@ services:
     environment:
       <<: *platform-env
       SERVICE_NAME: workspace-engine
-    depends_on:
-      minio:
-        condition: service_healthy
-
   sandbox-runner:
     <<: *platform-service
     profiles: ["core", "demo"]
@@ -260,40 +250,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
-    networks:
-      - platform
-
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    profiles: ["core", "demo"]
-    restart: unless-stopped
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dieaudit}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dieaudit-secret}
-    ports:
-      - "${MINIO_CONSOLE_PORT:-19001}:9001"
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-    networks:
-      - platform
-
-  minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
-    profiles: ["core", "demo"]
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      "mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-dieaudit} ${MINIO_ROOT_PASSWORD:-dieaudit-secret} &&
-      mc mb --ignore-existing local/${MINIO_BUCKET_ARTIFACTS:-dieaudit-artifacts} &&
-      mc anonymous set none local/${MINIO_BUCKET_ARTIFACTS:-dieaudit-artifacts}"
     networks:
       - platform
 
@@ -480,6 +436,5 @@ networks:
 volumes:
   postgres-data:
   redis-data:
-  minio-data:
   qdrant-data:
   grafana-data:

@@ -177,19 +177,13 @@ def _pipeline_readiness_run_detail(audit_run: Any) -> dict[str, Any]:
 
 def sandbox_readiness_remediation(detail: dict[str, Any]) -> list[str]:
     requested_runtime = str(detail.get("requested_runtime") or "runc")
-    runtimes = detail.get("docker_runtimes") or []
     remediation: list[str] = []
-    if not detail.get("strong_isolation_available"):
-        remediation.append("Install a strong container runtime on the Docker host, preferably gVisor runsc for the first production target.")
-        if "runsc" not in runtimes:
-            remediation.append("After installing gVisor, register runsc in Docker daemon.json and restart Docker Engine.")
-        remediation.append("Set ENABLE_GVISOR=true and DEFAULT_SANDBOX_RUNTIME=runsc, then restart the core Compose services.")
-    if requested_runtime == "runc":
-        remediation.append("Keep ALLOW_RUNC_SANDBOX=false for production; runc is acceptable only for explicit local testing with trusted PoCs.")
-    elif not detail.get("requested_runtime_available"):
+    if not detail.get("requested_runtime_available"):
         remediation.append(
-            f"Install or register the configured Docker runtime '{requested_runtime}', or change DEFAULT_SANDBOX_RUNTIME to an available strong runtime."
+            f"Install or register the configured Docker runtime '{requested_runtime}', or change DEFAULT_SANDBOX_RUNTIME to an available Docker runtime."
         )
+    elif not detail.get("sandbox_execution_available"):
+        remediation.append("Set ALLOW_RUNC_SANDBOX=true when DEFAULT_SANDBOX_RUNTIME=runc, or configure another available Docker runtime.")
     return remediation
 
 
@@ -197,7 +191,7 @@ def embedding_readiness_remediation(status: dict[str, Any]) -> list[str]:
     provider = str(status.get("provider") or "hash")
     if provider in {"hash", "local-hash", ""}:
         return [
-            "Configure KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible for production RAG quality.",
+            "Hash embeddings are usable for development and deterministic smoke tests, but configure KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible for semantic RAG quality.",
             "Set KNOWLEDGE_EMBEDDING_BASE_URL to an endpoint exposing /embeddings, KNOWLEDGE_EMBEDDING_MODEL to a real embedding model, and KNOWLEDGE_VECTOR_SIZE to the model dimension.",
             "Set KNOWLEDGE_EMBEDDING_API_KEY when the embedding endpoint requires authentication.",
         ]

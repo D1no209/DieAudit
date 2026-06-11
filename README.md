@@ -19,7 +19,6 @@ Open:
 - Web API: http://localhost:18000/health
 - Agent Gateway: http://localhost:18001/health
 - Temporal UI: http://localhost:18088
-- MinIO Console: http://localhost:19001
 
 ## Production Readiness
 
@@ -31,10 +30,10 @@ Required before exposing the platform:
 - Keep `PUBLIC_METRICS=false` unless metrics are protected by a separate private network or auth layer.
 - Keep `PIPELINE_EXECUTION_BACKEND=workflow-worker`; `background-tasks` is only for local debugging.
 - Keep `ENABLE_DEMO_TEMPLATES=false`; mock demo templates are hidden from production runtime APIs by default.
-- Install gVisor `runsc` or another strong container runtime, then set `ENABLE_GVISOR=true` and `DEFAULT_SANDBOX_RUNTIME=runsc`.
-- Keep `ALLOW_RUNC_SANDBOX=false` for untrusted PoC execution.
+- Use the default Docker `runc` runtime for isolated sandbox and PoC containers, or configure another Docker runtime if your deployment requires it.
+- Keep `ALLOW_RUNC_SANDBOX=true` when `DEFAULT_SANDBOX_RUNTIME=runc`.
 - Keep `ALLOW_SANDBOX_EXTERNAL_NETWORK=false` unless a specific sandbox/PoC test requires outbound network access.
-- Configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection.
+- Optional but recommended: configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection. The default hash provider remains available for local smoke tests.
 - Build the required Joern analyzer image before production audits: `docker compose --profile tools build tool-mcp-joern-image`.
 
 Check the live deployment:

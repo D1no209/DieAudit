@@ -259,18 +259,18 @@ def test_template_readiness_fails_when_demo_templates_are_exposed() -> None:
     assert checks["legacy_mock_mcp_templates"]["status"] == "fail"
 
 
-def test_sandbox_readiness_remediation_points_to_runsc_when_only_runc_exists() -> None:
+def test_sandbox_readiness_accepts_runc_when_enabled() -> None:
     remediation = _sandbox_readiness_remediation(
         {
             "requested_runtime": "runc",
             "docker_runtimes": ["runc", "io.containerd.runc.v2"],
             "strong_isolation_available": False,
             "requested_runtime_available": True,
+            "sandbox_execution_available": True,
         }
     )
 
-    assert any("runsc" in item for item in remediation)
-    assert any("ALLOW_RUNC_SANDBOX=false" in item for item in remediation)
+    assert remediation == []
 
 
 def test_embedding_readiness_remediation_rejects_hash_for_production() -> None:

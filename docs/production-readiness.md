@@ -38,12 +38,13 @@ but cannot install safely by itself.
     retention policy.
   - Project workspaces and snapshot archives still referenced by
     `ProjectSnapshot` records are preserved by cleanup.
-- Use a strong sandbox runtime for untrusted PoC execution:
-  - Install gVisor `runsc` or another strong runtime such as Kata.
-  - Register the runtime in Docker Engine and restart Docker.
-  - Set `ENABLE_GVISOR=true` and `DEFAULT_SANDBOX_RUNTIME=runsc`.
-  - Keep `ALLOW_RUNC_SANDBOX=false` in production.
-- Configure semantic knowledge embeddings:
+- Use Docker sandbox containers for PoC execution:
+  - Keep `DEFAULT_SANDBOX_RUNTIME=runc` unless the deployment explicitly
+    registers another Docker runtime.
+  - Keep `ALLOW_RUNC_SANDBOX=true` when using the default Docker runtime.
+  - Keep `ALLOW_SANDBOX_EXTERNAL_NETWORK=false` unless a specific validation
+    target requires outbound network access.
+- Optionally configure semantic knowledge embeddings:
   - Set `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible`.
   - Set `KNOWLEDGE_EMBEDDING_BASE_URL` to an endpoint that exposes
     `/embeddings`.
@@ -54,10 +55,9 @@ but cannot install safely by itself.
 
 ## Local Testing Exceptions
 
-`ALLOW_RUNC_SANDBOX=true` allows Docker `runc` based sandbox execution for
-trusted local tests only. It is not production isolation and readiness will
-continue to require a strong runtime.
+The default sandbox mode uses Docker `runc` container isolation. It is the
+baseline supported deployment mode for DieAudit.
 
 The `hash` knowledge embedding provider is deterministic and useful for local
-smoke tests. It is not semantic retrieval and should not be used for production
-RAG.
+smoke tests. It is not semantic retrieval; configure an OpenAI-compatible
+embedding provider when knowledge-base relevance quality matters.

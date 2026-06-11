@@ -43,9 +43,9 @@ async def test_temporal_health_rejects_invalid_port() -> None:
     assert "host:port" in result["error"]
 
 
-def test_runtime_routes_expose_temporal_health_and_production_embedding_failure() -> None:
+def test_runtime_routes_expose_temporal_health_and_embedding_warning() -> None:
     source = (routes.Path(__file__).resolve().parents[1] / "services/platform/app/api/routes.py").read_text(encoding="utf-8")
 
     assert '@router.get("/runtime/temporal/health")' in source
-    assert "local hash embeddings are development-only" in source
+    assert "local hash embeddings are available but not semantic" in source
     assert "dieaudit_artifact_storage_backend" in source

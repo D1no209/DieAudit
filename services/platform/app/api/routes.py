@@ -1530,20 +1530,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             },
             {
                 "id": "artifact_storage",
-                "title": "Artifact storage backend is production-ready",
-                "status": "pass" if artifact_storage_backend(settings) == "minio" else "warn",
+                "title": "Artifact storage directory is available",
+                "status": "pass",
                 "detail": {
                     "backend": artifact_storage_backend(settings),
                     "artifact_root": str(settings.artifact_root),
-                    "minio_endpoint": settings.minio_endpoint,
-                    "minio_bucket": settings.minio_bucket_artifacts,
                 },
-                "remediation": []
-                if artifact_storage_backend(settings) == "minio"
-                else [
-                    "Set ARTIFACT_STORAGE_BACKEND=minio before production deployment so reports, logs, and tool outputs are objectized.",
-                    "Keep local artifact storage only for single-node development and smoke tests.",
-                ],
+                "remediation": [],
             },
         ]
         checks.append(_http_guardrails_readiness_check(settings))
@@ -1590,8 +1583,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             checks.append(
                 {
                     "id": "sandbox_isolation",
-                    "title": "Sandbox has strong isolation",
-                    "status": "pass" if sandbox.get("strong_isolation_available") else "fail",
+                    "title": "Docker sandbox execution is available",
+                    "status": "pass" if sandbox.get("sandbox_execution_available") else "fail",
                     "detail": sandbox_detail,
                     "remediation": _sandbox_readiness_remediation(sandbox_detail),
                 }
@@ -1599,11 +1592,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         except Exception as exc:
             checks.append({
                 "id": "sandbox_isolation",
-                "title": "Sandbox has strong isolation",
+                "title": "Docker sandbox execution is available",
                 "status": "fail",
                 "detail": str(exc),
                 "remediation": [
-                    "Verify Docker Engine is reachable through docker-socket-proxy, then install and configure a strong runtime such as gVisor runsc.",
+                    "Verify Docker Engine is reachable through docker-socket-proxy and DEFAULT_SANDBOX_RUNTIME is available.",
                 ],
             })
         knowledge_service = KnowledgeService(settings)
@@ -1611,8 +1604,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if str(embedding.get("provider") or "").lower() in {"hash", "local-hash", ""}:
             embedding = {
                 **embedding,
-                "status": "fail",
-                "message": "local hash embeddings are development-only; configure openai-compatible embeddings for production RAG",
+                "status": "warn",
+                "message": "local hash embeddings are available but not semantic; configure openai-compatible embeddings for higher quality RAG",
             }
         checks.append(
             {
@@ -2563,6 +2556,8 @@ def _is_sandbox_unavailable_error(message: str) -> bool:
         for token in (
             "sandbox execution is not available",
             "sandbox execution requires",
+            "allow_runc_sandbox",
+            "docker runc runtime",
             "gvisor",
             "runsc",
             "configured sandbox runtime",

@@ -174,15 +174,15 @@ class RuntimeOrchestrator:
         gvisor_available = "runsc" in runtimes
         requested_runtime_available = requested_runtime in runtimes or requested_runtime == default_runtime
         strong_isolation_available = requested_runtime != "runc" and requested_runtime_available
-        weak_isolation_allowed = requested_runtime == "runc" and self.settings.allow_runc_sandbox
-        sandbox_execution_available = bool(ping == "OK" and requested_runtime_available and (strong_isolation_available or weak_isolation_allowed))
+        docker_isolation_available = requested_runtime == "runc" and requested_runtime_available and self.settings.allow_runc_sandbox
+        sandbox_execution_available = bool(ping == "OK" and requested_runtime_available and (strong_isolation_available or docker_isolation_available))
         reason = None
         if self.settings.enable_gvisor and not gvisor_available:
             reason = "gVisor is enabled but Docker runtime 'runsc' is not installed."
         elif not requested_runtime_available:
             reason = f"Configured sandbox runtime '{requested_runtime}' is not available in Docker."
         elif requested_runtime == "runc" and not self.settings.allow_runc_sandbox:
-            reason = "Sandbox execution requires gVisor/Kata or explicit ALLOW_RUNC_SANDBOX=true for local testing."
+            reason = "Sandbox execution with the Docker runc runtime requires ALLOW_RUNC_SANDBOX=true."
         return {
             "ok": sandbox_execution_available,
             "docker_available": ping == "OK",
@@ -1675,13 +1675,13 @@ class RuntimeOrchestrator:
     ) -> list[str]:
         warnings: list[str] = []
         if configured_gvisor and not gvisor_available:
-            warnings.append("Dynamic PoC execution should be disabled until gVisor runsc is installed or ENABLE_GVISOR=false.")
+            warnings.append("ENABLE_GVISOR=true but Docker runtime 'runsc' is not installed.")
         if not requested_runtime_available:
             warnings.append(f"Docker runtime '{requested_runtime}' is not available on this host.")
         if requested_runtime == "runc" and allow_runc_sandbox:
-            warnings.append("Sandbox is using weak runc isolation because ALLOW_RUNC_SANDBOX=true; do not use for untrusted PoC in production.")
+            warnings.append("Sandbox is using Docker runc container isolation.")
         elif requested_runtime == "runc":
-            warnings.append("Sandbox execution is disabled with runc; install gVisor/Kata or explicitly allow weak local testing.")
+            warnings.append("Sandbox execution is disabled with runc until ALLOW_RUNC_SANDBOX=true.")
         return warnings
 
     async def _require_sandbox_execution(self, *, allow_weak_isolation: bool) -> dict[str, Any]:
@@ -1694,10 +1694,10 @@ class RuntimeOrchestrator:
             allowed["ok"] = True
             allowed["sandbox_execution_available"] = True
             allowed["policy_ok"] = False
-            allowed["weak_isolation_override"] = True
+            allowed["docker_isolation_override"] = True
             allowed["warnings"] = [
                 *list(allowed.get("warnings") or []),
-                "This run explicitly allowed weak runc isolation for local testing.",
+                "This run explicitly allowed Docker runc container isolation.",
             ]
             return allowed
         raise RuntimeError(capabilities.get("reason") or "sandbox execution is not available")

@@ -25,7 +25,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     return (
       sandboxCapabilities?.reason ||
       sandboxCapabilities?.warnings?.[0] ||
-      "Sandbox execution is not available. Configure gVisor/Kata or an approved sandbox runtime before running PoC containers."
+      "Sandbox execution is not available. Verify Docker is reachable and the configured sandbox runtime is available."
     );
   }
 

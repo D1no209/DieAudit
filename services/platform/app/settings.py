@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     default_sandbox_runtime: str = "runc"
     enable_gvisor: bool = False
-    allow_runc_sandbox: bool = False
+    allow_runc_sandbox: bool = True
     allow_sandbox_external_network: bool = False
     allow_agent_external_network: bool = True
     opencode_agent_timeout_seconds: int = 600

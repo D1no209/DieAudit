@@ -89,6 +89,17 @@ def test_docker_socket_proxy_only_exposes_required_api_groups() -> None:
     assert not unexpectedly_enabled, f"docker-socket-proxy exposes unneeded API groups: {sorted(unexpectedly_enabled)}"
 
 
+def test_core_compose_uses_local_artifacts_without_minio() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert "minio" not in services
+    assert "minio-init" not in services
+    assert "minio-data" not in (compose.get("volumes") or {})
+    assert compose["x-platform-env"]["ARTIFACT_STORAGE_BACKEND"] == "${ARTIFACT_STORAGE_BACKEND:-local}"
+    assert "minio" not in compose["x-platform-env"]["NO_PROXY"]
+
+
 def test_codeql_tool_image_is_experimental_not_default_tools_profile() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     services = compose["services"]
