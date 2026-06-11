@@ -235,6 +235,8 @@ def template_readiness_checks(
     agent_templates: list[dict[str, Any]],
     mcp_templates: list[dict[str, Any]],
     tool_capabilities: dict[str, Any] | None = None,
+    *,
+    include_demo_templates: bool = False,
 ) -> list[dict[str, Any]]:
     agents = {str(item.get("name") or ""): item for item in agent_templates}
     mcps = {str(item.get("name") or ""): item for item in mcp_templates}
@@ -264,6 +266,11 @@ def template_readiness_checks(
         name
         for name, template in agents.items()
         if name and name not in PRODUCTION_AGENT_TEMPLATES and "mock-agent" in str(template.get("image") or "")
+    )
+    exposed_mock_mcps = sorted(
+        name
+        for name, template in mcps.items()
+        if name and "mock-mcp" in str(template.get("image") or "")
     )
 
     checks = [
@@ -316,10 +323,32 @@ def template_readiness_checks(
             {
                 "id": "legacy_mock_templates",
                 "title": "Legacy mock templates are still available",
-                "status": "warn",
+                "status": "fail" if include_demo_templates else "warn",
                 "detail": {
                     "templates": legacy_mock_agents,
-                    "message": "Keep mock templates for demo only; production audit runs should use opencode-* templates.",
+                    "include_demo_templates": include_demo_templates,
+                    "message": (
+                        "Mock templates are exposed through runtime APIs. Set ENABLE_DEMO_TEMPLATES=false for production."
+                        if include_demo_templates
+                        else "Mock templates exist on disk but are hidden from production runtime APIs."
+                    ),
+                },
+            }
+        )
+    if exposed_mock_mcps:
+        checks.append(
+            {
+                "id": "legacy_mock_mcp_templates",
+                "title": "Legacy mock MCP templates are still available",
+                "status": "fail" if include_demo_templates else "warn",
+                "detail": {
+                    "templates": exposed_mock_mcps,
+                    "include_demo_templates": include_demo_templates,
+                    "message": (
+                        "Mock MCP templates are exposed through runtime APIs. Set ENABLE_DEMO_TEMPLATES=false for production."
+                        if include_demo_templates
+                        else "Mock MCP templates exist on disk but are hidden from production runtime APIs."
+                    ),
                 },
             }
         )

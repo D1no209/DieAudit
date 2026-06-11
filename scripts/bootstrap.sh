@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+include_demo=false
+if [ "${1:-}" = "--include-demo" ]; then
+  include_demo=true
+fi
+
 export HTTP_PROXY="${HOST_HTTP_PROXY:-http://127.0.0.1:7897}"
 export HTTPS_PROXY="${HOST_HTTPS_PROXY:-http://127.0.0.1:7897}"
 export http_proxy="${HTTP_PROXY}"
@@ -15,7 +20,11 @@ fi
 
 mkdir -p data/workspaces data/artifacts
 
-docker compose --profile demo build
+if [ "${include_demo}" = "true" ]; then
+  docker compose --profile demo build
+else
+  docker compose --profile core build
+fi
 docker compose --profile core up -d
 
 cat <<'EOF'

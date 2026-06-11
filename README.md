@@ -11,6 +11,8 @@ copy .env.example .env
 .\scripts\bootstrap.ps1
 ```
 
+The bootstrap script builds the core production path by default. It does not build or expose mock demo images unless explicitly requested.
+
 Open:
 
 - Web UI: http://localhost:8080
@@ -73,13 +75,21 @@ NAME=bootstrap-admin SCOPES=admin ./scripts/create-api-key.sh
 
 The command prints the API key once and stores only its hash in Postgres. Use the printed key as `X-DieAudit-Api-Key`.
 
-## Demo Runtime Orchestration
+## Demo Profile Runtime Orchestration
 
-Build the demo Agent/MCP images and start the core platform:
+Demo fixtures are intentionally excluded from the default startup path. Use them only for smoke tests on a local machine:
 
 ```powershell
 echo ENABLE_DEMO_TEMPLATES=true >> .env
-docker compose --profile demo build
+.\scripts\bootstrap.ps1 -IncludeDemo
+docker compose --profile core up -d
+```
+
+Linux/macOS equivalent:
+
+```bash
+echo ENABLE_DEMO_TEMPLATES=true >> .env
+./scripts/bootstrap.sh --include-demo
 docker compose --profile core up -d
 ```
 

@@ -4,8 +4,8 @@ from pydantic import BaseModel, Field
 
 
 class StartAgentRunRequest(BaseModel):
-    audit_run_id: str = Field(default="demo-run")
-    project_id: str = Field(default="demo-project")
+    audit_run_id: str | None = None
+    project_id: str = Field(min_length=1)
     agent_name: str = Field(default="orchestrator")
     workspace_host_path: str | None = None
     allow_external_network: bool = False
@@ -75,7 +75,7 @@ class StorageCleanupRequest(BaseModel):
 
 
 class ValidatorScaleRequest(BaseModel):
-    project_id: str = "demo-project"
+    project_id: str = Field(min_length=1)
     findings: list[dict[str, Any]] = Field(default_factory=list)
     workspace_host_path: str | None = None
     validator_rounds: int = Field(default=1, ge=1)

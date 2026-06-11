@@ -1,3 +1,7 @@
+param(
+    [switch]$IncludeDemo
+)
+
 $ErrorActionPreference = "Stop"
 
 $env:HTTP_PROXY = if ($env:HOST_HTTP_PROXY) { $env:HOST_HTTP_PROXY } else { "http://127.0.0.1:7897" }
@@ -14,7 +18,11 @@ if (-not (Test-Path ".env")) {
 
 New-Item -ItemType Directory -Force -Path "data/workspaces", "data/artifacts" | Out-Null
 
-docker compose --profile demo build
+if ($IncludeDemo) {
+    docker compose --profile demo build
+} else {
+    docker compose --profile core build
+}
 docker compose --profile core up -d
 
 Write-Host ""

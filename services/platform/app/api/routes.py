@@ -1339,7 +1339,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             tool_capability_result = await runtime.tool_image_capabilities(mcp_templates)
         except Exception as exc:
             tool_capability_result = {"ok": False, "error": str(exc), "templates": {}}
-        checks.extend(_template_readiness_checks(agent_templates, mcp_templates, tool_capability_result))
+        checks.extend(
+            _template_readiness_checks(
+                agent_templates,
+                mcp_templates,
+                tool_capability_result,
+                include_demo_templates=settings.enable_demo_templates,
+            )
+        )
         return _summarize_readiness_checks(checks)
 
     @router.get("/runtime/workers")

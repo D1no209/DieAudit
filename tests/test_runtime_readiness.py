@@ -156,6 +156,36 @@ def test_template_readiness_fails_missing_or_mock_production_templates() -> None
     assert "code-search-mcp" in checks["production_mcp_templates"]["detail"]["missing"]
 
 
+def test_template_readiness_warns_when_demo_templates_exist_but_are_hidden() -> None:
+    checks = {
+        check["id"]: check
+        for check in _template_readiness_checks(
+            [{"name": "mock-orchestrator", "image": "dieaudit/mock-agent:local", "protocol": {"runtime": "mock"}}],
+            [{"name": "mock-filesystem", "image": "dieaudit/mock-mcp:local"}],
+            include_demo_templates=False,
+        )
+    }
+
+    assert checks["legacy_mock_templates"]["status"] == "warn"
+    assert checks["legacy_mock_templates"]["detail"]["include_demo_templates"] is False
+    assert checks["legacy_mock_mcp_templates"]["status"] == "warn"
+
+
+def test_template_readiness_fails_when_demo_templates_are_exposed() -> None:
+    checks = {
+        check["id"]: check
+        for check in _template_readiness_checks(
+            [{"name": "mock-orchestrator", "image": "dieaudit/mock-agent:local", "protocol": {"runtime": "mock"}}],
+            [{"name": "mock-filesystem", "image": "dieaudit/mock-mcp:local"}],
+            include_demo_templates=True,
+        )
+    }
+
+    assert checks["legacy_mock_templates"]["status"] == "fail"
+    assert checks["legacy_mock_templates"]["detail"]["include_demo_templates"] is True
+    assert checks["legacy_mock_mcp_templates"]["status"] == "fail"
+
+
 def test_sandbox_readiness_remediation_points_to_runsc_when_only_runc_exists() -> None:
     remediation = _sandbox_readiness_remediation(
         {

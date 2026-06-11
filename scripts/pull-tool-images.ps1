@@ -1,3 +1,7 @@
+param(
+    [switch]$IncludeDemo
+)
+
 $ErrorActionPreference = "Stop"
 
 $env:HTTP_PROXY = if ($env:HOST_HTTP_PROXY) { $env:HOST_HTTP_PROXY } else { "http://127.0.0.1:7897" }
@@ -8,8 +12,6 @@ $env:NO_PROXY = if ($env:NO_PROXY) { $env:NO_PROXY } else { "localhost,127.0.0.1
 $env:no_proxy = $env:NO_PROXY
 
 $images = @(
-    "dieaudit/mock-agent:local",
-    "dieaudit/mock-mcp:local",
     "dieaudit/tool-mcp-codeql:local",
     "dieaudit/tool-mcp-joern:local",
     "semgrep/semgrep:latest",
@@ -19,6 +21,9 @@ $images = @(
 )
 
 docker compose --profile tools build
+if ($IncludeDemo) {
+    docker compose --profile demo build mock-agent-image mock-mcp-image
+}
 
 foreach ($image in $images) {
     if ($image -like "dieaudit/*:local") {
