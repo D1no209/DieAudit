@@ -25,14 +25,22 @@ class RecordingClient(acp.Client):
         )
 
     def request_permission(self, options: list[Any], session_id: str, tool_call: Any, **kwargs: Any) -> Any:
+        dumped_tool_call = _dump(tool_call)
+        dumped_options = [_dump(option) for option in options]
+        allowed_option = _allowed_permission_option(dumped_tool_call, dumped_options)
         self.events.append(
             {
                 "event_type": "permission_request",
                 "session_id": session_id,
-                "tool_call": _dump(tool_call),
-                "options": [_dump(option) for option in options],
+                "tool_call": dumped_tool_call,
+                "options": dumped_options,
+                "decision": "allow_once" if allowed_option else "deny",
             }
         )
+        if allowed_option:
+            return schema.RequestPermissionResponse(
+                outcome=schema.AllowedOutcome(optionId=allowed_option, outcome="selected")
+            )
         return schema.RequestPermissionResponse(outcome=schema.DeniedOutcome(outcome="cancelled"))
 
 
@@ -44,7 +52,8 @@ async def main() -> int:
     client = RecordingClient()
     input_payload = _load_input_payload()
     mcp_servers = _load_mcp_servers()
-    prompt = _prompt(input_payload)
+    finding_markdown = _read_finding_markdown()
+    prompt = _prompt(input_payload, finding_markdown=finding_markdown)
     result: dict[str, Any] = {
         "status": "running",
         "agent_run_id": os.environ.get("AGENT_RUN_ID"),
@@ -81,6 +90,7 @@ async def main() -> int:
                     "process_returncode": getattr(process, "returncode", None),
                 }
             )
+            _append_finding_markdown(input_payload, result)
     except Exception as exc:
         if result.get("status") == "completed" and result.get("response"):
             result.update(
@@ -90,6 +100,7 @@ async def main() -> int:
                     "events": client.events,
                 }
             )
+            _append_finding_markdown(input_payload, result)
         else:
             result.update(
                 {
@@ -99,6 +110,7 @@ async def main() -> int:
                     "events": client.events,
                 }
             )
+            _append_finding_markdown(input_payload, result)
     result_file.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps({"dieaudit_result": str(result_file), "status": result["status"]}), flush=True)
     return 0 if result["status"] == "completed" else 1
@@ -126,7 +138,7 @@ def _load_mcp_servers() -> list[Any]:
     return result
 
 
-def _prompt(input_payload: dict[str, Any]) -> str:
+def _prompt(input_payload: dict[str, Any], *, finding_markdown: str | None = None) -> str:
     payload = input_payload.get("payload", input_payload)
     task_json = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
     goal = payload.get("goal") if isinstance(payload, dict) else None
@@ -141,6 +153,13 @@ def _prompt(input_payload: dict[str, Any]) -> str:
             "- Store Finding-specific notes, PoC drafts, and helper artifacts under `/finding` when useful.\n"
             f"- Also write your stage report to `{finding_contract.get('agent_writable_report_path', '/artifacts/stage-report.md')}`.\n"
         )
+        if finding_markdown is not None:
+            finding_guidance += (
+                "\nCurrent `/finding/finding.md` content loaded by the runner before this Agent started:\n"
+                "```markdown\n"
+                f"{_truncate_text(finding_markdown, 20000)}\n"
+                "```\n"
+            )
     return (
         "You are running inside DieAudit. Analyze only the mounted /workspace source tree. "
         "Use authorized MCP servers when useful. Write concise structured output. "
@@ -154,6 +173,203 @@ def _prompt(input_payload: dict[str, Any]) -> str:
         f"{finding_guidance}\n"
         f"Full task payload:\n```json\n{task_json}\n```"
     )
+
+
+def _read_finding_markdown() -> str | None:
+    markdown_path = os.environ.get("FINDING_MARKDOWN")
+    if not markdown_path:
+        return None
+    path = Path(markdown_path)
+    try:
+        if path.exists():
+            return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return None
+
+
+def _append_finding_markdown(input_payload: dict[str, Any], result: dict[str, Any]) -> None:
+    markdown_path = os.environ.get("FINDING_MARKDOWN")
+    if not markdown_path:
+        return
+    path = Path(markdown_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+
+    payload = input_payload.get("payload", input_payload)
+    contract = payload.get("finding_artifact_contract") if isinstance(payload, dict) else None
+    if not isinstance(contract, dict):
+        return
+
+    role = os.environ.get("AGENT_ROLE") or os.environ.get("AGENT_NAME") or "agent"
+    section_title = _stage_section_title(role)
+    agent_run_id = os.environ.get("AGENT_RUN_ID") or "-"
+    status = result.get("status", "unknown")
+    response_text = _extract_response_text(result.get("response"))
+    if not response_text:
+        response_text = _extract_event_transcript(result.get("events", []))
+    if not response_text:
+        response_text = json.dumps(_compact_result(result), indent=2, sort_keys=True, ensure_ascii=False)
+
+    lines = [
+        "",
+        f"## {section_title}",
+        "",
+        f"- Agent role: `{role}`",
+        f"- AgentRun: `{agent_run_id}`",
+        f"- Status: `{status}`",
+    ]
+    report_path = contract.get("agent_writable_report_path")
+    json_path = contract.get("agent_writable_json_path")
+    if report_path:
+        lines.append(f"- Stage report path: `{report_path}`")
+    if json_path:
+        lines.append(f"- Structured result path: `{json_path}`")
+    if result.get("error"):
+        lines.append(f"- Error: `{result.get('error')}`")
+    if result.get("close_error"):
+        lines.append(f"- Close error: `{result.get('close_error')}`")
+    lines.extend(
+        [
+            "",
+            "### Agent Output",
+            "",
+            _truncate_text(response_text.strip(), 12000) or "-",
+            "",
+        ]
+    )
+
+    try:
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(lines))
+    except OSError:
+        return
+
+
+def _stage_section_title(role: str) -> str:
+    normalized = role.replace("_", "-").lower()
+    mapping = {
+        "source-sink-finder": "Source-Sink Finder Update",
+        "validator": "Validator Update",
+        "judger": "Judger Update",
+        "poc-writer": "PoC Writer Update",
+        "poc-verifier": "PoC Verifier Update",
+    }
+    return mapping.get(normalized, f"{role} Update")
+
+
+def _extract_response_text(value: Any) -> str:
+    dumped = _dump(value)
+    pieces: list[str] = []
+    _collect_text(dumped, pieces)
+    return "\n\n".join(piece for piece in pieces if piece).strip()
+
+
+def _extract_event_transcript(events: Any) -> str:
+    if not isinstance(events, list):
+        return ""
+    pieces: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        update = event.get("update")
+        if not isinstance(update, dict):
+            continue
+        update_kind = update.get("session_update")
+        if update_kind not in {"agent_message_chunk", "agent_thought_chunk"}:
+            continue
+        content = update.get("content")
+        if isinstance(content, dict):
+            text = content.get("text")
+            if isinstance(text, str):
+                pieces.append(text)
+    return "".join(pieces).strip()
+
+
+def _collect_text(value: Any, pieces: list[str]) -> None:
+    if isinstance(value, str):
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_text(item, pieces)
+        return
+    if not isinstance(value, dict):
+        return
+    text = value.get("text")
+    if isinstance(text, str) and text.strip():
+        pieces.append(text.strip())
+    content = value.get("content")
+    if content is not value:
+        _collect_text(content, pieces)
+    message = value.get("message")
+    if message is not value:
+        _collect_text(message, pieces)
+    output = value.get("output")
+    if output is not value:
+        _collect_text(output, pieces)
+
+
+def _compact_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": result.get("status"),
+        "agent_run_id": result.get("agent_run_id"),
+        "audit_run_id": result.get("audit_run_id"),
+        "project_id": result.get("project_id"),
+        "error": result.get("error"),
+        "close_error": result.get("close_error"),
+        "event_count": len(result.get("events", [])) if isinstance(result.get("events"), list) else 0,
+        "response": _dump(result.get("response")),
+    }
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n\n[truncated {len(text) - limit} chars]"
+
+
+def _allowed_permission_option(tool_call: dict[str, Any], options: list[dict[str, Any]]) -> str | None:
+    if not _permission_targets_allowed_path(tool_call):
+        return None
+    for option in options:
+        if option.get("kind") == "allow_once" and isinstance(option.get("option_id"), str):
+            return option["option_id"]
+    for option in options:
+        if option.get("kind") == "allow_always" and isinstance(option.get("option_id"), str):
+            return option["option_id"]
+    return None
+
+
+def _permission_targets_allowed_path(value: Any) -> bool:
+    paths = _collect_permission_paths(value)
+    if not paths:
+        return False
+    return all(_path_is_under_allowed_workspace(path) for path in paths)
+
+
+def _collect_permission_paths(value: Any) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"filepath", "filePath", "path", "parentDir", "cwd"} and isinstance(item, str):
+                paths.append(item)
+            else:
+                paths.extend(_collect_permission_paths(item))
+    elif isinstance(value, list):
+        for item in value:
+            paths.extend(_collect_permission_paths(item))
+    return paths
+
+
+def _path_is_under_allowed_workspace(path: str) -> bool:
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return False
+    allowed_roots = [Path("/finding").resolve(), Path("/artifacts").resolve(), Path("/dieaudit/artifacts").resolve()]
+    return any(resolved == root or root in resolved.parents for root in allowed_roots)
 
 
 async def _maybe_await(value: Any) -> Any:
