@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            services/platform/requirements.txt
+            services/mcp-tools/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r services/platform/requirements.txt
+          python -m pip install -r services/mcp-tools/requirements.txt
+          python -m pip install pytest pytest-asyncio requests-mock time-machine
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Compile Python packages
+        run: python -m compileall services/platform/app services/mcp-tools services/agents/opencode-agent
+
+  web-ui:
+    name: Web UI build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: services/web-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: services/web-ui
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: services/web-ui
+        run: npm run build
+
+  compose-config:
+    name: Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate core Compose services
+        run: docker compose --profile core config --services
+
+      - name: Validate tools Compose services
+        run: docker compose --profile tools config --services
+
+      - name: Check whitespace
+        run: git diff --check

@@ -1,128 +1,213 @@
 # DieAudit
 
-DieAudit is a local-first, multi-agent code audit platform. The current implementation focuses on a runnable Docker Compose environment, Docker runtime orchestration for Agent containers and MCP sidecars, OpenCode ACP agents, project import, SCA/static tooling, structured findings, validator attempts, sandbox-assisted PoC execution, and a Qdrant-backed knowledge base.
+[![CI](https://github.com/D1no209/DieAudit/actions/workflows/ci.yml/badge.svg)](https://github.com/D1no209/DieAudit/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
+DieAudit is a local-first, Docker-orchestrated multi-agent code audit platform.
+It is designed to run practical security review workflows against real source
+projects with OpenCode agents, MCP tool sidecars, Joern CPG analysis, Semgrep,
+SCA, finding-specific markdown workspaces, validator fan-out, PoC generation,
+verification, judgement, and report artifacts.
+
+The project is still early, but the repository is intentionally structured as a
+runnable open-source platform rather than a one-off demo.
+
+## What DieAudit Does
+
+- Imports projects from Git URLs or zip uploads.
+- Creates isolated workspaces and local artifact directories.
+- Builds Joern CPG context for code structure, call-chain, and source-to-sink
+  analysis.
+- Runs OpenCode-based agents through Agent Client Protocol.
+- Starts Agent containers and MCP sidecars through Docker orchestration.
+- Assigns each finding its own persistent folder and `finding.md` handoff file.
+- Lets Source-Sink Finder, Validator, Judger, PoC Writer, and PoC Verifier
+  iteratively refine the same finding markdown.
+- Runs per-finding Agent Swarm stages in parallel with configurable concurrency.
+- Records Findings, Evidence, ValidationAttempts, AgentRuns, ContainerRuns, and
+  report artifacts.
+- Provides a React + Ant Design web UI for projects, audit runs, findings,
+  reports, runtime state, sandbox controls, knowledge documents, and admin keys.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  UI["React / Ant Design Web UI"] --> API["FastAPI Web API"]
+  API --> DB["Postgres"]
+  API --> Worker["Workflow Worker"]
+  Worker --> Gateway["Agent Gateway"]
+  Worker --> Workspace["Workspace Engine"]
+  Worker --> Sandbox["Sandbox Runner"]
+  Gateway --> DockerProxy["docker-socket-proxy"]
+  Sandbox --> DockerProxy
+  DockerProxy --> Docker["Docker Engine"]
+  Docker --> Agents["OpenCode Agent Containers"]
+  Docker --> MCP["MCP Sidecar Containers"]
+  Agents --> MCP
+  MCP --> Tools["Joern / Semgrep / SCA / Code Search / KB"]
+  API --> Artifacts["Local Artifact Directory"]
+  Worker --> Artifacts
+  API --> Qdrant["Qdrant Knowledge Index"]
+```
+
+Core services in `docker-compose.yml`:
+
+- `nginx`: Web/API gateway.
+- `web-ui`: React frontend.
+- `web-api`: FastAPI backend.
+- `workflow-worker`: audit pipeline worker.
+- `agent-gateway`: Agent, ACP, MCP, and runtime package orchestration.
+- `workspace-engine`: project import, snapshots, and static workspace work.
+- `sandbox-runner`: controlled target/PoC Docker execution.
+- `kb-indexer`: document parsing and vector indexing.
+- `postgres`, `redis`, `nats`, `qdrant`, `temporal`.
+- `docker-socket-proxy`: limited Docker Engine API proxy.
+
+Default artifact storage is local directory mounts under `data/artifacts`.
+MinIO is not part of the default Compose topology.
+
+## Current Production Path
+
+The intended audit flow is:
+
+```text
+project import
+  -> snapshot
+  -> Joern CPG build
+  -> recon / orchestrator
+  -> code-auditor fan-out
+  -> Semgrep + SCA
+  -> per-finding Source-Sink Finder
+  -> per-finding Validator
+  -> per-finding Judger
+  -> per-finding PoC Writer
+  -> per-finding PoC Verifier
+  -> markdown/json reports
+  -> runtime cleanup
+```
+
+CodeQL is not required by the default production path. Joern is the default CPG
+engine and should be available for real audits.
 
 ## Quick Start
 
-The default proxy is `http://127.0.0.1:7897` for Docker CLI pulls and `http://host.docker.internal:7897` for Docker build steps. Override `HOST_HTTP_PROXY`, `HOST_HTTPS_PROXY`, `BUILD_HTTP_PROXY`, and `BUILD_HTTPS_PROXY` in `.env` if needed.
+Requirements:
+
+- Docker Desktop or Docker Engine with Compose v2.
+- PowerShell on Windows, or Bash on Linux/macOS.
+- Optional: a local Docker/HTTP proxy. This repository defaults to:
+  - host-side pulls: `http://127.0.0.1:7897`
+  - container build args: `http://host.docker.internal:7897`
+
+Windows:
 
 ```powershell
 copy .env.example .env
 .\scripts\bootstrap.ps1
+docker compose --profile core up -d
 ```
 
-The bootstrap script builds the core production path by default. It does not build or expose mock demo images unless explicitly requested.
+Linux/macOS:
+
+```bash
+cp .env.example .env
+./scripts/bootstrap.sh
+docker compose --profile core up -d
+```
 
 Open:
 
-- Web UI: http://localhost:8080
-- Web API: http://localhost:18000/health
-- Agent Gateway: http://localhost:18001/health
-- Temporal UI: http://localhost:18088
+- Web UI: <http://localhost:8080>
+- Web API health: <http://localhost:18000/health>
+- Agent Gateway health: <http://localhost:18001/health>
+- Temporal UI: <http://localhost:18088>
 
-## Production Readiness
-
-Use `.env.production.example` as the deployment checklist. Do not commit the resulting `.env`.
-
-Required before exposing the platform:
-
-- Set `DIEAUDIT_API_KEY` or create a persisted active API key through the UI/API.
-- Keep `PUBLIC_METRICS=false` unless metrics are protected by a separate private network or auth layer.
-- Keep `PIPELINE_EXECUTION_BACKEND=workflow-worker`; `background-tasks` is only for local debugging.
-- Keep `ENABLE_DEMO_TEMPLATES=false`; mock demo templates are hidden from production runtime APIs by default.
-- Use the default Docker `runc` runtime for isolated sandbox and PoC containers, or configure another Docker runtime if your deployment requires it.
-- Keep `ALLOW_RUNC_SANDBOX=true` when `DEFAULT_SANDBOX_RUNTIME=runc`.
-- Keep `ALLOW_SANDBOX_EXTERNAL_NETWORK=false` unless a specific sandbox/PoC test requires outbound network access.
-- Optional but recommended: configure semantic KB embeddings with `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible` and reindex documents into a fresh Qdrant collection. The default hash provider remains available for local smoke tests.
-- Build the required Joern analyzer image before production audits: `docker compose --profile tools build tool-mcp-joern-image`.
-
-Check the live deployment:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/gateway/runtime/readiness | ConvertTo-Json -Depth 10
-```
-
-The Compose default now queues audit pipelines for `workflow-worker`; the API process no longer owns pipeline execution through request-local background tasks.
-
-Check sandbox runtime visibility from both Docker and the platform:
-
-```powershell
-docker info --format '{{json .Runtimes}}'
-docker compose --profile core config | Select-String "DEFAULT_SANDBOX_RUNTIME|ENABLE_GVISOR|ALLOW_RUNC_SANDBOX|ALLOW_SANDBOX_EXTERNAL_NETWORK"
-Invoke-RestMethod http://localhost:8080/gateway/runtime/sandbox/capabilities | ConvertTo-Json -Depth 10
-```
-
-Check MCP tool image capabilities:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/gateway/runtime/tool-capabilities | ConvertTo-Json -Depth 10
-```
-
-MCP templates can declare `required_binaries`; readiness probes the configured image with a short-lived isolated container and reports missing CLIs such as `joern`, `semgrep`, or `syft`. Joern is part of the production audit path and uses the dedicated `dieaudit/tool-mcp-joern:local` image so the default tool image stays lightweight. CodeQL remains experimental and is not required by production readiness.
-
-Create the first persisted admin key from the running Compose environment without opening an unauthenticated browser/API setup flow:
+Create a persisted admin API key:
 
 ```powershell
 .\scripts\create-api-key.ps1 -Name bootstrap-admin -Scope admin
 ```
 
-Linux/macOS equivalent:
-
 ```bash
 NAME=bootstrap-admin SCOPES=admin ./scripts/create-api-key.sh
 ```
 
-The command prints the API key once and stores only its hash in Postgres. Use the printed key as `X-DieAudit-Api-Key`.
+The command prints the API key once. Use it as `X-DieAudit-Api-Key` in the UI
+or API clients.
 
-## Demo Profile Runtime Orchestration
+## Tool Images
 
-Demo fixtures are intentionally excluded from the default startup path. Use them only for smoke tests on a local machine:
+Build the default tool images before real audits:
 
 ```powershell
-echo ENABLE_DEMO_TEMPLATES=true >> .env
-.\scripts\bootstrap.ps1 -IncludeDemo
-docker compose --profile core up -d
+$env:HTTP_PROXY = "http://127.0.0.1:7897"
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"
+docker compose --profile tools build tool-mcp-image tool-mcp-joern-image opencode-agent-image
 ```
 
-Linux/macOS equivalent:
+Linux/macOS:
 
 ```bash
-echo ENABLE_DEMO_TEMPLATES=true >> .env
-./scripts/bootstrap.sh --include-demo
-docker compose --profile core up -d
+HTTP_PROXY=http://127.0.0.1:7897 \
+HTTPS_PROXY=http://127.0.0.1:7897 \
+docker compose --profile tools build tool-mcp-image tool-mcp-joern-image opencode-agent-image
 ```
 
-Start a mock Agent with mock MCP sidecars:
+If you do not use a proxy, leave the proxy variables empty.
 
-```powershell
-Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/demo
-```
+## Running An Audit
 
-List dynamic containers:
+1. Start the `core` profile.
+2. Open the Web UI.
+3. Add an API key if authentication is enabled.
+4. Import a Git project or upload a zip project from the `Projects` page.
+5. Go to `Audit Runs`.
+6. Click `启动审计`.
+7. Configure:
+   - enabled Agent stages,
+   - Validator rounds,
+   - per-stage concurrency,
+   - Agent template names,
+   - Joern query packs,
+   - pre-guidance prompt,
+   - runtime retention and network options.
+8. Create the AuditRun.
+9. Click `一键闭环` to run the full pipeline.
+10. Review Findings, per-finding markdown, Evidence, ValidationAttempts, PoC
+    results, and Reports.
 
-```powershell
-Invoke-RestMethod http://localhost:18001/audit-runs/demo-run/containers
-```
+Each finding has a stable artifact folder and a `finding.md` file. Finding
+scoped agents are instructed to read and update that markdown file, so the
+finding history is preserved across Source-Sink Finder, Validator, Judger, PoC
+Writer, and PoC Verifier stages.
 
-Clean up the dynamic run network and containers:
+## Runtime Safety Model
 
-```powershell
-Invoke-RestMethod -Method Post http://localhost:18001/audit-runs/demo-run/cleanup
-```
+- The application services do not mount `/var/run/docker.sock` directly.
+- `agent-gateway` and `sandbox-runner` access Docker through
+  `docker-socket-proxy`.
+- Dynamic containers are labeled with `dieaudit.managed=true`,
+  `dieaudit.audit_run_id`, `dieaudit.project_id`, `dieaudit.role`, and
+  `dieaudit.ttl`.
+- Each AuditRun gets a dedicated Docker network named
+  `dieaudit-run-{audit_run_id}`.
+- Workspaces are mounted read-only for agents and tools where possible.
+- PoC containers default to no external network unless explicitly allowed.
+- `retain_runtime_on_failure=true` keeps failed runtime state for debugging.
 
-## Runtime Model
+DieAudit executes untrusted code and AI-generated PoCs inside Docker containers.
+Do not expose a local deployment to untrusted users without additional network,
+host, authentication, and resource isolation.
 
-- `agent-gateway` and `sandbox-runner` talk to Docker through `docker-socket-proxy`.
-- Dynamic containers are labeled with `dieaudit.managed=true`, `dieaudit.audit_run_id`, `dieaudit.project_id`, `dieaudit.role`, and `dieaudit.ttl`.
-- Each AuditRun gets a dedicated Docker network named `dieaudit-run-{audit_run_id}`.
-- Agent templates live in `configs/agent-templates`.
-- MCP templates live in `configs/mcp-templates`.
-- Mock Agent images remain only as demo fixtures. Production OpenCode templates are in `configs/agent-templates/opencode-*.yaml`, with bare role aliases such as `orchestrator` and `validator` also pointing at the OpenCode runtime.
-- Standard MCP templates in `configs/mcp-templates` use `dieaudit/tool-mcp:local`; Joern uses the dedicated `dieaudit/tool-mcp-joern:local` image and is required for the production audit path. CodeQL templates are experimental and not part of the default chain.
+## Knowledge Base
 
-## Knowledge Base Embeddings
+The knowledge base accepts PDF, MHTML, HTML, Markdown, and text documents.
+Documents are chunked and indexed into Qdrant.
 
-The knowledge base defaults to deterministic local hash embeddings so Compose works without an external embedding service. For production semantic retrieval, configure an OpenAI-compatible embeddings endpoint and use a dedicated Qdrant collection:
+Default embeddings use a deterministic local hash provider so development
+Compose can run without an external embedding service. For semantic retrieval,
+configure an OpenAI-compatible embedding endpoint:
 
 ```env
 KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible
@@ -134,32 +219,135 @@ KNOWLEDGE_COLLECTION_NAME=dieaudit_knowledge_embeddings_v1
 KNOWLEDGE_EMBEDDING_PROBE_ON_READINESS=true
 ```
 
-`/runtime/readiness` and `/knowledge/status` probe a configured semantic provider by requesting one embedding and checking the returned vector dimension. Do not reuse an existing Qdrant collection when changing embedding dimension or provider. Reindex uploaded knowledge documents after changing these settings.
+Use a fresh Qdrant collection or reindex documents when changing embedding
+dimension or provider.
 
-## Artifact Access
+## Configuration
 
-Reports, evidence files, snapshots, container logs, tool output, and knowledge uploads are stored under `ARTIFACT_ROOT`. Use the platform API instead of exposing the host directory:
+Copy `.env.example` to `.env` for local development.
+Use `.env.production.example` as a deployment checklist.
+
+Important production settings:
+
+- `DIEAUDIT_API_KEY` or persisted API keys for authentication.
+- `PUBLIC_METRICS=false` unless metrics are separately protected.
+- `ENABLE_DEMO_TEMPLATES=false`.
+- `PIPELINE_EXECUTION_BACKEND=workflow-worker`.
+- `DEFAULT_SANDBOX_RUNTIME=runc`.
+- `ALLOW_RUNC_SANDBOX=true`.
+- `ALLOW_SANDBOX_EXTERNAL_NETWORK=false`.
+- `ARTIFACT_STORAGE_BACKEND=local`.
+
+Check readiness:
 
 ```powershell
-Invoke-RestMethod "http://localhost:18001/artifacts/metadata?path=reports/run-id/report.md"
-Invoke-WebRequest "http://localhost:18001/artifacts/download?path=reports/run-id/report.md" -OutFile report.md
+Invoke-RestMethod http://localhost:8080/gateway/runtime/readiness | ConvertTo-Json -Depth 10
 ```
 
-Artifact download endpoints reject missing files, directories, and paths outside `ARTIFACT_ROOT`.
+```bash
+curl -s http://localhost:8080/gateway/runtime/readiness | jq .
+```
 
-## Agent Protocols
+More details are in [docs/production-readiness.md](docs/production-readiness.md).
 
-The gateway includes both selected protocol SDKs:
+## Demo Profile
 
-- `agent-client-protocol` for stdio JSON-RPC Agent Client Protocol agents.
-- `a2a-sdk` for A2A HTTP agent-to-agent clients.
+Demo and mock runtime surfaces are intentionally opt-in.
+Demo fixtures are intentionally excluded from the default startup path.
+The default bootstrap and startup path does not build or expose mock demo images unless explicitly requested.
 
-Check SDK availability and template readiness:
+Windows:
 
 ```powershell
-Invoke-RestMethod http://localhost:18001/runtime/protocols
+echo ENABLE_DEMO_TEMPLATES=true >> .env
+.\scripts\bootstrap.ps1 -IncludeDemo
+docker compose --profile core up -d
 ```
 
-## Persistence And Database
+Linux/macOS:
 
-The platform uses SQLAlchemy ORM models and creates the first schema on `web-api` startup. Raw SQL is not required for the application schema.
+```bash
+echo ENABLE_DEMO_TEMPLATES=true >> .env
+./scripts/bootstrap.sh --include-demo
+docker compose --profile core up -d
+```
+
+Production template APIs should not expose mock templates when
+`ENABLE_DEMO_TEMPLATES=false`.
+
+## Development
+
+Python:
+
+```powershell
+python -m pip install -r services\platform\requirements.txt
+python -m pip install -r services\mcp-tools\requirements.txt
+python -m pip install pytest pytest-asyncio requests-mock time-machine
+python -m pytest
+python -m compileall services\platform\app services\mcp-tools services\agents\opencode-agent
+```
+
+Frontend:
+
+```powershell
+cd services\web-ui
+npm ci
+npm run build
+```
+
+Compose validation:
+
+```powershell
+docker compose --profile core config --services
+docker compose --profile tools config --services
+```
+
+E2E smoke scripts:
+
+```powershell
+.\scripts\e2e-smoke.ps1
+```
+
+```bash
+./scripts/e2e-smoke.sh
+```
+
+The E2E scripts can skip real model execution when no model API key is
+configured.
+
+## Repository Layout
+
+```text
+configs/                    Agent, MCP, model, nginx templates
+docs/                       operational documentation
+scripts/                    bootstrap, key creation, E2E, image pull helpers
+services/platform/          FastAPI backend, ORM, runtime orchestration
+services/web-ui/            React + Ant Design frontend
+services/mcp-tools/         MCP tool server implementation and tool images
+services/agents/            OpenCode agent image
+services/mock-*             opt-in demo fixtures
+tests/                      Python and repo-structure tests
+```
+
+## Roadmap
+
+Near-term engineering work:
+
+- More real-world end-to-end fixture audits.
+- Stronger Joern query packs per language/framework.
+- Better sandbox target stack management.
+- More precise dependency vulnerability normalization.
+- Production-grade RAG embedding provider documentation.
+- Runtime resource quotas and metrics dashboards.
+- Hardening around multi-user authorization scopes.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+For security reports, see [SECURITY.md](SECURITY.md).
+
+## License
+
+DieAudit is licensed under the GNU General Public License v3.0.
+See [LICENSE](LICENSE).
