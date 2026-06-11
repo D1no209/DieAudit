@@ -1,4 +1,5 @@
 name: a2a-example
+profile: demo
 image: dieaudit/mock-agent:local
 command: ["python", "/app/mock_agent.py"]
 env:

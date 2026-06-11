@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,3 +48,12 @@ def test_readme_describes_demo_profile_as_explicit_opt_in() -> None:
     assert "Demo fixtures are intentionally excluded from the default startup path" in readme
     assert ".\\scripts\\bootstrap.ps1 -IncludeDemo" in readme
     assert "./scripts/bootstrap.sh --include-demo" in readme
+
+
+def test_all_mock_agent_templates_are_demo_profile() -> None:
+    for path in (ROOT / "configs" / "agent-templates").glob("*.yaml"):
+        template = yaml.safe_load(path.read_text(encoding="utf-8"))
+        image = str(template.get("image") or "")
+        protocol = template.get("protocol") if isinstance(template.get("protocol"), dict) else {}
+        if "dieaudit/mock-" in image or protocol.get("runtime") == "mock":
+            assert template.get("profile") == "demo", path.name
