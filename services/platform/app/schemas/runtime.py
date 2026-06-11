@@ -113,3 +113,13 @@ class StartSandboxServiceRequest(BaseModel):
     healthcheck_path: str | None = None
     startup_timeout_seconds: int = Field(default=30, ge=1, le=300)
     allow_weak_isolation: bool = False
+
+
+class StartSandboxComposeRequest(BaseModel):
+    compose_yaml: str = Field(min_length=1)
+    service_name: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    allow_external_network: bool = False
+    retain_runtime_on_failure: bool = True
+    mount_workspace: bool = True
+    startup_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    allow_weak_isolation: bool = False

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import delete, func, select
@@ -71,6 +72,7 @@ from app.schemas import (
     CreateProjectRequest,
     KnowledgeSearchRequest,
     RunPocRequest,
+    StartSandboxComposeRequest,
     StartAgentRunRequest,
     StartSandboxServiceRequest,
     StorageCleanupRequest,
@@ -1815,6 +1817,53 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         await _record_audit_run_event(audit_run_id, "sandbox_service_started", result)
         return result
 
+    @router.post("/audit-runs/{audit_run_id}/sandbox/compose")
+    async def start_sandbox_compose(request: Request, audit_run_id: str, body: StartSandboxComposeRequest) -> dict[str, Any]:
+        runtime = runtime_provider()
+        allow_external_network = _effective_sandbox_external_network(settings, body.allow_external_network)
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        service_request = _sandbox_compose_to_service_request(body)
+        if runtime is None:
+            return await proxy_gateway(
+                f"/audit-runs/{audit_run_id}/sandbox/compose",
+                method="POST",
+                json={**body.model_dump(), "allow_external_network": allow_external_network},
+            )
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        try:
+            result = await runtime.start_sandbox_service(
+                audit_run_id=audit_run_id,
+                project_id=audit_run["project_id"],
+                image=service_request.image,
+                command=service_request.command,
+                env=service_request.env,
+                workspace_host_path=workspace_path,
+                service_name=service_request.service_name,
+                port=service_request.port,
+                allow_external_network=allow_external_network,
+                retain_runtime_on_failure=service_request.retain_runtime_on_failure,
+                startup_timeout_seconds=service_request.startup_timeout_seconds,
+                mount_workspace=service_request.mount_workspace,
+                healthcheck_path=service_request.healthcheck_path,
+                allow_weak_isolation=service_request.allow_weak_isolation,
+            )
+        except (DockerApiError, RuntimeError, ValueError) as exc:
+            if _is_sandbox_unavailable_error(str(exc)):
+                result = _sandbox_unavailable_result(str(exc), request_body=body.model_dump())
+                await _record_audit_run_event(audit_run_id, "sandbox_compose_unavailable", result)
+                return result
+            await _record_audit_run_event(audit_run_id, "sandbox_compose_failed", {"error": str(exc), "request": body.model_dump()})
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await _record_audit_run_event(
+            audit_run_id,
+            "sandbox_compose_started",
+            {"compose_mode": "single-service", "service_request": service_request.model_dump(), "result": result},
+        )
+        return {"compose_mode": "single-service", **result}
+
     @router.post("/audit-runs/{audit_run_id}/validators/scale")
     async def scale_validators(request: Request, audit_run_id: str, body: ValidatorScaleRequest) -> dict[str, Any]:
         runtime = runtime_provider()
@@ -1874,6 +1923,109 @@ async def _temporal_health(settings: Settings) -> dict[str, Any]:
         }
     except Exception as exc:
         return {"ok": False, "address": address, "host": host, "port": port, "mode": "tcp", "error": str(exc)}
+
+
+def _sandbox_compose_to_service_request(body: StartSandboxComposeRequest) -> StartSandboxServiceRequest:
+    try:
+        compose = yaml.safe_load(body.compose_yaml)
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid compose yaml: {exc}") from exc
+    if not isinstance(compose, dict) or not isinstance(compose.get("services"), dict):
+        raise HTTPException(status_code=400, detail="compose_yaml must contain a services mapping")
+    services = compose["services"]
+    if len(services) != 1 and not body.service_name:
+        raise HTTPException(status_code=400, detail="multi-service compose requires service_name; only the selected service is started in this version")
+    service_name = body.service_name or next(iter(services.keys()))
+    if service_name not in services:
+        raise HTTPException(status_code=400, detail=f"service not found in compose_yaml: {service_name}")
+    if len(services) != 1:
+        raise HTTPException(status_code=400, detail="multi-service compose stacks are not yet supported; provide a single target service")
+    service = services[service_name]
+    if not isinstance(service, dict):
+        raise HTTPException(status_code=400, detail="compose service must be a mapping")
+    _reject_unsafe_compose_service(service)
+    image = str(service.get("image") or "").strip()
+    if not image:
+        raise HTTPException(status_code=400, detail="compose service image is required")
+    command = _compose_command(service.get("command"))
+    if not command:
+        raise HTTPException(status_code=400, detail="compose service command is required")
+    env = _compose_environment(service.get("environment"))
+    try:
+        port = _compose_port(service)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"invalid compose service port: {exc}") from exc
+    healthcheck_path = _compose_healthcheck_path(service)
+    return StartSandboxServiceRequest(
+        image=image,
+        command=command,
+        env=env,
+        service_name=str(service_name),
+        port=port,
+        allow_external_network=body.allow_external_network,
+        retain_runtime_on_failure=body.retain_runtime_on_failure,
+        mount_workspace=body.mount_workspace,
+        healthcheck_path=str(healthcheck_path) if healthcheck_path else None,
+        startup_timeout_seconds=body.startup_timeout_seconds,
+        allow_weak_isolation=body.allow_weak_isolation,
+    )
+
+
+def _reject_unsafe_compose_service(service: dict[str, Any]) -> None:
+    forbidden_keys = {"privileged", "pid", "ipc", "cgroup_parent", "network_mode"}
+    present = sorted(key for key in forbidden_keys if key in service)
+    if present:
+        raise HTTPException(status_code=400, detail=f"unsupported unsafe compose keys: {', '.join(present)}")
+    volumes = service.get("volumes") or []
+    for volume in volumes if isinstance(volumes, list) else []:
+        text = str(volume)
+        if "/var/run/docker.sock" in text or "\\\\.\\pipe\\docker_engine" in text:
+            raise HTTPException(status_code=400, detail="compose service must not mount the Docker socket")
+
+
+def _compose_command(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    if isinstance(value, str) and value.strip():
+        return ["sh", "-lc", value]
+    return []
+
+
+def _compose_environment(value: Any) -> dict[str, str]:
+    if isinstance(value, dict):
+        return {str(key): str(item) for key, item in value.items()}
+    result: dict[str, str] = {}
+    if isinstance(value, list):
+        for item in value:
+            key, _, val = str(item).partition("=")
+            if key:
+                result[key] = val
+    return result
+
+
+def _compose_port(service: dict[str, Any]) -> int:
+    dieaudit = service.get("x-dieaudit")
+    if isinstance(dieaudit, dict) and dieaudit.get("port"):
+        return int(dieaudit["port"])
+    if service.get("x-dieaudit-port"):
+        return int(service["x-dieaudit-port"])
+    ports = service.get("ports") or []
+    if isinstance(ports, list) and ports:
+        raw = str(ports[0]).split("/", 1)[0]
+        return int(raw.rsplit(":", 1)[-1])
+    expose = service.get("expose") or []
+    if isinstance(expose, list) and expose:
+        return int(str(expose[0]).split("/", 1)[0])
+    return 8080
+
+
+def _compose_healthcheck_path(service: dict[str, Any]) -> str | None:
+    dieaudit = service.get("x-dieaudit")
+    if isinstance(dieaudit, dict) and dieaudit.get("healthcheck_path"):
+        return str(dieaudit["healthcheck_path"])
+    if service.get("x-dieaudit-healthcheck-path"):
+        return str(service["x-dieaudit-healthcheck-path"])
+    return None
 
 
 async def _artifact_metadata_response(request: Request, settings: Settings, path: str) -> dict[str, Any]:
