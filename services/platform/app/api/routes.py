@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.api.readiness import (
     active_pipeline_readiness_check as _active_pipeline_readiness_check,
@@ -244,9 +244,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
     @router.get("/knowledge/status")
     async def knowledge_status() -> dict[str, Any]:
         service = KnowledgeService(settings)
+        async with SessionLocal() as session:
+            document_count = await _count_rows(session, KnowledgeDocument)
+            chunk_count = await _count_rows(session, KnowledgeChunk)
         return {
             "embedding": await service.embedding_health(probe=settings.knowledge_embedding_probe_on_readiness),
             "vector_store": await service.collection_health(probe=settings.knowledge_embedding_probe_on_readiness),
+            "documents": {
+                "document_count": document_count,
+                "chunk_count": chunk_count,
+            },
         }
 
     @router.post("/knowledge/documents")
@@ -460,7 +467,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             chunk = chunks_by_id.get(str(item.get("chunk_id")))
             if not chunk:
                 continue
-            enriched.append({**item, "text": chunk.text, "metadata": chunk.metadata_json or {}})
+            enriched.append(
+                {
+                    **item,
+                    "text": chunk.text,
+                    "metadata": chunk.metadata_json or {},
+                    "evidence": _knowledge_evidence_from_match(item, chunk),
+                }
+            )
         return {"query": body.query, "matches": enriched}
 
     @router.get("/projects")
@@ -2210,6 +2224,11 @@ async def _list_audit_run_events(audit_run_id: str, limit: int = 200) -> list[di
         ]
 
 
+async def _count_rows(session: Any, model: Any) -> int:
+    value = await session.scalar(select(func.count()).select_from(model))
+    return int(value or 0)
+
+
 async def _list_agent_runs(audit_run_id: str) -> list[dict[str, Any]]:
     async with SessionLocal() as session:
         rows = (
@@ -3073,6 +3092,24 @@ def _normalize_knowledge_scope(scope: str) -> str:
     if normalized not in {"global", "project"}:
         raise HTTPException(status_code=400, detail="knowledge scope must be global or project")
     return normalized
+
+
+def _knowledge_evidence_from_match(item: dict[str, Any], chunk: KnowledgeChunk) -> dict[str, Any]:
+    metadata = chunk.metadata_json or {}
+    return {
+        "kind": "knowledge-rag",
+        "summary": metadata.get("title") or item.get("title") or metadata.get("source_name") or item.get("source_name"),
+        "payload": {
+            "document_id": item.get("document_id") or chunk.document_id,
+            "chunk_id": item.get("chunk_id") or chunk.chunk_id,
+            "score": item.get("score"),
+            "scope": item.get("scope") or chunk.scope,
+            "project_id": item.get("project_id") or chunk.project_id,
+            "chunk_index": item.get("chunk_index") if item.get("chunk_index") is not None else chunk.chunk_index,
+            "title": item.get("title") or metadata.get("title"),
+            "source_name": item.get("source_name") or metadata.get("source_name"),
+        },
+    }
 
 
 __all__ = ["register_runtime_routes"]

@@ -366,6 +366,34 @@ export type KnowledgeMatch = {
   chunk_index?: number;
   text: string;
   metadata?: Record<string, unknown>;
+  evidence?: {
+    kind: string;
+    summary?: string;
+    payload: Record<string, unknown>;
+  };
+};
+
+export type KnowledgeStatus = {
+  embedding?: {
+    provider?: string;
+    collection?: string;
+    vector_size?: number;
+    semantic?: boolean;
+    status?: "pass" | "warn" | "fail";
+    message?: string;
+    probe?: Record<string, unknown>;
+  };
+  vector_store?: {
+    collection?: string;
+    vector_size?: number;
+    status?: "pass" | "warn" | "fail";
+    message?: string;
+    probe?: Record<string, unknown>;
+  };
+  documents?: {
+    document_count?: number;
+    chunk_count?: number;
+  };
 };
 
 export type ContainerRow = {

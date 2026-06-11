@@ -130,10 +130,11 @@ def test_knowledge_page_uses_focused_subcomponents() -> None:
     assert "Form.Item" not in knowledge_page
     assert "List.Item.Meta" not in knowledge_page
     assert "<Upload" not in knowledge_page
-    for component in ("KnowledgeUploadPanel", "KnowledgeDocumentsPanel", "KnowledgeSearchPanel"):
+    for component in ("KnowledgeStatusPanel", "KnowledgeUploadPanel", "KnowledgeDocumentsPanel", "KnowledgeSearchPanel"):
         assert component in knowledge_page
 
     for path in (
+        "services/web-ui/src/pages/knowledge/KnowledgeStatusPanel.tsx",
         "services/web-ui/src/pages/knowledge/KnowledgeUploadPanel.tsx",
         "services/web-ui/src/pages/knowledge/KnowledgeDocumentsPanel.tsx",
         "services/web-ui/src/pages/knowledge/KnowledgeSearchPanel.tsx",

@@ -16,6 +16,7 @@ import type {
   FindingDetail,
   KnowledgeDocument,
   KnowledgeMatch,
+  KnowledgeStatus,
   ManagedRuntime,
   PipelineStatus,
   PlatformAuditEvent,
@@ -42,6 +43,7 @@ export function useDashboardState() {
   const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
   const [knowledgeMatches, setKnowledgeMatches] = useState<KnowledgeMatch[]>([]);
+  const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus>();
   const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
@@ -84,6 +86,7 @@ export function useDashboardState() {
     setPlatformAuditEvents([]);
     setKnowledgeDocuments([]);
     setKnowledgeMatches([]);
+    setKnowledgeStatus(undefined);
     setProjects([]);
     setSelectedProjectId(undefined);
     setAuditRun(undefined);
@@ -120,6 +123,7 @@ export function useDashboardState() {
     knowledgeFiles,
     knowledgeMatches,
     knowledgeSearchForm,
+    knowledgeStatus,
     knowledgeUploadForm,
     lastResponse,
     loading,
@@ -151,6 +155,7 @@ export function useDashboardState() {
     setKnowledgeDocuments,
     setKnowledgeFiles,
     setKnowledgeMatches,
+    setKnowledgeStatus,
     setLastResponse,
     setLoading,
     setManagedRuntime,

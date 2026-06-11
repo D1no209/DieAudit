@@ -161,6 +161,7 @@ export function renderKnowledgeRoute({ actions, columns, forms, state }: Dashboa
       knowledgeFiles={state.knowledgeFiles}
       knowledgeMatches={state.knowledgeMatches}
       knowledgeSearchForm={forms.knowledgeSearchForm}
+      knowledgeStatus={state.knowledgeStatus}
       knowledgeUploadForm={forms.knowledgeUploadForm}
       loading={state.loading}
       selectedProjectId={state.selectedProjectId}

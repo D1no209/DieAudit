@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app.api.routes import _delete_knowledge_artifact
+from app.api.routes import _delete_knowledge_artifact, _knowledge_evidence_from_match
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService, embed_text
 
 
@@ -371,3 +371,33 @@ def test_delete_knowledge_artifact_refuses_paths_outside_knowledge_root(tmp_path
 
     assert _delete_knowledge_artifact(settings, outside.resolve()) is False
     assert outside.exists()
+
+
+def test_knowledge_search_match_can_be_used_as_evidence() -> None:
+    chunk = type(
+        "Chunk",
+        (),
+        {
+            "document_id": "doc-1",
+            "chunk_id": "chunk-1",
+            "scope": "project",
+            "project_id": "project-1",
+            "chunk_index": 2,
+            "metadata_json": {"title": "SQLi article", "source_name": "article.pdf"},
+        },
+    )()
+
+    evidence = _knowledge_evidence_from_match({"score": 0.88}, chunk)
+
+    assert evidence["kind"] == "knowledge-rag"
+    assert evidence["summary"] == "SQLi article"
+    assert evidence["payload"] == {
+        "document_id": "doc-1",
+        "chunk_id": "chunk-1",
+        "score": 0.88,
+        "scope": "project",
+        "project_id": "project-1",
+        "chunk_index": 2,
+        "title": "SQLi article",
+        "source_name": "article.pdf",
+    }

@@ -16,6 +16,7 @@ import type {
   KnowledgeDocument,
   KnowledgeDocumentMutationResponse,
   KnowledgeSearchResponse,
+  KnowledgeStatus,
   ManagedRuntime,
   PipelineStatus,
   PlatformAuditEvent,
@@ -86,6 +87,10 @@ export function listPlatformAuditEvents() {
 
 export function listKnowledgeDocuments() {
   return readJson<KnowledgeDocument[]>("/gateway/knowledge/documents");
+}
+
+export function getKnowledgeStatus() {
+  return readJson<KnowledgeStatus>("/gateway/knowledge/status");
 }
 
 export async function getAuditRunBundle(auditRunId: string) {

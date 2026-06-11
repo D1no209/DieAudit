@@ -19,6 +19,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setError,
     setFindings,
     setKnowledgeDocuments,
+    setKnowledgeStatus,
     setLoading,
     setManagedRuntime,
     setPipelineStatus,
@@ -104,8 +105,12 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
   }
 
   async function refreshKnowledge() {
-    const rows = await dashboardApi.listKnowledgeDocuments();
+    const [rows, status] = await Promise.all([
+      dashboardApi.listKnowledgeDocuments(),
+      dashboardApi.getKnowledgeStatus().catch(() => undefined),
+    ]);
     setKnowledgeDocuments(rows);
+    setKnowledgeStatus(status);
     await refreshProjects();
   }
 

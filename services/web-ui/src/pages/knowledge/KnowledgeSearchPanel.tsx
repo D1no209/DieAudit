@@ -36,6 +36,9 @@ export function KnowledgeSearchPanel({ form, loading, matches, selectedProjectId
                 <>
                   <Tag>{Number(item.score || 0).toFixed(3)}</Tag>
                   <Tag>{item.scope}</Tag>
+                  <Tag>{item.document_id}</Tag>
+                  <Tag>{item.chunk_id}</Tag>
+                  {item.evidence?.kind ? <Tag color="blue">{item.evidence.kind}</Tag> : null}
                   <Paragraph ellipsis={{ rows: 4, expandable: true }}>{item.text}</Paragraph>
                 </>
               }

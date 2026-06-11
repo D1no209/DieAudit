@@ -1,10 +1,11 @@
 import type { ColumnsType } from "antd/es/table";
 import type { FormInstance } from "antd/es/form";
 import type { UploadFile } from "antd/es/upload/interface";
-import type { KnowledgeDocument, KnowledgeMatch } from "../types";
+import type { KnowledgeDocument, KnowledgeMatch, KnowledgeStatus } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { KnowledgeDocumentsPanel } from "./knowledge/KnowledgeDocumentsPanel";
 import { KnowledgeSearchPanel } from "./knowledge/KnowledgeSearchPanel";
+import { KnowledgeStatusPanel } from "./knowledge/KnowledgeStatusPanel";
 import { KnowledgeUploadPanel } from "./knowledge/KnowledgeUploadPanel";
 
 type Props = {
@@ -13,6 +14,7 @@ type Props = {
   knowledgeFiles: UploadFile[];
   knowledgeMatches: KnowledgeMatch[];
   knowledgeSearchForm: FormInstance;
+  knowledgeStatus?: KnowledgeStatus;
   knowledgeUploadForm: FormInstance;
   loading: boolean;
   selectedProjectId?: string;
@@ -27,6 +29,7 @@ export function KnowledgePage({
   knowledgeFiles,
   knowledgeMatches,
   knowledgeSearchForm,
+  knowledgeStatus,
   knowledgeUploadForm,
   loading,
   selectedProjectId,
@@ -39,6 +42,7 @@ export function KnowledgePage({
       <PageHeader title="Knowledge" />
       <div className="knowledge-grid section">
         <div className="panel-stack">
+          <KnowledgeStatusPanel documents={knowledgeDocuments} status={knowledgeStatus} />
           <KnowledgeUploadPanel
             files={knowledgeFiles}
             form={knowledgeUploadForm}
