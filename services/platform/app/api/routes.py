@@ -2521,12 +2521,22 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
     evidence = await _list_evidence(audit_run_id)
     attempts = await _list_validation_attempts(audit_run_id)
     agent_runs = await _list_agent_runs(audit_run_id)
+    audit_events = await _list_audit_run_events(audit_run_id)
+    summary = _report_summary(
+        findings=findings,
+        evidence=evidence,
+        attempts=attempts,
+        agent_runs=agent_runs,
+        audit_events=audit_events,
+    )
     payload = {
         "audit_run": audit_run,
+        "summary": summary,
         "findings": findings,
         "evidence": evidence,
         "validation_attempts": attempts,
         "agent_runs": agent_runs,
+        "audit_events": audit_events,
     }
     report_id = str(uuid.uuid4())
     report_dir = settings.artifact_root / "reports" / audit_run_id
@@ -2535,12 +2545,7 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
     json_path = report_dir / f"{report_id}.json"
     markdown_path.write_text(_report_markdown(payload), encoding="utf-8")
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    summary = {
-        "finding_count": len(findings),
-        "evidence_count": len(evidence),
-        "validation_attempt_count": len(attempts),
-        "json_path": str(json_path),
-    }
+    summary = {**summary, "json_path": str(json_path)}
     async with SessionLocal() as session:
         session.add(
             ReportArtifact(
@@ -2556,6 +2561,103 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
     result = {"report_id": report_id, "markdown_path": str(markdown_path), "json_path": str(json_path), "summary": summary}
     await _record_pipeline_event(audit_run_id, "report_generated", result)
     return result
+
+
+def _report_summary(
+    *,
+    findings: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+    agent_runs: list[dict[str, Any]],
+    audit_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    attempts_by_finding: dict[str, list[dict[str, Any]]] = {}
+    for attempt in attempts:
+        attempts_by_finding.setdefault(str(attempt.get("finding_id") or ""), []).append(attempt)
+    parse_warnings = _agent_parse_warnings(agent_runs)
+    tool_failures = _tool_failures(audit_events)
+    validator_failures = [
+        attempt
+        for attempt in attempts
+        if str(attempt.get("status") or "").lower() in {"failed", "cancelled"}
+    ]
+    unvalidated = [
+        finding
+        for finding in findings
+        if not attempts_by_finding.get(str(finding.get("finding_id") or ""))
+        and str(finding.get("status") or "").lower() in {"candidate", "validating", "needs_review"}
+    ]
+    return {
+        "finding_count": len(findings),
+        "evidence_count": len(evidence),
+        "validation_attempt_count": len(attempts),
+        "finding_count_by_status": _count_by(findings, "status"),
+        "finding_count_by_severity": _count_by(findings, "severity"),
+        "validation_attempt_count_by_status": _count_by(attempts, "status"),
+        "tool_failures": tool_failures,
+        "tool_failure_count": len(tool_failures),
+        "parse_warnings": parse_warnings,
+        "parse_warning_count": len(parse_warnings),
+        "validator_failures": [_compact_validation_attempt(item) for item in validator_failures],
+        "validator_failure_count": len(validator_failures),
+        "unvalidated_findings": len(unvalidated),
+        "unvalidated_finding_ids": [str(item.get("finding_id")) for item in unvalidated],
+    }
+
+
+def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(item.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _agent_parse_warnings(agent_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for run in agent_runs:
+        output = run.get("output_summary") if isinstance(run.get("output_summary"), dict) else {}
+        ingest = output.get("structured_ingest") if isinstance(output.get("structured_ingest"), dict) else {}
+        parse_status = ingest.get("structured_parse_status")
+        parse_warnings = ingest.get("structured_parse_warnings") or ingest.get("warnings") or []
+        if parse_status in {"not_found", "parsed_with_warnings"} or parse_warnings:
+            warnings.append(
+                {
+                    "agent_run_id": run.get("agent_run_id"),
+                    "agent_name": run.get("agent_name"),
+                    "status": parse_status or "unknown",
+                    "warnings": parse_warnings,
+                }
+            )
+    return warnings
+
+
+def _tool_failures(audit_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for event in audit_events:
+        event_type = str(event.get("event_type") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if event_type in {"sca_failed", "semgrep_failed", "semgrep_skipped", "tool_unavailable"}:
+            failures.append({"event_type": event_type, "payload": payload})
+            continue
+        if event_type != "pipeline_step_completed":
+            continue
+        step = str(payload.get("step") or "")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        if step in {"sca", "semgrep"} and (result.get("ok") is False or result.get("available") is False):
+            failures.append({"event_type": event_type, "step": step, "payload": result})
+    return failures
+
+
+def _compact_validation_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "attempt_id": attempt.get("attempt_id"),
+        "finding_id": attempt.get("finding_id"),
+        "round_index": attempt.get("round_index"),
+        "status": attempt.get("status"),
+        "agent_run_id": attempt.get("agent_run_id"),
+        "error": (attempt.get("result") or {}).get("error") if isinstance(attempt.get("result"), dict) else None,
+    }
 
 
 async def _run_semgrep_best_effort(
@@ -2763,6 +2865,7 @@ def _compact_event_payload(value: Any, *, max_string: int = 1200, max_items: int
 
 def _report_markdown(payload: dict[str, Any]) -> str:
     audit_run = payload["audit_run"]
+    summary = payload.get("summary") or {}
     findings = payload["findings"]
     attempts = payload["validation_attempts"]
     evidence = payload["evidence"]
@@ -2775,10 +2878,59 @@ def _report_markdown(payload: dict[str, Any]) -> str:
         f"- Findings: `{len(findings)}`",
         f"- Evidence: `{len(evidence)}`",
         f"- Validation attempts: `{len(attempts)}`",
+        f"- Parse warnings: `{summary.get('parse_warning_count', 0)}`",
+        f"- Tool failures: `{summary.get('tool_failure_count', 0)}`",
+        f"- Validator failures: `{summary.get('validator_failure_count', 0)}`",
+        f"- Unvalidated findings: `{summary.get('unvalidated_findings', 0)}`",
         "",
-        "## Findings",
+        "## Result Quality",
+        "",
+        "### Finding Status Counts",
         "",
     ]
+    for status, count in (summary.get("finding_count_by_status") or {}).items():
+        lines.append(f"- `{status}`: `{count}`")
+    if not (summary.get("finding_count_by_status") or {}):
+        lines.append("- No findings recorded.")
+    lines.extend(["", "### Validation Attempt Counts", ""])
+    for status, count in (summary.get("validation_attempt_count_by_status") or {}).items():
+        lines.append(f"- `{status}`: `{count}`")
+    if not (summary.get("validation_attempt_count_by_status") or {}):
+        lines.append("- No validation attempts recorded.")
+    lines.extend(["", "### Parse Warnings", ""])
+    if summary.get("parse_warnings"):
+        for warning in summary["parse_warnings"]:
+            lines.append(f"- AgentRun `{warning.get('agent_run_id')}` status `{warning.get('status')}`")
+    else:
+        lines.append("- None.")
+    lines.extend(["", "### Tool Failures", ""])
+    if summary.get("tool_failures"):
+        for failure in summary["tool_failures"]:
+            lines.append(f"- `{failure.get('event_type')}` {failure.get('step') or ''}".rstrip())
+    else:
+        lines.append("- None.")
+    lines.extend(["", "### Validator Failures", ""])
+    if summary.get("validator_failures"):
+        for failure in summary["validator_failures"]:
+            lines.append(
+                f"- Finding `{failure.get('finding_id')}` round `{failure.get('round_index')}` "
+                f"status `{failure.get('status')}`"
+            )
+    else:
+        lines.append("- None.")
+    lines.extend(["", "### Unvalidated Findings", ""])
+    if summary.get("unvalidated_finding_ids"):
+        for finding_id in summary["unvalidated_finding_ids"]:
+            lines.append(f"- `{finding_id}`")
+    else:
+        lines.append("- None.")
+    lines.extend(
+        [
+            "",
+            "## Findings",
+            "",
+        ]
+    )
     if not findings:
         lines.append("No findings were recorded.")
     for finding in findings:

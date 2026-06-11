@@ -373,6 +373,8 @@ class RuntimeOrchestrator:
                 "agent": agent_container,
                 "mcp": mcp_results,
                 "mcp_servers": mcp_servers,
+                "structured_ingest": structured_ingest,
+                "opencode_status": opencode_result.get("status") if opencode_result else None,
             }
         except Exception as exc:
             await self._record_agent_run(

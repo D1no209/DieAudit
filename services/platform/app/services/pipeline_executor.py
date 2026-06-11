@@ -169,11 +169,21 @@ class PipelineExecutor:
                 "pipeline_step_completed",
                 {"step": "report", "result": self.compact_event_payload(report_result)},
             )
-            await self.record_pipeline_summary(audit_run_id, {"steps": steps, "judge": judge_result, "report": report_result})
-            await self.mark_audit_run_status(audit_run_id, "completed")
-            await self.set_pipeline_state(audit_run_id, stage="completed", status="completed")
-            await self.record_audit_run_event(audit_run_id, "pipeline_completed", {"report": self.compact_event_payload(report_result)})
-            await self._cleanup_terminal_runtime(audit_run_id, terminal_status="completed", audit_run=audit_run)
+            result_quality = self._result_quality(steps=steps, judge_result=judge_result, report_result=report_result)
+            final_status = "completed_with_warnings" if result_quality["warnings"] else "completed"
+            final_event = "pipeline_completed_with_warnings" if final_status == "completed_with_warnings" else "pipeline_completed"
+            await self.record_pipeline_summary(
+                audit_run_id,
+                {"steps": steps, "judge": judge_result, "report": report_result, "result_quality": result_quality},
+            )
+            await self.mark_audit_run_status(audit_run_id, final_status)
+            await self.set_pipeline_state(audit_run_id, stage="completed", status=final_status)
+            await self.record_audit_run_event(
+                audit_run_id,
+                final_event,
+                {"report": self.compact_event_payload(report_result), "result_quality": self.compact_event_payload(result_quality)},
+            )
+            await self._cleanup_terminal_runtime(audit_run_id, terminal_status=final_status, audit_run=audit_run)
         except PipelineCancelled as exc:
             await self.mark_audit_run_status(audit_run_id, "cancelled")
             await self.set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error=str(exc))
@@ -246,3 +256,66 @@ class PipelineExecutor:
             "runtime_cleanup_completed",
             {"terminal_status": terminal_status, "result": self.compact_event_payload(result)},
         )
+
+    @staticmethod
+    def _result_quality(
+        *,
+        steps: list[dict[str, Any]],
+        judge_result: dict[str, Any],
+        report_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        warnings: list[dict[str, Any]] = []
+        metrics: dict[str, Any] = {
+            "agent_parse_warnings": 0,
+            "tool_failures": 0,
+            "validator_failures": 0,
+            "unvalidated_findings": 0,
+        }
+        for step in steps:
+            step_name = str(step.get("step") or "unknown")
+            result = step.get("result")
+            if not isinstance(result, dict):
+                continue
+            if step_name == "agent-audit":
+                ingest = result.get("structured_ingest") if isinstance(result.get("structured_ingest"), dict) else {}
+                parse_warnings = list(ingest.get("structured_parse_warnings") or ingest.get("warnings") or [])
+                parse_status = str(ingest.get("structured_parse_status") or "")
+                metrics["agent_parse_warnings"] += len(parse_warnings)
+                if parse_status in {"not_found", "parsed_with_warnings"} or parse_warnings:
+                    warnings.append(
+                        {
+                            "kind": "agent_structured_output",
+                            "status": parse_status or "unknown",
+                            "warnings": parse_warnings,
+                        }
+                    )
+                if ingest and int(ingest.get("findings_created") or 0) == 0:
+                    warnings.append({"kind": "agent_created_no_findings"})
+            elif step_name in {"sca", "semgrep"}:
+                if result.get("ok") is False or result.get("available") is False:
+                    metrics["tool_failures"] += 1
+                    warnings.append({"kind": "tool_failure", "step": step_name, "result": result})
+            elif step_name == "validators":
+                status_counts = result.get("status_counts") if isinstance(result.get("status_counts"), dict) else {}
+                failed = int(status_counts.get("failed") or 0)
+                cancelled = int(status_counts.get("cancelled") or 0)
+                metrics["validator_failures"] += failed + cancelled
+                if failed or cancelled:
+                    warnings.append({"kind": "validator_attempt_failures", "status_counts": status_counts})
+                if result.get("scheduled") == 0:
+                    metrics["unvalidated_findings"] += 1
+                    warnings.append({"kind": "no_validator_attempts_scheduled"})
+        report_summary = report_result.get("summary") if isinstance(report_result, dict) else {}
+        if isinstance(report_summary, dict):
+            unvalidated = int(report_summary.get("unvalidated_findings") or 0)
+            metrics["unvalidated_findings"] = max(metrics["unvalidated_findings"], unvalidated)
+            if unvalidated:
+                warnings.append({"kind": "unvalidated_findings", "count": unvalidated})
+            for warning in report_summary.get("parse_warnings") or []:
+                if isinstance(warning, dict):
+                    warnings.append({"kind": "report_parse_warning", **warning})
+        if isinstance(judge_result, dict):
+            judger_agent = judge_result.get("agent_run")
+            if isinstance(judger_agent, dict) and judger_agent.get("ok") is False:
+                warnings.append({"kind": "judger_agent_failed", "result": judger_agent})
+        return {"status": "warn" if warnings else "pass", "warnings": warnings, "metrics": metrics}

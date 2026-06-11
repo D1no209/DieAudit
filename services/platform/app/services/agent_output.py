@@ -112,6 +112,7 @@ class AgentOutputIngestor:
                         payload={"warnings": warnings},
                     )
                 )
+            parse_status = self._parse_status(structured, warnings)
             if structured:
                 session.add(
                     AgentRunEvent(
@@ -119,6 +120,8 @@ class AgentOutputIngestor:
                         event_type="structured_output_ingested",
                         payload={
                             "summary": summary,
+                            "structured_parse_status": parse_status,
+                            "structured_parse_warnings": warnings,
                             "findings_created": len(created_findings),
                             "findings_skipped": skipped_duplicates,
                             "evidence_created": len(created_evidence),
@@ -127,8 +130,11 @@ class AgentOutputIngestor:
                 )
             await session.commit()
 
+        parse_status = self._parse_status(structured, warnings)
         return {
             "summary": summary,
+            "structured_parse_status": parse_status,
+            "structured_parse_warnings": warnings,
             "findings_created": len(created_findings),
             "findings_skipped": skipped_duplicates,
             "evidence_created": len(created_evidence),
@@ -146,6 +152,14 @@ class AgentOutputIngestor:
                     return parsed, warnings
         warnings.append({"kind": "structured_output_not_found"})
         return {}, warnings
+
+    @staticmethod
+    def _parse_status(structured: dict[str, Any], warnings: list[dict[str, Any]]) -> str:
+        if not structured:
+            return "not_found"
+        if warnings:
+            return "parsed_with_warnings"
+        return "parsed"
 
     def _walk(self, value: Any) -> Iterable[Any]:
         yield value

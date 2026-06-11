@@ -13,14 +13,16 @@ class FakeRuntime:
         self.agent_runs: list[dict[str, Any]] = []
         self.validator_runs: list[dict[str, Any]] = []
         self.cleanup_runs: list[str] = []
+        self.agent_result: dict[str, Any] = {"ok": True, "agent_run_id": "agent-1"}
+        self.validator_result: dict[str, Any] | None = None
 
     async def start_agent_run(self, **kwargs: Any) -> dict[str, Any]:
         self.agent_runs.append(kwargs)
-        return {"ok": True, "agent_run_id": "agent-1"}
+        return self.agent_result
 
     async def scale_validators(self, **kwargs: Any) -> dict[str, Any]:
         self.validator_runs.append(kwargs)
-        return {"ok": True, "created": len(kwargs.get("findings") or [])}
+        return self.validator_result or {"ok": True, "created": len(kwargs.get("findings") or []), "status_counts": {"completed": len(kwargs.get("findings") or [])}}
 
     async def cleanup_run(self, audit_run_id: str) -> dict[str, Any]:
         self.cleanup_runs.append(audit_run_id)
@@ -154,6 +156,65 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     assert recorder.summary is not None
     assert recorder.events[-1]["event_type"] == "pipeline_completed"
     assert recorder.pipeline_events[-1]["event_type"] == "runtime_cleanup_completed"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_marks_completed_with_warnings_for_parse_warning() -> None:
+    runtime = FakeRuntime()
+    runtime.agent_result = {
+        "ok": True,
+        "agent_run_id": "agent-1",
+        "structured_ingest": {
+            "structured_parse_status": "not_found",
+            "structured_parse_warnings": [{"kind": "structured_output_not_found"}],
+            "findings_created": 0,
+        },
+    }
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+
+    await build_executor(recorder, runtime).execute("run-1")
+
+    assert recorder.statuses == ["running", "completed_with_warnings"]
+    assert recorder.pipeline_states[-1] == {"stage": "completed", "status": "completed_with_warnings"}
+    assert recorder.events[-1]["event_type"] == "pipeline_completed_with_warnings"
+    assert recorder.summary is not None
+    assert recorder.summary["result_quality"]["status"] == "warn"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_marks_completed_with_warnings_for_tool_failure() -> None:
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+
+    async def failing_sca(*args: Any) -> dict[str, Any]:
+        return {"ok": False, "available": False, "error": "syft unavailable"}
+
+    recorder.run_sca = failing_sca  # type: ignore[method-assign]
+
+    await build_executor(recorder).execute("run-1")
+
+    assert recorder.statuses == ["running", "completed_with_warnings"]
+    assert recorder.summary is not None
+    assert recorder.summary["result_quality"]["metrics"]["tool_failures"] == 1
 
 
 @pytest.mark.asyncio
