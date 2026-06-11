@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from app.api.routes import _finding_artifact_contract, _finding_report_markdown, _report_markdown, _report_summary
+from types import SimpleNamespace
+
+from app.api import routes
+from app.api.routes import (
+    _copy_finding_agent_artifact,
+    _finding_agent_source_artifacts,
+    _finding_artifact_contract,
+    _finding_report_markdown,
+    _report_markdown,
+    _report_summary,
+)
+from app.services.artifacts import ArtifactStore
 
 
 def test_report_summary_exposes_quality_gaps() -> None:
@@ -155,6 +166,15 @@ def test_finding_report_markdown_is_finding_scoped() -> None:
                     "artifact": {"artifact_id": "artifact-1"},
                     "payload": {},
                 },
+                {
+                    "kind": "judger-agent-report",
+                    "summary": "Judger Report",
+                    "artifact": {"artifact_id": "judger-report-1"},
+                    "payload": {
+                        "report_source": "agent-written",
+                        "agent_result_artifact_id": "judger-result-1",
+                    },
+                },
                 {"kind": "poc-artifact", "summary": "curl reproducer", "payload": {"artifact_id": "poc-1"}},
             ],
             "validation_attempts": [
@@ -168,6 +188,8 @@ def test_finding_report_markdown_is_finding_scoped() -> None:
 
     assert "Finding Report: SQL injection" in markdown
     assert "source-sink-chain" in markdown
+    assert "agent-written" in markdown
+    assert "judger-result-1" in markdown
     assert "poc-artifact" in markdown
     assert "opencode-source-sink-finder" in markdown
     assert "validator-1" in markdown
@@ -179,3 +201,36 @@ def test_finding_artifact_contract_uses_independent_finding_directory() -> None:
     assert contract["finding_directory"] == "findings/run-1/finding-1"
     assert contract["agent_writable_report_path"] == "/artifacts/source-sink-report.md"
     assert contract["platform_canonical_directory"] == "findings/run-1/finding-1/agent-reports"
+
+
+def test_finding_agent_source_artifacts_resolve_agent_written_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(artifact_root=tmp_path))
+    source_dir = tmp_path / "agent-runs" / "run-1" / "agent-1"
+    source_dir.mkdir(parents=True)
+    report_path = source_dir / "source-sink-report.md"
+    result_path = source_dir / "source-sink-result.json"
+    report_path.write_text("# agent report", encoding="utf-8")
+    result_path.write_text('{"chains":[]}', encoding="utf-8")
+
+    source = _finding_agent_source_artifacts("run-1", "agent-1", "source-sink")
+
+    assert source["report_path"] == report_path
+    assert source["json_path"] == result_path
+
+
+def test_copy_finding_agent_artifact_preserves_agent_content_under_finding_directory(tmp_path) -> None:
+    settings = SimpleNamespace(artifact_root=tmp_path, artifact_storage_backend="local")
+    source_path = tmp_path / "agent-runs" / "run-1" / "agent-1" / "judger-report.md"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("# original judger report\n\nAgent-written content.", encoding="utf-8")
+
+    metadata = _copy_finding_agent_artifact(
+        store=ArtifactStore(settings),
+        source_path=source_path,
+        destination_relative_path="findings/run-1/finding-1/agent-reports/judger-agent-1.md",
+        content_type="text/markdown; charset=utf-8",
+    )
+
+    copied = tmp_path / "findings" / "run-1" / "finding-1" / "agent-reports" / "judger-agent-1.md"
+    assert copied.read_text(encoding="utf-8") == "# original judger report\n\nAgent-written content."
+    assert metadata["relative_path"] == "findings/run-1/finding-1/agent-reports/judger-agent-1.md"

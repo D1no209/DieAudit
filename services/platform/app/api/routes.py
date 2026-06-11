@@ -4049,12 +4049,31 @@ async def _write_finding_agent_report(
     store = ArtifactStore(get_settings())
     safe_stage = _safe_report_name(stage)
     suffix = agent_run_id or uuid.uuid4().hex
-    text = _agent_stage_report_markdown(title=title, finding_id=finding_id, stage=stage, agent_run_id=agent_run_id, payload=payload)
-    metadata = store.put_text(
-        f"findings/{audit_run_id}/{finding_id}/agent-reports/{safe_stage}-{suffix}.md",
-        text,
-        content_type="text/markdown; charset=utf-8",
-    )
+    source = _finding_agent_source_artifacts(audit_run_id, agent_run_id, safe_stage)
+    if source.get("report_path"):
+        metadata = _copy_finding_agent_artifact(
+            store=store,
+            source_path=Path(str(source["report_path"])),
+            destination_relative_path=f"findings/{audit_run_id}/{finding_id}/agent-reports/{safe_stage}-{suffix}.md",
+            content_type="text/markdown; charset=utf-8",
+        )
+        report_source = "agent-written"
+    else:
+        text = _agent_stage_report_markdown(title=title, finding_id=finding_id, stage=stage, agent_run_id=agent_run_id, payload=payload)
+        metadata = store.put_text(
+            f"findings/{audit_run_id}/{finding_id}/agent-reports/{safe_stage}-{suffix}.md",
+            text,
+            content_type="text/markdown; charset=utf-8",
+        )
+        report_source = "platform-fallback"
+    result_metadata: dict[str, Any] | None = None
+    if source.get("json_path"):
+        result_metadata = _copy_finding_agent_artifact(
+            store=store,
+            source_path=Path(str(source["json_path"])),
+            destination_relative_path=f"findings/{audit_run_id}/{finding_id}/agent-reports/{safe_stage}-{suffix}.json",
+            content_type="application/json; charset=utf-8",
+        )
     await _upsert_artifact_record(
         metadata,
         [
@@ -4067,6 +4086,19 @@ async def _write_finding_agent_report(
             }
         ],
     )
+    if result_metadata:
+        await _upsert_artifact_record(
+            result_metadata,
+            [
+                {
+                    "kind": f"finding_{safe_stage}_agent_result",
+                    "project_id": audit_run.get("project_id"),
+                    "audit_run_id": audit_run_id,
+                    "record_id": finding_id,
+                    "agent_run_id": agent_run_id,
+                }
+            ],
+        )
     async with SessionLocal() as session:
         session.add(
             Evidence(
@@ -4076,11 +4108,48 @@ async def _write_finding_agent_report(
                 kind=f"{safe_stage}-agent-report",
                 summary=f"{title} ({stage})",
                 artifact_path=metadata["path"],
-                payload={"stage": stage, "agent_run_id": agent_run_id, "artifact_id": metadata["artifact_id"]},
+                payload={
+                    "stage": stage,
+                    "agent_run_id": agent_run_id,
+                    "artifact_id": metadata["artifact_id"],
+                    "report_source": report_source,
+                    "agent_report_source_path": str(source["report_path"]) if source.get("report_path") else None,
+                    "agent_result_artifact_id": result_metadata["artifact_id"] if result_metadata else None,
+                    "agent_result_source_path": str(source["json_path"]) if source.get("json_path") else None,
+                },
             )
         )
         await session.commit()
     return metadata
+
+
+def _finding_agent_source_artifacts(audit_run_id: str, agent_run_id: str | None, safe_stage: str) -> dict[str, Path | None]:
+    if not agent_run_id:
+        return {"report_path": None, "json_path": None}
+    agent_dir = get_settings().artifact_root / "agent-runs" / audit_run_id / agent_run_id
+    return {
+        "report_path": _existing_artifact_file(agent_dir / f"{safe_stage}-report.md"),
+        "json_path": _existing_artifact_file(agent_dir / f"{safe_stage}-result.json"),
+    }
+
+
+def _existing_artifact_file(path: Path) -> Path | None:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    return resolved if resolved.exists() and resolved.is_file() else None
+
+
+def _copy_finding_agent_artifact(
+    *,
+    store: ArtifactStore,
+    source_path: Path,
+    destination_relative_path: str,
+    content_type: str,
+) -> dict[str, Any]:
+    data = source_path.read_bytes()
+    return store.put_bytes(destination_relative_path, data, content_type=content_type)
 
 
 def _poc_candidate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4205,7 +4274,14 @@ def _finding_report_markdown(payload: dict[str, Any]) -> str:
         artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
         payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
         artifact_id = artifact.get("artifact_id") or payload_item.get("artifact_id")
-        suffix = f" artifact `{artifact_id}`" if artifact_id else ""
+        suffix_parts = []
+        if artifact_id:
+            suffix_parts.append(f"artifact `{artifact_id}`")
+        if payload_item.get("report_source"):
+            suffix_parts.append(f"source `{payload_item.get('report_source')}`")
+        if payload_item.get("agent_result_artifact_id"):
+            suffix_parts.append(f"result `{payload_item.get('agent_result_artifact_id')}`")
+        suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
         lines.append(f"- `{item.get('kind')}` {item.get('summary') or ''}{suffix}".rstrip())
     if not evidence:
         lines.append("- None.")
