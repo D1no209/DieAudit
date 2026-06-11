@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import yaml
 from fastapi import APIRouter, BackgroundTasks, Body, File, Form, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import delete, func, select
 
 from app.api.readiness import (
@@ -30,6 +30,7 @@ from app.api.serializers import (
     artifact_metadata_or_none as _artifact_metadata_or_none,
     attempt_to_dict as _attempt_to_dict,
     audit_run_to_dict as _audit_run_to_dict,
+    code_analysis_task_to_dict as _code_analysis_task_to_dict,
     dependency_record_to_dict as _dependency_record_to_dict,
     evidence_to_dict as _evidence_to_dict,
     finding_to_dict as _finding_to_dict,
@@ -48,6 +49,7 @@ from app.domain.models import (
     ApiKeyRecord,
     AuditRun,
     AuditRunEvent,
+    CodeAnalysisTask,
     ContainerRun,
     DependencyRecord,
     Evidence,
@@ -66,6 +68,7 @@ from app.integrations.protocols import classify_agent_protocol, fetch_a2a_agent_
 from app.repositories import SessionLocal
 from app.schemas import (
     A2AAgentCardRequest,
+    CodeBatchAnalysisRequest,
     CreateAuditRunRequest,
     CreateApiKeyRequest,
     CreateFindingRequest,
@@ -81,7 +84,8 @@ from app.schemas import (
 )
 from app.services.artifacts import (
     ArtifactAccessError,
-    artifact_metadata,
+    ArtifactStore,
+    artifact_absolute_path,
     artifact_path_matches,
     artifact_storage_backend,
     relative_path_for_artifact_id,
@@ -96,6 +100,7 @@ from app.services.auth import (
     has_scope,
     normalize_scopes,
 )
+from app.services.code_analysis import CodeAuditPlanner
 from app.services.dependency_scanner import DependencyScanner
 from app.services.finding_dedupe import find_existing_finding, finding_identity
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService
@@ -146,6 +151,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             is_cancel_requested=_is_cancel_requested,
             cancel_reason=_cancel_reason,
             list_findings=_list_findings,
+            run_code_batch_analysis=_run_code_batch_analysis,
             run_sca=_run_sca_mcp,
             run_semgrep=_run_semgrep_mcp,
             judge_audit_run=_judge_audit_run_internal,
@@ -605,6 +611,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "agent_name": body.agent_name,
                     "input_payload": body.input_payload,
                     "workspace_host_path": snapshot.workspace_path,
+                    "enable_code_batch_analysis": body.enable_code_batch_analysis,
+                    "max_code_audit_tasks": body.max_code_audit_tasks,
+                    "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
+                    "max_parallel_code_auditors": body.max_parallel_code_auditors,
+                    "code_auditor_agent_name": body.code_auditor_agent_name,
                 },
             )
             session.add(audit_run)
@@ -671,6 +682,45 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             session.add(finding)
             await session.commit()
             return _finding_to_dict(finding)
+
+    @router.get("/audit-runs/{audit_run_id}/code-analysis/tasks")
+    async def list_code_analysis_tasks(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        return await _list_code_analysis_tasks(audit_run_id)
+
+    @router.post("/audit-runs/{audit_run_id}/code-analysis")
+    async def run_code_analysis(
+        request: Request,
+        audit_run_id: str,
+        body: CodeBatchAnalysisRequest,
+    ) -> dict[str, Any]:
+        runtime = runtime_provider()
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/code-analysis", method="POST", json=body.model_dump())
+        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+        if not workspace_path:
+            raise HTTPException(status_code=400, detail="audit run has no workspace path")
+        result = await _run_code_batch_analysis(
+            audit_run_id,
+            audit_run["project_id"],
+            workspace_path,
+            runtime,
+            {
+                **audit_run,
+                "config": {
+                    **(audit_run.get("config") or {}),
+                    "max_code_audit_tasks": body.max_tasks,
+                    "max_files_per_code_audit_task": body.max_files_per_task,
+                    "max_parallel_code_auditors": body.max_parallel_agents,
+                    "code_auditor_agent_name": body.agent_name,
+                },
+            },
+        )
+        return result
 
     @router.post("/audit-runs/{audit_run_id}/sca")
     async def run_sca(request: Request, audit_run_id: str) -> dict[str, Any]:
@@ -882,11 +932,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return await _artifact_metadata_response(request, settings, path)
 
     @router.get("/artifacts/download")
-    async def download_artifact(request: Request, path: str = Query(...)) -> FileResponse:
+    async def download_artifact(request: Request, path: str = Query(...)) -> Response:
         return await _artifact_download_response(request, settings, path)
 
     @router.get("/artifacts/{artifact_id}/download")
-    async def download_artifact_by_id(request: Request, artifact_id: str) -> FileResponse:
+    async def download_artifact_by_id(request: Request, artifact_id: str) -> Response:
         try:
             relative_path = relative_path_for_artifact_id(artifact_id)
         except ArtifactAccessError as exc:
@@ -905,17 +955,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         return metadata
 
     @router.get("/reports/{report_id}/download")
-    async def download_report(request: Request, report_id: str) -> FileResponse:
+    async def download_report(request: Request, report_id: str) -> Response:
         async with SessionLocal() as session:
             report = await session.scalar(select(ReportArtifact).where(ReportArtifact.report_id == report_id))
             if not report:
                 raise HTTPException(status_code=404, detail="report not found")
-            try:
-                path = resolve_artifact_path(settings, report.path)
-            except FileNotFoundError as exc:
-                raise HTTPException(status_code=404, detail="report artifact not found")
-            except ArtifactAccessError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
             references = [
                 {
                     "kind": "report",
@@ -926,7 +970,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             ]
             if not _principal_can_access_artifact(getattr(request.state, "auth_principal", None), references):
                 raise HTTPException(status_code=403, detail="report is outside API key project or audit run scope")
-            return FileResponse(path, filename=path.name, media_type="text/markdown", headers=secure_artifact_headers())
+            return await _artifact_download_response(request, settings, report.path, references=references)
 
     @router.get("/findings/{finding_id}")
     async def get_finding(request: Request, finding_id: str) -> dict[str, Any]:
@@ -2030,16 +2074,56 @@ def _compose_healthcheck_path(service: dict[str, Any]) -> str | None:
 
 async def _artifact_metadata_response(request: Request, settings: Settings, path: str) -> dict[str, Any]:
     artifact_path, references = await _resolve_authorized_artifact(request, settings, path)
-    metadata = artifact_metadata(settings, artifact_path)
+    try:
+        metadata = _artifact_store_metadata(settings, artifact_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ArtifactAccessError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _upsert_artifact_record(metadata, references)
     return metadata
 
 
-async def _artifact_download_response(request: Request, settings: Settings, path: str) -> FileResponse:
-    artifact_path, references = await _resolve_authorized_artifact(request, settings, path)
-    metadata = artifact_metadata(settings, artifact_path)
+async def _artifact_download_response(
+    request: Request,
+    settings: Settings,
+    path: str,
+    *,
+    references: list[dict[str, Any]] | None = None,
+) -> Response:
+    if references is None:
+        artifact_path, references = await _resolve_authorized_artifact(request, settings, path)
+    else:
+        artifact_path = artifact_absolute_path(settings, path)
+    store = ArtifactStore(settings)
+    try:
+        metadata = _artifact_store_metadata(settings, artifact_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ArtifactAccessError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _upsert_artifact_record(metadata, references)
+    if artifact_storage_backend(settings) == "minio":
+        try:
+            blob = store.get_blob(artifact_path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return StreamingResponse(
+            iter([blob.data]),
+            media_type=blob.content_type,
+            headers={
+                **secure_artifact_headers(),
+                "Content-Disposition": f'attachment; filename="{blob.name}"',
+            },
+        )
     return FileResponse(artifact_path, filename=artifact_path.name, headers=secure_artifact_headers())
+
+
+def _artifact_store_metadata(settings: Settings, artifact_path: Path) -> dict[str, Any]:
+    store = ArtifactStore(settings)
+    if artifact_path.exists():
+        return store.upload_file(artifact_path)
+    return store.metadata_for_path(artifact_path)
 
 
 async def _resolve_authorized_artifact(
@@ -2048,7 +2132,10 @@ async def _resolve_authorized_artifact(
     path: str,
 ) -> tuple[Path, list[dict[str, Any]]]:
     try:
-        artifact_path = resolve_artifact_path(settings, path)
+        if artifact_storage_backend(settings) == "minio":
+            artifact_path = artifact_absolute_path(settings, path)
+        else:
+            artifact_path = resolve_artifact_path(settings, path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ArtifactAccessError as exc:
@@ -2492,6 +2579,18 @@ async def _list_findings(audit_run_id: str) -> list[dict[str, Any]]:
             await session.execute(select(Finding).where(Finding.audit_run_id == audit_run_id).order_by(Finding.created_at.asc()))
         ).scalars()
         return [_finding_to_dict(row) for row in rows]
+
+
+async def _list_code_analysis_tasks(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(CodeAnalysisTask)
+                .where(CodeAnalysisTask.audit_run_id == audit_run_id)
+                .order_by(CodeAnalysisTask.created_at.asc(), CodeAnalysisTask.task_id.asc())
+            )
+        ).scalars()
+        return [_code_analysis_task_to_dict(row) for row in rows]
 
 
 async def _list_evidence(audit_run_id: str) -> list[dict[str, Any]]:
@@ -3002,13 +3101,20 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
         "dependencies": dependencies,
     }
     report_id = str(uuid.uuid4())
-    report_dir = settings.artifact_root / "reports" / audit_run_id
-    report_dir.mkdir(parents=True, exist_ok=True)
-    markdown_path = report_dir / f"{report_id}.md"
-    json_path = report_dir / f"{report_id}.json"
-    markdown_path.write_text(_report_markdown(payload), encoding="utf-8")
-    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    summary = {**summary, "json_path": str(json_path)}
+    store = ArtifactStore(settings)
+    markdown_metadata = store.put_text(
+        f"reports/{audit_run_id}/{report_id}.md",
+        _report_markdown(payload),
+        content_type="text/markdown; charset=utf-8",
+    )
+    json_metadata = store.put_json(f"reports/{audit_run_id}/{report_id}.json", payload)
+    summary = {
+        **summary,
+        "json_path": json_metadata["path"],
+        "json_artifact_id": json_metadata["artifact_id"],
+        "json_artifact_uri": json_metadata["artifact_uri"],
+    }
+    markdown_path = markdown_metadata["path"]
     async with SessionLocal() as session:
         session.add(
             ReportArtifact(
@@ -3016,12 +3122,39 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
                 audit_run_id=audit_run_id,
                 project_id=audit_run["project_id"],
                 kind="markdown",
-                path=str(markdown_path),
+                path=markdown_path,
                 summary=summary,
             )
         )
         await session.commit()
-    result = {"report_id": report_id, "markdown_path": str(markdown_path), "json_path": str(json_path), "summary": summary}
+    report_reference = [
+        {
+            "kind": "report",
+            "project_id": audit_run["project_id"],
+            "audit_run_id": audit_run_id,
+            "record_id": report_id,
+        }
+    ]
+    json_reference = [
+        {
+            "kind": "report_json",
+            "project_id": audit_run["project_id"],
+            "audit_run_id": audit_run_id,
+            "record_id": report_id,
+        }
+    ]
+    await _upsert_artifact_record(markdown_metadata, report_reference)
+    await _upsert_artifact_record(json_metadata, json_reference)
+    result = {
+        "report_id": report_id,
+        "markdown_path": markdown_metadata["path"],
+        "markdown_artifact_id": markdown_metadata["artifact_id"],
+        "markdown_artifact_uri": markdown_metadata["artifact_uri"],
+        "json_path": json_metadata["path"],
+        "json_artifact_id": json_metadata["artifact_id"],
+        "json_artifact_uri": json_metadata["artifact_uri"],
+        "summary": summary,
+    }
     await _record_pipeline_event(audit_run_id, "report_generated", result)
     return result
 
@@ -3155,6 +3288,152 @@ def _dependency_coverage(dependencies: list[dict[str, Any]], audit_events: list[
         "by_ecosystem": dict(sorted(by_ecosystem.items())),
         "sca_events": sca_events,
     }
+
+
+async def _run_code_batch_analysis(
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    runtime: Any,
+    audit_run: dict[str, Any],
+) -> dict[str, Any]:
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    max_tasks = int(config.get("max_code_audit_tasks") or 8)
+    max_files_per_task = int(config.get("max_files_per_code_audit_task") or 25)
+    max_parallel_agents = int(config.get("max_parallel_code_auditors") or 2)
+    agent_name = str(config.get("code_auditor_agent_name") or "opencode-code-auditor")
+    planner = CodeAuditPlanner(workspace_path)
+    plans = planner.plan(max_tasks=max_tasks, max_files_per_task=max_files_per_task)
+    await _record_pipeline_event(
+        audit_run_id,
+        "code_analysis_plan_created",
+        {
+            "planned": len(plans),
+            "max_tasks": max_tasks,
+            "max_files_per_task": max_files_per_task,
+            "max_parallel_agents": max_parallel_agents,
+            "agent_name": agent_name,
+        },
+    )
+    async with SessionLocal() as session:
+        await session.execute(delete(CodeAnalysisTask).where(CodeAnalysisTask.audit_run_id == audit_run_id))
+        for plan in plans:
+            session.add(
+                CodeAnalysisTask(
+                    task_id=f"{audit_run_id}-{plan.task_id}",
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    title=plan.title,
+                    focus=plan.focus,
+                    file_paths=plan.file_paths,
+                    status="created",
+                    result={"risk_keywords": plan.risk_keywords, "metadata": plan.metadata},
+                )
+            )
+        await session.commit()
+    if not plans:
+        result = {"ok": True, "available": True, "planned": 0, "completed": 0, "failed": 0, "skipped": 0}
+        await _record_pipeline_event(audit_run_id, "code_analysis_completed", result)
+        return result
+
+    semaphore = asyncio.Semaphore(max(1, max_parallel_agents))
+
+    async def mark_task(task_id: str, status: str, result: dict[str, Any], agent_run_id: str | None = None) -> None:
+        async with SessionLocal() as session:
+            row = await session.scalar(select(CodeAnalysisTask).where(CodeAnalysisTask.task_id == task_id))
+            if row:
+                row.status = status
+                row.result = result
+                if agent_run_id:
+                    row.agent_run_id = agent_run_id
+            await session.commit()
+
+    async def run_plan(plan) -> dict[str, Any]:
+        task_db_id = f"{audit_run_id}-{plan.task_id}"
+        async with semaphore:
+            await mark_task(task_db_id, "running", {"risk_keywords": plan.risk_keywords, "metadata": plan.metadata})
+            input_payload = {
+                "goal": (
+                    "Perform focused code vulnerability analysis for this batch. "
+                    "Find vulnerabilities in the project's own code, not only dependency CVEs. "
+                    "Return strict JSON with findings[], evidence[], and summary."
+                ),
+                "audit_phase": "code-batch-analysis",
+                "code_audit_task": {
+                    "task_id": task_db_id,
+                    "title": plan.title,
+                    "focus": plan.focus,
+                    "file_paths": plan.file_paths,
+                    "risk_keywords": plan.risk_keywords,
+                    "required_finding_fields": [
+                        "title",
+                        "severity",
+                        "file_path",
+                        "line_start",
+                        "description",
+                        "confidence",
+                        "source",
+                    ],
+                },
+                "analysis_guidance": [
+                    "Prioritize authentication, authorization, injection, file/path, SSRF, deserialization, crypto, secret handling, and business logic flaws.",
+                    "Use the complete workspace and MCP code search as needed, but keep findings tied to concrete files and lines.",
+                    "If a suspected issue spans files, include the primary sink/source file and describe the chain in evidence.",
+                    "Do not report dependency CVEs here unless they directly enable a code path vulnerability.",
+                ],
+            }
+            try:
+                agent_result = await runtime.start_agent_run(
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    agent_name=agent_name,
+                    workspace_host_path=workspace_path,
+                    allow_external_network=bool(audit_run.get("allow_external_network")),
+                    retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+                    input_payload=input_payload,
+                )
+            except Exception as exc:
+                result = {"task_id": task_db_id, "status": "failed", "error": str(exc)}
+                await mark_task(task_db_id, "failed", result)
+                await _record_pipeline_event(audit_run_id, "code_analysis_task_failed", result)
+                return result
+            agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+            failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+            status = "failed" if failed else "completed"
+            result = {
+                "task_id": task_db_id,
+                "status": status,
+                "agent_run_id": agent_run_id or None,
+                "agent_result": _compact_event_payload(agent_result),
+            }
+            await mark_task(task_db_id, status, result, agent_run_id=agent_run_id or None)
+            await _record_pipeline_event(audit_run_id, "code_analysis_task_completed", result)
+            return result
+
+    results = await asyncio.gather(*(run_plan(plan) for plan in plans))
+    status_counts: dict[str, int] = {}
+    findings_created = 0
+    for result in results:
+        status = str(result.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        agent_result = result.get("agent_result") if isinstance(result.get("agent_result"), dict) else {}
+        ingest = agent_result.get("structured_ingest") if isinstance(agent_result.get("structured_ingest"), dict) else {}
+        findings_created += int(ingest.get("findings_created") or 0)
+    completed = status_counts.get("completed", 0)
+    failed = status_counts.get("failed", 0)
+    final = {
+        "ok": failed == 0,
+        "available": True,
+        "planned": len(plans),
+        "completed": completed,
+        "failed": failed,
+        "skipped": 0,
+        "status_counts": status_counts,
+        "findings_created": findings_created,
+        "agent_name": agent_name,
+    }
+    await _record_pipeline_event(audit_run_id, "code_analysis_completed", final)
+    return final
 
 
 async def _run_semgrep_best_effort(

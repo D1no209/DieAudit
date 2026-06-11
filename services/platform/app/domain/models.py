@@ -233,6 +233,20 @@ class DependencyRecord(TimestampMixin, Base):
     vulnerabilities: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
 
+class CodeAnalysisTask(TimestampMixin, Base):
+    __tablename__ = "code_analysis_tasks"
+
+    task_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    focus: Mapped[str] = mapped_column(String(128), index=True)
+    file_paths: Mapped[list[str]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="created")
+    agent_run_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class KnowledgeDocument(TimestampMixin, Base):
     __tablename__ = "knowledge_documents"
 

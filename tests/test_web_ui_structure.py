@@ -39,12 +39,13 @@ def test_audit_runs_page_does_not_embed_result_tables() -> None:
 def test_audit_runs_page_uses_focused_subcomponents() -> None:
     audit_runs_page = read_source("services/web-ui/src/pages/AuditRunsPage.tsx")
 
-    for component in ("AuditRunActionBar", "AuditRunSummary", "RunContextPanel", "PipelineStatePanel"):
+    for component in ("AuditRunActionBar", "AuditRunSummary", "RunContextPanel", "PipelineStatePanel", "CodeAnalysisTasksPanel"):
         assert component in audit_runs_page
 
     for path in (
         "services/web-ui/src/pages/audit-runs/AuditRunActionBar.tsx",
         "services/web-ui/src/pages/audit-runs/AuditRunSummary.tsx",
+        "services/web-ui/src/pages/audit-runs/CodeAnalysisTasksPanel.tsx",
         "services/web-ui/src/pages/audit-runs/RunContextPanel.tsx",
         "services/web-ui/src/pages/audit-runs/PipelineStatePanel.tsx",
     ):

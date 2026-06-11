@@ -32,6 +32,18 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     });
   }
 
+  async function runCodeAnalysis() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    await runner.runAction(async () => {
+      const result = await dashboardApi.runCodeAnalysis(auditRun.audit_run_id);
+      setLastResponse(result);
+      await runner.refreshAuditRun(auditRun.audit_run_id);
+    });
+  }
+
   async function runPipeline() {
     if (!auditRun) {
       message.error("请先创建 AuditRun");
@@ -160,6 +172,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     openContainerLogs,
     openFinding,
     previewArtifact,
+    runCodeAnalysis,
     runJudge,
     runPipeline,
     runSca,

@@ -25,10 +25,23 @@ class CreateAuditRunRequest(BaseModel):
     agent_name: str = "opencode-orchestrator"
     validator_rounds: int = Field(default=1, ge=1)
     max_parallel_validators: int = Field(default=2, ge=1)
+    enable_code_batch_analysis: bool = True
+    max_code_audit_tasks: int = Field(default=8, ge=1, le=100)
+    max_files_per_code_audit_task: int = Field(default=25, ge=1, le=200)
+    max_parallel_code_auditors: int = Field(default=2, ge=1, le=20)
+    code_auditor_agent_name: str = "opencode-code-auditor"
     allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
     input_payload: dict[str, Any] = Field(default_factory=dict)
     start_agent: bool = True
+
+
+class CodeBatchAnalysisRequest(BaseModel):
+    max_tasks: int = Field(default=8, ge=1, le=100)
+    max_files_per_task: int = Field(default=25, ge=1, le=200)
+    max_parallel_agents: int = Field(default=2, ge=1, le=20)
+    agent_name: str = "opencode-code-auditor"
+    wait_for_completion: bool = True
 
 
 class CreateFindingRequest(BaseModel):

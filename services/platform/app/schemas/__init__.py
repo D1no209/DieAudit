@@ -1,5 +1,6 @@
 from .runtime import (
     A2AAgentCardRequest,
+    CodeBatchAnalysisRequest,
     CreateAuditRunRequest,
     CreateApiKeyRequest,
     CreateFindingRequest,
@@ -16,6 +17,7 @@ from .runtime import (
 
 __all__ = [
     "A2AAgentCardRequest",
+    "CodeBatchAnalysisRequest",
     "CreateAuditRunRequest",
     "CreateApiKeyRequest",
     "CreateFindingRequest",

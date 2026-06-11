@@ -6,6 +6,7 @@ import type {
   ApiKeyRecord,
   AuditRun,
   AuthStatus,
+  CodeAnalysisTask,
   ContainerRow,
   CreateAuditRunResponse,
   DependencyInventory,
@@ -94,16 +95,17 @@ export function getKnowledgeStatus() {
 }
 
 export async function getAuditRunBundle(auditRunId: string) {
-  const [run, agents, findings, dependencies, containers, reports, pipeline] = await Promise.all([
+  const [run, agents, findings, codeAnalysisTasks, dependencies, containers, reports, pipeline] = await Promise.all([
     readJson<AuditRun>(`/gateway/audit-runs/${auditRunId}`),
     readJson<AgentRun[]>(`/gateway/audit-runs/${auditRunId}/agent-runs`),
     readJson<Finding[]>(`/gateway/audit-runs/${auditRunId}/findings`),
+    readJson<CodeAnalysisTask[]>(`/gateway/audit-runs/${auditRunId}/code-analysis/tasks`).catch(() => []),
     readJson<DependencyInventory>(`/gateway/audit-runs/${auditRunId}/dependencies`).catch(() => undefined),
     readJson<ContainerRow[]>(`/gateway/audit-runs/${auditRunId}/containers`),
     readJson<ReportArtifact[]>(`/gateway/audit-runs/${auditRunId}/reports`),
     readJson<PipelineStatus>(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
   ]);
-  return { agents, containers, dependencies, findings, pipeline, reports, run };
+  return { agents, codeAnalysisTasks, containers, dependencies, findings, pipeline, reports, run };
 }
 
 export function createGitProject(values: { name: string; git_url: string; ref?: string }) {
@@ -126,6 +128,15 @@ export function createAuditRun(projectId: string) {
 
 export function runSca(auditRunId: string) {
   return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/sca`, { method: "POST" });
+}
+
+export function runCodeAnalysis(auditRunId: string) {
+  return postJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/code-analysis`, {
+    max_tasks: 8,
+    max_files_per_task: 25,
+    max_parallel_agents: 2,
+    agent_name: "opencode-code-auditor",
+  });
 }
 
 export function runPipeline(auditRunId: string) {

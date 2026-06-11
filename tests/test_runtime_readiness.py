@@ -28,9 +28,10 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
             "image": "dieaudit/opencode-agent:local",
             "protocol": {"kind": "agent-client-protocol", "runtime": "opencode"},
         }
-        for name in [
-            "opencode-orchestrator",
-            "opencode-recon-auditor",
+            for name in [
+                "opencode-orchestrator",
+                "opencode-code-auditor",
+                "opencode-recon-auditor",
             "opencode-sca-analyst",
             "opencode-validator",
             "opencode-judger",

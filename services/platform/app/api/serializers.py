@@ -14,6 +14,7 @@ from app.domain.models import (
     Project,
     ProjectSnapshot,
     ReportArtifact,
+    CodeAnalysisTask,
     ValidationAttempt,
 )
 from app.services.artifacts import ArtifactAccessError, artifact_metadata
@@ -228,6 +229,22 @@ def dependency_record_to_dict(row: DependencyRecord) -> dict[str, Any]:
         "manifest": row.manifest,
         "vulnerability_count": row.vulnerability_count,
         "vulnerabilities": row.vulnerabilities or [],
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def code_analysis_task_to_dict(row: CodeAnalysisTask) -> dict[str, Any]:
+    return {
+        "task_id": row.task_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "title": row.title,
+        "focus": row.focus,
+        "file_paths": row.file_paths or [],
+        "status": row.status,
+        "agent_run_id": row.agent_run_id,
+        "result": row.result or {},
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }

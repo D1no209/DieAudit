@@ -74,6 +74,9 @@ class CallbackRecorder:
     async def list_findings(self, audit_run_id: str) -> list[dict[str, Any]]:
         return [{"finding_id": "finding-1", "title": "test"}]
 
+    async def run_code_batch_analysis(self, *args: Any) -> dict[str, Any]:
+        return {"ok": True, "planned": 2, "completed": 2, "failed": 0, "findings_created": 1}
+
     async def run_sca(self, *args: Any) -> dict[str, Any]:
         return {"ok": True, "findings_created": 0}
 
@@ -101,6 +104,7 @@ def build_executor(recorder: CallbackRecorder, runtime: FakeRuntime | None = Non
         is_cancel_requested=recorder.is_cancel_requested,
         cancel_reason=recorder.cancel_reason,
         list_findings=recorder.list_findings,
+        run_code_batch_analysis=recorder.run_code_batch_analysis,
         run_sca=recorder.run_sca,
         run_semgrep=recorder.run_semgrep,
         judge_audit_run=recorder.judge,
@@ -140,6 +144,7 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     assert recorder.statuses == ["running", "completed"]
     assert [item["stage"] for item in recorder.pipeline_states] == [
         "agent-audit",
+        "code-analysis",
         "sca",
         "semgrep",
         "validators",

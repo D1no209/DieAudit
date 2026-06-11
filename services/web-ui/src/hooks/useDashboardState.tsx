@@ -9,6 +9,7 @@ import type {
   ApiKeyRecord,
   AuditRun,
   AuthStatus,
+  CodeAnalysisTask,
   ContainerRow,
   DependencyInventory,
   DockerHealth,
@@ -49,6 +50,7 @@ export function useDashboardState() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [auditRun, setAuditRun] = useState<AuditRun>();
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [codeAnalysisTasks, setCodeAnalysisTasks] = useState<CodeAnalysisTask[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [dependencies, setDependencies] = useState<DependencyInventory>();
   const [containers, setContainers] = useState<ContainerRow[]>([]);
@@ -92,6 +94,7 @@ export function useDashboardState() {
     setSelectedProjectId(undefined);
     setAuditRun(undefined);
     setAgentRuns([]);
+    setCodeAnalysisTasks([]);
     setFindings([]);
     setDependencies(undefined);
     setContainers([]);
@@ -115,6 +118,7 @@ export function useDashboardState() {
     auditRun,
     authStatus,
     clearProtectedState,
+    codeAnalysisTasks,
     containerLogs,
     containers,
     dependencies,
@@ -150,6 +154,7 @@ export function useDashboardState() {
     setApiKeys,
     setAuditRun,
     setAuthStatus,
+    setCodeAnalysisTasks,
     setContainerLogs,
     setContainers,
     setDependencies,

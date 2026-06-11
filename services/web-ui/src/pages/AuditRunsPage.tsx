@@ -1,14 +1,16 @@
 import { Alert } from "antd";
-import type { AuditRun, PipelineStatus, Project } from "../types";
+import type { AuditRun, CodeAnalysisTask, PipelineStatus, Project } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { AuditRunActionBar } from "./audit-runs/AuditRunActionBar";
 import { AuditRunSummary } from "./audit-runs/AuditRunSummary";
+import { CodeAnalysisTasksPanel } from "./audit-runs/CodeAnalysisTasksPanel";
 import { PipelineStatePanel } from "./audit-runs/PipelineStatePanel";
 import { RunContextPanel } from "./audit-runs/RunContextPanel";
 
 type Props = {
   agentRunsCount: number;
   auditRun?: AuditRun;
+  codeAnalysisTasks: CodeAnalysisTask[];
   lastResponse?: unknown;
   loading: boolean;
   pipelineStatus?: PipelineStatus;
@@ -16,6 +18,7 @@ type Props = {
   selectedProject?: Project;
   onCancelAuditRun: () => void;
   onGenerateReport: () => void;
+  onRunCodeAnalysis: () => void;
   onRunJudge: () => void;
   onRunPipeline: () => void;
   onRunSca: () => void;
@@ -25,6 +28,7 @@ type Props = {
 export function AuditRunsPage({
   agentRunsCount,
   auditRun,
+  codeAnalysisTasks,
   lastResponse,
   loading,
   pipelineStatus,
@@ -32,6 +36,7 @@ export function AuditRunsPage({
   selectedProject,
   onCancelAuditRun,
   onGenerateReport,
+  onRunCodeAnalysis,
   onRunJudge,
   onRunPipeline,
   onRunSca,
@@ -45,6 +50,7 @@ export function AuditRunsPage({
       selectedProject={selectedProject}
       onCancelAuditRun={onCancelAuditRun}
       onGenerateReport={onGenerateReport}
+      onRunCodeAnalysis={onRunCodeAnalysis}
       onRunJudge={onRunJudge}
       onRunPipeline={onRunPipeline}
       onRunSca={onRunSca}
@@ -88,6 +94,7 @@ export function AuditRunsPage({
         <RunContextPanel auditRun={auditRun} lastResponse={lastResponse} selectedProject={selectedProject} />
         <PipelineStatePanel pipelineStatus={pipelineStatus} />
       </div>
+      <CodeAnalysisTasksPanel tasks={codeAnalysisTasks} />
     </>
   );
 }

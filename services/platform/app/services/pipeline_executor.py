@@ -33,6 +33,7 @@ class PipelineExecutor:
         judge_audit_run: AsyncCallback,
         generate_report: AsyncCallback,
         compact_event_payload: Callable[[Any], Any],
+        run_code_batch_analysis: AsyncCallback | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -46,6 +47,7 @@ class PipelineExecutor:
         self.is_cancel_requested = is_cancel_requested
         self.cancel_reason = cancel_reason
         self.list_findings = list_findings
+        self.run_code_batch_analysis = run_code_batch_analysis
         self.run_sca = run_sca
         self.run_semgrep = run_semgrep
         self.judge_audit_run = judge_audit_run
@@ -92,6 +94,31 @@ class PipelineExecutor:
                 {"step": "agent-audit", "result": self.compact_event_payload(agent_result)},
             )
             await self.raise_if_cancelled(audit_run_id)
+
+            if self._code_batch_analysis_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="code-analysis", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "code-analysis"})
+                try:
+                    if self.run_code_batch_analysis is None:
+                        code_result = {"ok": False, "available": False, "error": "code batch analysis callback is not configured"}
+                    else:
+                        code_result = await self.run_code_batch_analysis(
+                            audit_run_id,
+                            audit_run["project_id"],
+                            workspace_path,
+                            self.runtime,
+                            audit_run,
+                        )
+                except Exception as exc:
+                    code_result = {"ok": False, "error": str(exc)}
+                    await self.record_pipeline_event(audit_run_id, "code_analysis_failed", code_result)
+                steps.append({"step": "code-analysis", "result": code_result})
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "code-analysis", "result": self.compact_event_payload(code_result)},
+                )
+                await self.raise_if_cancelled(audit_run_id)
 
             await self.set_pipeline_state(audit_run_id, stage="sca", status="running")
             await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "sca"})
@@ -296,6 +323,13 @@ class PipelineExecutor:
                 if result.get("ok") is False or result.get("available") is False or tool_status in {"syft_unavailable", "osv_unreachable", "unavailable", "failed"}:
                     metrics["tool_failures"] += 1
                     warnings.append({"kind": "tool_failure", "step": step_name, "result": result})
+            elif step_name == "code-analysis":
+                if result.get("ok") is False:
+                    warnings.append({"kind": "code_batch_analysis_failed", "result": result})
+                skipped = int(result.get("skipped") or 0)
+                failed = int(result.get("failed") or 0)
+                if skipped or failed:
+                    warnings.append({"kind": "code_batch_analysis_incomplete", "skipped": skipped, "failed": failed})
             elif step_name == "validators":
                 status_counts = result.get("status_counts") if isinstance(result.get("status_counts"), dict) else {}
                 failed = int(status_counts.get("failed") or 0)
@@ -320,3 +354,8 @@ class PipelineExecutor:
             if isinstance(judger_agent, dict) and judger_agent.get("ok") is False:
                 warnings.append({"kind": "judger_agent_failed", "result": judger_agent})
         return {"status": "warn" if warnings else "pass", "warnings": warnings, "metrics": metrics}
+
+    @staticmethod
+    def _code_batch_analysis_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_code_batch_analysis", True))

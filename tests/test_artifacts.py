@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +11,7 @@ import pytest
 from app.api import routes
 from app.services.artifacts import (
     ArtifactAccessError,
+    ArtifactStore,
     artifact_id_for_relative_path,
     artifact_metadata,
     artifact_path_matches,
@@ -45,6 +48,86 @@ def test_artifact_metadata_returns_download_url_for_safe_file(tmp_path: Path) ->
     assert metadata["size"] == 3
     assert metadata["download_url"] == "/artifacts/download?path=container-logs/run-1/agent.log"
     assert metadata["canonical_download_url"].startswith("/artifacts/")
+
+
+def test_artifact_store_put_text_returns_canonical_metadata(tmp_path: Path) -> None:
+    settings = SimpleNamespace(artifact_root=tmp_path, artifact_storage_backend="local")
+
+    metadata = ArtifactStore(settings).put_text("reports/run-1/report.md", "# report", content_type="text/markdown")
+
+    assert (tmp_path / "reports" / "run-1" / "report.md").read_text(encoding="utf-8") == "# report"
+    assert metadata["artifact_uri"] == "local://artifacts/reports/run-1/report.md"
+    assert metadata["content_type"] == "text/markdown"
+    assert metadata["sha256"] == "f1e08744499eea1390fb33c5cebf61eb9a43aeab92bb864d6c65545062267d00"
+
+
+def test_artifact_store_minio_reads_object_without_local_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    objects: dict[tuple[str, str], dict[str, object]] = {}
+
+    class _FakeStat:
+        def __init__(self, data: bytes, content_type: str, metadata: dict[str, str]):
+            self.size = len(data)
+            self.content_type = content_type
+            self.metadata = metadata
+            self.last_modified = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    class _FakeResponse:
+        def __init__(self, data: bytes):
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+        def close(self) -> None:
+            return None
+
+        def release_conn(self) -> None:
+            return None
+
+    class _FakeMinio:
+        def __init__(self, endpoint: str, access_key: str, secret_key: str, secure: bool):
+            self.endpoint = endpoint
+            self.access_key = access_key
+            self.secret_key = secret_key
+            self.secure = secure
+
+        def put_object(self, bucket: str, name: str, data, length: int, content_type: str, metadata: dict[str, str]):
+            objects[(bucket, name)] = {
+                "data": data.read(),
+                "content_type": content_type,
+                "metadata": {f"X-Amz-Meta-{key}": value for key, value in metadata.items()},
+            }
+
+        def stat_object(self, bucket: str, name: str):
+            item = objects[(bucket, name)]
+            return _FakeStat(item["data"], item["content_type"], item["metadata"])
+
+        def get_object(self, bucket: str, name: str):
+            return _FakeResponse(objects[(bucket, name)]["data"])
+
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=_FakeMinio))
+    settings = SimpleNamespace(
+        artifact_root=tmp_path,
+        artifact_storage_backend="minio",
+        minio_endpoint="http://minio:9000",
+        minio_access_key="dieaudit",
+        minio_secret_key="secret",
+        minio_bucket_artifacts="dieaudit-artifacts",
+    )
+
+    store = ArtifactStore(settings)
+    written = store.put_text("reports/run-1/report.md", "# report", content_type="text/markdown")
+    Path(written["path"]).unlink()
+
+    metadata = store.metadata_for_path("reports/run-1/report.md")
+    blob = store.get_blob("reports/run-1/report.md")
+
+    assert metadata["artifact_uri"] == "minio://dieaudit-artifacts/reports/run-1/report.md"
+    assert metadata["storage_backend"] == "minio"
+    assert metadata["sha256"] == written["sha256"]
+    assert blob.name == "report.md"
+    assert blob.content_type == "text/markdown"
+    assert blob.data == b"# report"
 
 
 def test_artifact_id_round_trips_relative_path() -> None:

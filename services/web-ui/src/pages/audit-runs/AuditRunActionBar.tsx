@@ -2,6 +2,7 @@ import {
   FileTextOutlined,
   PlayCircleOutlined,
   SafetyCertificateOutlined,
+  CodeOutlined,
   StopOutlined,
 } from "@ant-design/icons";
 import { Button } from "antd";
@@ -16,6 +17,7 @@ type Props = {
   onCancelAuditRun: () => void;
   onGenerateReport: () => void;
   onRunJudge: () => void;
+  onRunCodeAnalysis: () => void;
   onRunPipeline: () => void;
   onRunSca: () => void;
   onStartAudit: () => void;
@@ -29,6 +31,7 @@ export function AuditRunActionBar({
   onCancelAuditRun,
   onGenerateReport,
   onRunJudge,
+  onRunCodeAnalysis,
   onRunPipeline,
   onRunSca,
   onStartAudit,
@@ -43,6 +46,9 @@ export function AuditRunActionBar({
       </Button>
       <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!auditRun} onClick={onRunSca}>
         SCA 扫描
+      </Button>
+      <Button icon={<CodeOutlined />} loading={loading} disabled={!auditRun} onClick={onRunCodeAnalysis}>
+        代码批量分析
       </Button>
       <Button icon={<SafetyCertificateOutlined />} loading={loading} disabled={!auditRun} onClick={onRunJudge}>
         研判

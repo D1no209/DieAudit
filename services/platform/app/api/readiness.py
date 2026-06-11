@@ -10,6 +10,7 @@ from app.services.worker_heartbeat import ACTIVE_WORKER_STATUSES, ensure_aware
 
 PRODUCTION_AGENT_TEMPLATES = {
     "opencode-orchestrator",
+    "opencode-code-auditor",
     "opencode-recon-auditor",
     "opencode-sca-analyst",
     "opencode-validator",

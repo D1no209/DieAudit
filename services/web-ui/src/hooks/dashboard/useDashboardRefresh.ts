@@ -13,6 +13,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setApiKeys,
     setAuditRun,
     setAuthStatus,
+    setCodeAnalysisTasks,
     setContainers,
     setDependencies,
     setDockerHealth,
@@ -38,6 +39,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     const bundle = await dashboardApi.getAuditRunBundle(auditRunId);
     setAuditRun(bundle.run);
     setAgentRuns(bundle.agents);
+    setCodeAnalysisTasks(bundle.codeAnalysisTasks);
     setFindings(bundle.findings);
     setDependencies(bundle.dependencies);
     setContainers(bundle.containers);

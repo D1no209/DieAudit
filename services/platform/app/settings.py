@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     dynamic_container_prefix: str = "dieaudit"
     agent_gateway_container_name: str = "dieaudit-agent-gateway"
     minio_endpoint: str = "http://minio:9000"
+    minio_access_key: str = "dieaudit"
+    minio_secret_key: str = "dieaudit-secret"
     minio_bucket_artifacts: str = "dieaudit-artifacts"
     qdrant_url: str = "http://qdrant:6333"
     knowledge_collection_name: str = "dieaudit_knowledge_v1"

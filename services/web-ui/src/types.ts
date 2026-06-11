@@ -99,6 +99,20 @@ export type DependencyInventory = {
   summary: DependencySummary;
 };
 
+export type CodeAnalysisTask = {
+  task_id: string;
+  audit_run_id: string;
+  project_id: string;
+  title: string;
+  focus: string;
+  file_paths: string[];
+  status: string;
+  agent_run_id?: string;
+  result?: Record<string, unknown>;
+  created_at: string;
+  updated_at?: string;
+};
+
 export type ArtifactRef = {
   path: string;
   relative_path: string;

@@ -55,6 +55,7 @@ export function renderAuditRunsRoute({ actions, state }: DashboardController) {
     <AuditRunsPage
       agentRunsCount={state.agentRuns.length}
       auditRun={state.auditRun}
+      codeAnalysisTasks={state.codeAnalysisTasks}
       lastResponse={state.lastResponse}
       loading={state.loading}
       pipelineStatus={state.pipelineStatus}
@@ -62,6 +63,7 @@ export function renderAuditRunsRoute({ actions, state }: DashboardController) {
       selectedProject={state.selectedProject}
       onCancelAuditRun={actions.cancelAuditRun}
       onGenerateReport={actions.generateReport}
+      onRunCodeAnalysis={actions.runCodeAnalysis}
       onRunJudge={actions.runJudge}
       onRunPipeline={actions.runPipeline}
       onRunSca={actions.runSca}
