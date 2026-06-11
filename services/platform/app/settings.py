@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     knowledge_embedding_timeout_seconds: float = 60.0
     knowledge_embedding_probe_on_readiness: bool = True
     agent_gateway_url: str = "http://agent-gateway:8000"
+    temporal_address: str = "temporal:7233"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     local_llm_api_key: str = ""

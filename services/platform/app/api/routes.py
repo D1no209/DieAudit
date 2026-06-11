@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 import shutil
@@ -166,7 +167,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
 
     @router.get("/metrics")
     async def metrics() -> Response:
-        body = f'dieaudit_service_up{{service="{settings.service_name}"}} 1\n'
+        body = (
+            f'dieaudit_service_up{{service="{settings.service_name}"}} 1\n'
+            f'dieaudit_artifact_storage_backend{{backend="{artifact_storage_backend(settings)}"}} 1\n'
+            f"dieaudit_demo_templates_enabled {1 if settings.enable_demo_templates else 0}\n"
+            f"dieaudit_weak_runc_sandbox_enabled {1 if settings.allow_runc_sandbox else 0}\n"
+        )
         return Response(body, media_type="text/plain; version=0.0.4")
 
     @router.get("/")
@@ -1433,6 +1439,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             })
         knowledge_service = KnowledgeService(settings)
         embedding = await knowledge_service.embedding_health(probe=settings.knowledge_embedding_probe_on_readiness)
+        if str(embedding.get("provider") or "").lower() in {"hash", "local-hash", ""}:
+            embedding = {
+                **embedding,
+                "status": "fail",
+                "message": "local hash embeddings are development-only; configure openai-compatible embeddings for production RAG",
+            }
         checks.append(
             {
                 "id": "knowledge_embedding",
@@ -1483,6 +1495,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if runtime is None:
             return await proxy_gateway("/runtime/workers/health")
         return await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
+
+    @router.get("/runtime/temporal/health")
+    async def runtime_temporal_health() -> dict[str, Any]:
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway("/runtime/temporal/health")
+        return await _temporal_health(settings)
 
     @router.get("/runtime/managed")
     async def managed_runtime() -> dict[str, Any]:
@@ -1825,6 +1844,36 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         )
 
     return router
+
+
+async def _temporal_health(settings: Settings) -> dict[str, Any]:
+    address = str(settings.temporal_address or "temporal:7233").strip()
+    host, _, port_text = address.rpartition(":")
+    if not host:
+        host = address
+        port = 7233
+    else:
+        try:
+            port = int(port_text)
+        except ValueError:
+            return {"ok": False, "address": address, "error": "TEMPORAL_ADDRESS must be host:port"}
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=3)
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+        with contextlib.suppress(Exception):
+            reader.feed_eof()
+        return {
+            "ok": True,
+            "address": address,
+            "host": host,
+            "port": port,
+            "mode": "tcp",
+            "message": "Temporal frontend TCP port is reachable; full workflow namespace/task-queue checks require Temporal SDK wiring.",
+        }
+    except Exception as exc:
+        return {"ok": False, "address": address, "host": host, "port": port, "mode": "tcp", "error": str(exc)}
 
 
 async def _artifact_metadata_response(request: Request, settings: Settings, path: str) -> dict[str, Any]:
