@@ -11,9 +11,10 @@ type Props = {
   reports: ReportArtifact[];
   onGenerateReport: () => void;
   onOpenArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
+  onPreviewArtifact: (artifact?: ArtifactRef, fallbackPath?: string) => void;
 };
 
-export function ReportsPage({ auditRun, loading, reports, onGenerateReport, onOpenArtifact }: Props) {
+export function ReportsPage({ auditRun, loading, reports, onGenerateReport, onOpenArtifact, onPreviewArtifact }: Props) {
   const pageActions = (
     <div className="action-bar">
       <Button icon={<FileTextOutlined />} loading={loading} disabled={!auditRun} onClick={onGenerateReport}>生成报告</Button>
@@ -44,6 +45,9 @@ export function ReportsPage({ auditRun, loading, reports, onGenerateReport, onOp
               <List.Item.Meta title={item.kind} description={item.artifact?.relative_path || item.path} />
               <Space>
                 <Tag>{String(item.summary?.finding_count ?? 0)} findings</Tag>
+                <Tag>{String(item.summary?.parse_warning_count ?? 0)} parse warnings</Tag>
+                <Tag>{String(item.summary?.tool_failure_count ?? 0)} tool failures</Tag>
+                <Button size="small" icon={<FileTextOutlined />} onClick={() => onPreviewArtifact(item.artifact, item.path)}>预览</Button>
                 <Button size="small" icon={<FileTextOutlined />} onClick={() => onOpenArtifact(item.artifact, item.path)}>下载</Button>
               </Space>
             </List.Item>

@@ -15,6 +15,7 @@ export function useDashboardController(activeView: AppView) {
   const {
     agentEvents,
     agentRuns,
+    artifactPreview,
     apiHealth,
     apiKey,
     apiKeyForm,
@@ -49,6 +50,7 @@ export function useDashboardController(activeView: AppView) {
     selectedProject,
     selectedProjectId,
     setAgentEvents,
+    setArtifactPreview,
     setApiKey,
     setContainerLogs,
     setError,
@@ -103,6 +105,7 @@ export function useDashboardController(activeView: AppView) {
       ...runtimeActions,
       refresh: () => runner.refreshCurrentView(activeView),
       setAgentEvents,
+      setArtifactPreview,
       setApiKey,
       setContainerLogs,
       setKnowledgeFiles,
@@ -121,6 +124,7 @@ export function useDashboardController(activeView: AppView) {
     state: {
       agentEvents,
       agentRuns,
+      artifactPreview,
       apiHealth,
       apiKey,
       apiKeys,

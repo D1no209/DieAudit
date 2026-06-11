@@ -104,6 +104,7 @@ export function renderReportsRoute({ actions, state }: DashboardController) {
       reports={state.reports}
       onGenerateReport={actions.generateReport}
       onOpenArtifact={actions.openArtifact}
+      onPreviewArtifact={actions.previewArtifact}
     />
   );
 }

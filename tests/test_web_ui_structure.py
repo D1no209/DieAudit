@@ -111,6 +111,13 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
     assert "Sandbox is using weak isolation" in sandbox_panel
     assert "Runtime containers are retained" in containers_panel
 
+
+def test_pipeline_state_panel_surfaces_warning_events() -> None:
+    panel = read_source("services/web-ui/src/pages/audit-runs/PipelineStatePanel.tsx")
+
+    assert "completed_with_warnings" in panel
+    assert "warningEvents" in panel
+
     for path in (
         "services/web-ui/src/pages/runtime/RuntimeActionBar.tsx",
         "services/web-ui/src/pages/RuntimeReadinessPage.tsx",
@@ -166,6 +173,21 @@ def test_findings_page_does_not_embed_dependency_inventory() -> None:
     assert "DependencyInventory" not in findings_page
     assert "DependenciesPage" not in findings_page
     assert "Tabs" not in findings_page
+    assert "filters: severityFilters" in findings_page
+    assert "filters: statusFilters" in findings_page
+    assert "filters: sourceFilters" in findings_page
+
+
+def test_reports_page_supports_preview_and_quality_summary() -> None:
+    reports_page = read_source("services/web-ui/src/pages/ReportsPage.tsx")
+    app_drawers = read_source("services/web-ui/src/components/AppDrawers.tsx")
+
+    assert "onGenerateReport" in reports_page
+    assert "onOpenArtifact" in reports_page
+    assert "onPreviewArtifact" in reports_page
+    assert "parse warnings" in reports_page
+    assert "tool failures" in reports_page
+    assert "ArtifactPreviewDrawer" in app_drawers
 
 
 def test_finding_review_has_dedicated_page_not_global_drawer() -> None:

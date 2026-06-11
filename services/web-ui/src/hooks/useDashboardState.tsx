@@ -57,6 +57,7 @@ export function useDashboardState() {
   const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
   const [agentEvents, setAgentEvents] = useState<AgentRunEvent[]>();
   const [containerLogs, setContainerLogs] = useState<{ title: string; body: string }>();
+  const [artifactPreview, setArtifactPreview] = useState<{ title: string; body: string }>();
   const [sandboxTarget, setSandboxTarget] = useState<{ network: string; target_url: string }>();
   const [lastResponse, setLastResponse] = useState<unknown>();
   const [error, setError] = useState<string>();
@@ -99,12 +100,14 @@ export function useDashboardState() {
     setSelectedFinding(undefined);
     setAgentEvents(undefined);
     setContainerLogs(undefined);
+    setArtifactPreview(undefined);
     setSandboxTarget(undefined);
   }
 
   return {
     agentEvents,
     agentRuns,
+    artifactPreview,
     apiHealth,
     apiKey,
     apiKeyForm,
@@ -140,6 +143,7 @@ export function useDashboardState() {
     selectedProject,
     selectedProjectId,
     setAgentEvents,
+    setArtifactPreview,
     setAgentRuns,
     setApiHealth,
     setApiKey,

@@ -39,8 +39,10 @@ export function App() {
         <AppRoutes activeView={activeView} dashboard={dashboard} onViewChange={setActiveView} />
         <AppDrawers
           agentEvents={state.agentEvents}
+          artifactPreview={state.artifactPreview}
           containerLogs={state.containerLogs}
           onCloseAgentEvents={() => actions.setAgentEvents(undefined)}
+          onCloseArtifactPreview={() => actions.setArtifactPreview(undefined)}
           onCloseContainerLogs={() => actions.setContainerLogs(undefined)}
         />
       </AppShell>

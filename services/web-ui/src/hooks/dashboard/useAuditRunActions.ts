@@ -14,6 +14,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
   const {
     auditRun,
     setAgentEvents,
+    setArtifactPreview,
     setContainerLogs,
     setLastResponse,
     setSelectedFinding,
@@ -87,6 +88,19 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     });
   }
 
+  async function previewArtifact(artifact?: ArtifactRef, fallbackPath?: string) {
+    const url = artifactUrl(artifact, fallbackPath);
+    if (!url) {
+      message.warning("Artifact is not available");
+      return;
+    }
+    await runner.runAction(async () => {
+      const blob = await dashboardApi.fetchArtifactBlob(url);
+      const body = await blob.text();
+      setArtifactPreview({ title: artifactFileName(artifact, fallbackPath), body });
+    });
+  }
+
   async function openFinding(findingId: string) {
     await runner.runAction(async () => {
       const result = await dashboardApi.getFinding(findingId);
@@ -145,6 +159,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     openArtifact,
     openContainerLogs,
     openFinding,
+    previewArtifact,
     runJudge,
     runPipeline,
     runSca,
