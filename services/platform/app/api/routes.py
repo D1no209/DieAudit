@@ -33,6 +33,7 @@ from app.api.serializers import (
     code_analysis_task_to_dict as _code_analysis_task_to_dict,
     dependency_record_to_dict as _dependency_record_to_dict,
     evidence_to_dict as _evidence_to_dict,
+    finding_markdown_reference as _finding_markdown_reference,
     finding_to_dict as _finding_to_dict,
     knowledge_chunk_from_row as _knowledge_chunk_from_row,
     knowledge_chunk_to_dict as _knowledge_chunk_to_dict,
@@ -3817,6 +3818,7 @@ async def _generate_finding_reports(
         payload = {
             "audit_run": audit_run,
             "finding": finding,
+            "finding_markdown": finding.get("finding_markdown") or _finding_markdown_reference(audit_run_id, finding_id),
             "evidence": finding_evidence,
             "validation_attempts": finding_attempts,
             "agent_runs": _agent_runs_for_finding(agent_runs, finding, finding_evidence, finding_attempts),
@@ -3835,6 +3837,7 @@ async def _generate_finding_reports(
             "title": finding.get("title"),
             "severity": finding.get("severity"),
             "status": finding.get("status"),
+            "finding_markdown": payload["finding_markdown"],
             "evidence_count": len(finding_evidence),
             "validation_attempt_count": len(finding_attempts),
             "source_sink_chain_count": sum(1 for item in finding_evidence if item.get("kind") == "source-sink-chain"),
@@ -3946,17 +3949,39 @@ async def _persist_poc_artifacts(
     audit_run_id = audit_run["audit_run_id"]
     finding_id = str(finding.get("finding_id") or "")
     if not pocs:
-        pocs = [
+        markdown = finding.get("finding_markdown") or _finding_markdown_reference(audit_run_id, finding_id)
+        async with SessionLocal() as session:
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="poc-markdown-reference",
+                    summary="PoC writer output is tracked in finding.md",
+                    artifact_path=markdown.get("path"),
+                    payload={
+                        "finding_markdown": markdown,
+                        "agent_run_id": agent_run_id,
+                        "markdown_first": True,
+                    },
+                )
+            )
+            await session.commit()
+        await _write_finding_agent_report(
+            audit_run_id=audit_run_id,
+            finding_id=finding_id,
+            stage="poc-writer",
+            agent_run_id=agent_run_id,
+            title="PoC Writer Report",
+            payload={"pocs": [], "finding_markdown": markdown, "markdown_first": True},
+        )
+        return [
             {
                 "finding_id": finding_id,
-                "title": finding.get("title") or "PoC unavailable",
-                "language": "manual",
-                "artifact_name": "poc-unavailable",
-                "content": "PoCWriter did not return a PoC for this finding.",
-                "commands": [],
-                "expected_result": "",
-                "cleanup_steps": [],
-                "safety_notes": "No executable PoC was generated.",
+                "artifact_id": markdown.get("artifact_id"),
+                "artifact_uri": markdown.get("artifact_uri"),
+                "path": markdown.get("path"),
+                "markdown_first": True,
             }
         ]
     store = ArtifactStore(get_settings())
@@ -4031,7 +4056,33 @@ async def _persist_poc_verifications(
     verifications: list[dict[str, Any]],
 ) -> int:
     if not verifications:
-        verifications = [{"finding_id": finding_id, "status": "not_verifiable", "reason": "PoC verifier returned no verification"}]
+        markdown = _finding_markdown_reference(audit_run_id, finding_id)
+        async with SessionLocal() as session:
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="poc-verification-markdown-reference",
+                    summary="PoC verifier output is tracked in finding.md",
+                    artifact_path=markdown.get("path"),
+                    payload={
+                        "finding_markdown": markdown,
+                        "agent_run_id": agent_run_id,
+                        "markdown_first": True,
+                    },
+                )
+            )
+            await session.commit()
+        await _write_finding_agent_report(
+            audit_run_id=audit_run_id,
+            finding_id=finding_id,
+            stage="poc-verifier",
+            agent_run_id=agent_run_id,
+            title="PoC Verifier Report",
+            payload={"verifications": [], "finding_markdown": markdown, "markdown_first": True},
+        )
+        return 1
     created = 0
     async with SessionLocal() as session:
         for verification in verifications:
@@ -4197,7 +4248,8 @@ def _finding_artifact_contract(audit_run_id: str, finding_id: str, stage: str) -
         "platform_canonical_directory": f"findings/{audit_run_id}/{finding_id}/agent-reports",
         "instruction": (
             "Read finding_markdown_path first. Update finding_markdown_path after your stage. "
-            "Write any stage-specific narrative report to agent_writable_report_path and return structured JSON. "
+            "Write any stage-specific narrative report to agent_writable_report_path. Structured JSON is optional; "
+            "the Finding markdown is the authoritative cross-Agent handoff. "
             "The platform will preserve the Finding markdown and copy the normalized stage report into platform_canonical_directory."
         ),
     }
@@ -4351,6 +4403,7 @@ def _agent_stage_report_markdown(
 
 def _finding_report_markdown(payload: dict[str, Any]) -> str:
     finding = payload["finding"]
+    finding_markdown = payload.get("finding_markdown") if isinstance(payload.get("finding_markdown"), dict) else finding.get("finding_markdown")
     evidence = payload["evidence"]
     attempts = payload["validation_attempts"]
     agent_runs = payload["agent_runs"]
@@ -4362,14 +4415,33 @@ def _finding_report_markdown(payload: dict[str, Any]) -> str:
         f"- Status: `{finding.get('status')}`",
         f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
         f"- Source: `{finding.get('source')}`",
+        f"- Tracking Markdown: `{(finding_markdown or {}).get('artifact_id') or (finding_markdown or {}).get('relative_path') or '-'}`",
         "",
         "## Description",
         "",
         str(finding.get("description") or ""),
         "",
-        "## Agent Runs",
+        "## Tracking Markdown",
         "",
     ]
+    if isinstance(finding_markdown, dict):
+        lines.extend(
+            [
+                f"- Artifact ID: `{finding_markdown.get('artifact_id')}`",
+                f"- Relative path: `{finding_markdown.get('relative_path')}`",
+                f"- URI: `{finding_markdown.get('artifact_uri')}`",
+                f"- Exists: `{finding_markdown.get('exists', True)}`",
+                "",
+            ]
+        )
+    else:
+        lines.extend(["- None.", ""])
+    lines.extend(
+        [
+            "## Agent Runs",
+            "",
+        ]
+    )
     lines.extend([f"- `{run.get('agent_name')}` `{run.get('agent_run_id')}` status `{run.get('status')}`" for run in agent_runs] or ["- None linked."])
     lines.extend(["", "## Evidence", ""])
     for item in evidence:
@@ -4414,7 +4486,7 @@ def _report_summary(
     attempts_by_finding: dict[str, list[dict[str, Any]]] = {}
     for attempt in attempts:
         attempts_by_finding.setdefault(str(attempt.get("finding_id") or ""), []).append(attempt)
-    parse_warnings = _agent_parse_warnings(agent_runs)
+    parse_warnings = _agent_parse_warnings(agent_runs, evidence)
     tool_failures = _tool_failures(audit_events)
     validator_failures = [
         attempt
@@ -4457,23 +4529,47 @@ def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _agent_parse_warnings(agent_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _agent_parse_warnings(agent_runs: list[dict[str, Any]], evidence: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    markdown_backed_agent_runs = _markdown_backed_agent_run_ids(evidence or [])
     warnings: list[dict[str, Any]] = []
     for run in agent_runs:
         output = run.get("output_summary") if isinstance(run.get("output_summary"), dict) else {}
         ingest = output.get("structured_ingest") if isinstance(output.get("structured_ingest"), dict) else {}
         parse_status = ingest.get("structured_parse_status")
         parse_warnings = ingest.get("structured_parse_warnings") or ingest.get("warnings") or []
+        agent_run_id = str(run.get("agent_run_id") or "")
+        if agent_run_id in markdown_backed_agent_runs and _only_missing_structured_output(parse_status, parse_warnings):
+            continue
         if parse_status in {"not_found", "parsed_with_warnings"} or parse_warnings:
             warnings.append(
                 {
-                    "agent_run_id": run.get("agent_run_id"),
+                    "agent_run_id": agent_run_id or run.get("agent_run_id"),
                     "agent_name": run.get("agent_name"),
                     "status": parse_status or "unknown",
                     "warnings": parse_warnings,
                 }
             )
     return warnings
+
+
+def _markdown_backed_agent_run_ids(evidence: list[dict[str, Any]]) -> set[str]:
+    backed: set[str] = set()
+    for item in evidence:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        agent_run_id = str(payload.get("agent_run_id") or "")
+        if not agent_run_id:
+            continue
+        kind = str(item.get("kind") or "")
+        if kind.endswith("-agent-report") or kind in {"poc-markdown-reference", "poc-verification-markdown-reference"}:
+            backed.add(agent_run_id)
+    return backed
+
+
+def _only_missing_structured_output(parse_status: Any, parse_warnings: Any) -> bool:
+    warnings = parse_warnings if isinstance(parse_warnings, list) else []
+    if parse_status == "not_found":
+        return all(isinstance(item, dict) and item.get("kind") == "structured_output_not_found" for item in warnings) or not warnings
+    return False
 
 
 def _tool_failures(audit_events: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -69,6 +69,7 @@ export type Finding = {
   source: string;
   description?: string;
   raw?: Record<string, unknown>;
+  finding_markdown?: ArtifactRef & { exists?: boolean; artifact_id?: string; artifact_uri?: string };
   created_at?: string;
   updated_at?: string;
 };
@@ -114,11 +115,14 @@ export type CodeAnalysisTask = {
 };
 
 export type ArtifactRef = {
+  artifact_id?: string;
+  artifact_uri?: string;
   path: string;
   relative_path: string;
   name: string;
-  size: number;
+  size?: number;
   download_url: string;
+  canonical_download_url?: string;
 };
 
 export type EvidenceRow = {

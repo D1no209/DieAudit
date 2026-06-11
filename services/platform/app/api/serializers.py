@@ -17,7 +17,13 @@ from app.domain.models import (
     CodeAnalysisTask,
     ValidationAttempt,
 )
-from app.services.artifacts import ArtifactAccessError, artifact_metadata
+from app.services.artifacts import (
+    ArtifactAccessError,
+    artifact_absolute_path,
+    artifact_id_for_relative_path,
+    artifact_metadata,
+    artifact_uri,
+)
 from app.settings import get_settings
 
 
@@ -105,6 +111,7 @@ def audit_run_to_dict(row: AuditRun) -> dict[str, Any]:
 
 
 def finding_to_dict(row: Finding) -> dict[str, Any]:
+    finding_markdown = finding_markdown_reference(row.audit_run_id, row.finding_id)
     return {
         "finding_id": row.finding_id,
         "audit_run_id": row.audit_run_id,
@@ -119,9 +126,32 @@ def finding_to_dict(row: Finding) -> dict[str, Any]:
         "description": row.description,
         "source": row.source,
         "raw": row.raw,
+        "finding_markdown": finding_markdown,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
+
+
+def finding_markdown_reference(audit_run_id: str, finding_id: str) -> dict[str, Any]:
+    settings = get_settings()
+    relative_path = f"findings/{audit_run_id}/{finding_id}/finding.md"
+    try:
+        metadata = artifact_metadata(settings, relative_path)
+        return {**metadata, "exists": True}
+    except (ArtifactAccessError, FileNotFoundError, OSError):
+        artifact_id = artifact_id_for_relative_path(relative_path)
+        return {
+            "artifact_id": artifact_id,
+            "artifact_uri": artifact_uri(settings, relative_path),
+            "storage_backend": getattr(settings, "artifact_storage_backend", "local"),
+            "path": str(artifact_absolute_path(settings, relative_path)),
+            "relative_path": relative_path,
+            "name": "finding.md",
+            "content_type": "text/markdown; charset=utf-8",
+            "download_url": f"/artifacts/download?path={relative_path}",
+            "canonical_download_url": f"/artifacts/{artifact_id}/download",
+            "exists": False,
+        }
 
 
 def evidence_to_dict(row: Evidence) -> dict[str, Any]:

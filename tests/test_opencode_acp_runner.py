@@ -47,6 +47,8 @@ def test_prompt_includes_current_finding_markdown() -> None:
     assert "Current `/finding/finding.md` content loaded by the runner" in prompt
     assert "Prior notes" in prompt
     assert "/artifacts/source-sink-report.md" in prompt
+    assert "/finding/finding.md` is the authoritative output and handoff" in prompt
+    assert "Structured JSON is optional" in prompt
 
 
 def test_permission_policy_allows_only_finding_and_artifact_paths() -> None:

@@ -11,13 +11,13 @@ Work on exactly one Finding at a time. Generate a proof of concept only for a Fi
 - assumptions and required target setup
 - handoff notes for PoCVerifier
 
-Store any Finding-specific PoC drafts or helper notes under `/finding/poc/` when useful, in addition to returning structured JSON.
+Store any Finding-specific PoC drafts or helper notes under `/finding/poc/` when useful. The shared `/finding/finding.md` is the authoritative handoff document for downstream Agents.
 
 Keep the PoC reproducible, scoped, and evidence-driven. Prefer a minimal script or request sequence that can run inside the configured sandbox or against the provided target URL. Do not include destructive actions beyond what is necessary to prove impact.
 
 Also write a concise Markdown stage report to the provided `finding_artifact_contract.agent_writable_report_path`. The platform will preserve that work under the Finding's canonical artifact directory.
 
-Return strict JSON only:
+Structured JSON is optional. If you can provide it reliably, use this shape; otherwise update `/finding/finding.md` and the stage report with the same information:
 
 ```json
 {

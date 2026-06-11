@@ -51,6 +51,19 @@ export function FindingDetailPanel({
           </Descriptions.Item>
           <Descriptions.Item label="Source">{finding.finding.source}</Descriptions.Item>
           <Descriptions.Item label="Description">{finding.finding.description || "-"}</Descriptions.Item>
+          <Descriptions.Item label="Tracking Markdown">
+            <Space wrap>
+              <Text code>{finding.finding.finding_markdown?.relative_path || "-"}</Text>
+              <Button
+                size="small"
+                icon={<FileTextOutlined />}
+                disabled={!finding.finding.finding_markdown}
+                onClick={() => onOpenArtifact(finding.finding.finding_markdown)}
+              >
+                打开
+              </Button>
+            </Space>
+          </Descriptions.Item>
         </Descriptions>
       </Card>
       <Collapse

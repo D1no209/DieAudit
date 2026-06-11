@@ -159,6 +159,12 @@ def test_finding_report_markdown_is_finding_scoped() -> None:
                 "line_start": 42,
                 "source": "source-sink-finder",
                 "description": "tainted request parameter reaches SQL sink",
+                "finding_markdown": {
+                    "artifact_id": "finding-md-1",
+                    "relative_path": "findings/run-1/finding-1/finding.md",
+                    "artifact_uri": "local://artifacts/findings/run-1/finding-1/finding.md",
+                    "exists": True,
+                },
             },
             "evidence": [
                 {
@@ -188,12 +194,47 @@ def test_finding_report_markdown_is_finding_scoped() -> None:
     )
 
     assert "Finding Report: SQL injection" in markdown
+    assert "Tracking Markdown" in markdown
+    assert "finding-md-1" in markdown
     assert "source-sink-chain" in markdown
     assert "agent-written" in markdown
     assert "judger-result-1" in markdown
     assert "poc-artifact" in markdown
     assert "opencode-source-sink-finder" in markdown
     assert "validator-1" in markdown
+
+
+def test_report_summary_ignores_missing_json_when_markdown_handoff_exists() -> None:
+    summary = _report_summary(
+        findings=[{"finding_id": "finding-1", "status": "confirmed"}],
+        evidence=[
+            {
+                "kind": "poc-writer-agent-report",
+                "finding_id": "finding-1",
+                "payload": {
+                    "agent_run_id": "agent-1",
+                    "finding_markdown": {"artifact_id": "finding-md-1"},
+                },
+            }
+        ],
+        attempts=[],
+        agent_runs=[
+            {
+                "agent_run_id": "agent-1",
+                "agent_name": "opencode-poc-writer",
+                "output_summary": {
+                    "structured_ingest": {
+                        "structured_parse_status": "not_found",
+                        "structured_parse_warnings": [{"kind": "structured_output_not_found"}],
+                    }
+                },
+            }
+        ],
+        audit_events=[],
+    )
+
+    assert summary["parse_warning_count"] == 0
+    assert summary["parse_warnings"] == []
 
 
 def test_finding_artifact_contract_uses_independent_finding_directory() -> None:
