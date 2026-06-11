@@ -400,15 +400,18 @@ def summarize_readiness_checks(checks: list[dict[str, Any]]) -> dict[str, Any]:
 
 def pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = normalized_pipeline_backend(settings)
-    supported_backends = {"background-tasks", "workflow-worker"}
-    production_backends = {"workflow-worker"}
+    supported_backends = {"background-tasks", "workflow-worker", "temporal"}
+    production_backends = {"workflow-worker", "temporal"}
     if backend not in supported_backends:
         status = "fail"
         message = f"Unsupported pipeline execution backend '{backend}'. Supported backends: {sorted(supported_backends)}."
     elif backend in production_backends:
         if worker_health and worker_health.get("ok"):
             status = "pass"
-            message = "Audit pipelines are claimed by at least one fresh workflow-worker heartbeat."
+            if backend == "temporal":
+                message = "Audit pipelines are started through Temporal and at least one fresh workflow-worker heartbeat is available."
+            else:
+                message = "Audit pipelines are claimed by at least one fresh workflow-worker heartbeat."
         elif worker_health is None:
             status = "fail"
             message = "Workflow-worker backend is configured, but worker heartbeat health was not checked."
@@ -434,7 +437,7 @@ def pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str
             "message": message,
         },
         "remediation": [] if status == "pass" else [
-            "Set PIPELINE_EXECUTION_BACKEND=workflow-worker and keep workflow-worker enabled in the core Compose profile.",
+            "Set PIPELINE_EXECUTION_BACKEND=workflow-worker or temporal and keep workflow-worker enabled in the core Compose profile.",
             "Verify /runtime/workers reports at least one fresh running worker heartbeat.",
         ],
     }

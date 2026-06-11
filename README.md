@@ -56,7 +56,7 @@ Core services in `docker-compose.yml`:
 - `nginx`: Web/API gateway.
 - `web-ui`: React frontend.
 - `web-api`: FastAPI backend.
-- `workflow-worker`: audit pipeline worker.
+- `workflow-worker`: audit pipeline worker and optional Temporal worker.
 - `agent-gateway`: Agent, ACP, MCP, and runtime package orchestration.
 - `workspace-engine`: project import, snapshots, and static workspace work.
 - `sandbox-runner`: controlled target/PoC Docker execution.
@@ -232,7 +232,8 @@ Important production settings:
 - `DIEAUDIT_API_KEY` or persisted API keys for authentication.
 - `PUBLIC_METRICS=false` unless metrics are separately protected.
 - `ENABLE_DEMO_TEMPLATES=false`.
-- `PIPELINE_EXECUTION_BACKEND=workflow-worker`.
+- `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable queue, or
+  `PIPELINE_EXECUTION_BACKEND=temporal` to start audit runs through Temporal.
 - `DEFAULT_SANDBOX_RUNTIME=runc`.
 - `ALLOW_RUNC_SANDBOX=true`.
 - `ALLOW_SANDBOX_EXTERNAL_NETWORK=false`.
@@ -249,6 +250,21 @@ curl -s http://localhost:8080/gateway/runtime/readiness | jq .
 ```
 
 More details are in [docs/production-readiness.md](docs/production-readiness.md).
+
+## Temporal Status
+
+Temporal is available as an execution backend. When
+`PIPELINE_EXECUTION_BACKEND=temporal`, `/run-pipeline` starts a Temporal
+workflow on `TEMPORAL_TASK_QUEUE`; the workflow enqueues the AuditRun into the
+existing durable worker queue and waits for terminal status. This gives each
+AuditRun Temporal workflow history and a migration path toward native
+step-level activities.
+
+Current limitation: the individual audit stages are still executed by the
+existing `PipelineExecutor`. Future work should split `snapshot -> joern ->
+agents -> validators -> judger -> poc -> report -> cleanup` into separate
+Temporal activities with activity-level retry, timeout, heartbeat, and
+idempotency boundaries.
 
 ## Demo Profile
 

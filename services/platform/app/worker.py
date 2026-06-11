@@ -34,6 +34,7 @@ from app.runtime import RuntimeOrchestrator
 from app.services.pipeline_executor import PipelineExecutor
 from app.services.pipeline_queue import claim_next_queued_pipeline
 from app.services.pipeline_recovery import recover_interrupted_pipelines
+from app.services.temporal_pipeline import TemporalPipelineConfig, run_temporal_worker
 from app.services.worker_heartbeat import record_worker_heartbeat
 from app.settings import get_settings
 
@@ -119,6 +120,18 @@ async def run_worker() -> None:
                 await asyncio.wait_for(stop_event.wait(), timeout=heartbeat_interval)
 
     heartbeat_task = asyncio.create_task(heartbeat_loop())
+    temporal_task: asyncio.Task | None = None
+    if (settings.pipeline_execution_backend or "").strip().lower() == "temporal":
+        temporal_task = asyncio.create_task(
+            run_temporal_worker(
+                TemporalPipelineConfig(
+                    address=settings.temporal_address,
+                    namespace=settings.temporal_namespace,
+                    task_queue=settings.temporal_task_queue,
+                ),
+                stop_event=stop_event,
+            )
+        )
     logger.info("workflow worker started worker_id=%s backend=%s", worker_id, settings.pipeline_execution_backend)
     try:
         worker_status = "idle"
@@ -156,8 +169,13 @@ async def run_worker() -> None:
                 retention_seconds=settings.pipeline_worker_heartbeat_retention_seconds,
             )
         heartbeat_task.cancel()
+        if temporal_task is not None:
+            temporal_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat_task
+        if temporal_task is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await temporal_task
         await runtime.close()
         logger.info("workflow worker stopped worker_id=%s", worker_id)
 

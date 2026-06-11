@@ -110,6 +110,7 @@ from app.services.knowledge import KnowledgeIndexError, KnowledgeService
 from app.services.pipeline_executor import PipelineCancelled, PipelineExecutor
 from app.services.pipeline_recovery import is_active_pipeline
 from app.services.storage_cleanup import StorageCleanupService
+from app.services.temporal_pipeline import TemporalPipelineConfig, start_temporal_pipeline
 from app.services.templates import TemplateStore
 from app.services.worker_heartbeat import list_worker_heartbeats, workflow_worker_health
 from app.services.workspace import WorkspaceImportError, WorkspaceService
@@ -966,6 +967,23 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": backend})
         if backend == "background-tasks":
             background_tasks.add_task(pipeline_executor(runtime).execute, audit_run_id)
+        elif backend == "temporal":
+            try:
+                temporal_result = await start_temporal_pipeline(
+                    audit_run_id,
+                    TemporalPipelineConfig(
+                        address=settings.temporal_address,
+                        namespace=settings.temporal_namespace,
+                        task_queue=settings.temporal_task_queue,
+                    ),
+                )
+            except Exception as exc:
+                await _mark_audit_run_status(audit_run_id, "failed")
+                await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error=f"Temporal start failed: {exc}")
+                await _record_audit_run_event(audit_run_id, "temporal_pipeline_start_failed", {"error": str(exc)})
+                raise HTTPException(status_code=503, detail=f"Temporal pipeline start failed: {exc}") from exc
+            await _record_audit_run_event(audit_run_id, "temporal_pipeline_started", temporal_result)
+            return {"audit_run_id": audit_run_id, "status": "accepted", "backend": backend, "temporal": temporal_result}
         return {"audit_run_id": audit_run_id, "status": "accepted", "backend": backend}
 
     @router.post("/audit-runs/{audit_run_id}/cancel")
@@ -1567,7 +1585,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         checks.append(_http_guardrails_readiness_check(settings))
         checks.append(_workspace_import_readiness_check(settings))
         worker_health: dict[str, Any] | None = None
-        if _normalized_pipeline_backend(settings) == "workflow-worker":
+        if _normalized_pipeline_backend(settings) in {"workflow-worker", "temporal"}:
             worker_health = await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
         checks.append(_pipeline_backend_readiness_check(settings, worker_health=worker_health))
         async with SessionLocal() as session:

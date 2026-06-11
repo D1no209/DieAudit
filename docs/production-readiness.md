@@ -11,9 +11,13 @@ but cannot install safely by itself.
   - Keep `PUBLIC_METRICS=false` unless `/metrics` is available only on a trusted
     internal network.
 - Use the workflow worker execution backend:
-  - Set `PIPELINE_EXECUTION_BACKEND=workflow-worker`.
+  - Set `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable
+    queue, or `PIPELINE_EXECUTION_BACKEND=temporal` to start AuditRuns through
+    Temporal.
   - Keep `workflow-worker` running in the `core` Compose profile.
   - Verify `/runtime/workers` reports a fresh running worker heartbeat.
+  - When using `temporal`, verify `/runtime/temporal/health` and set
+    `TEMPORAL_TASK_QUEUE` consistently for API and worker services.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
   - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when

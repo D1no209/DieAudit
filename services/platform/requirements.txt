@@ -10,3 +10,4 @@ agent-client-protocol==0.10.1
 a2a-sdk==1.1.0
 pypdf==6.4.1
 minio==7.2.15
+temporalio==1.28.0
