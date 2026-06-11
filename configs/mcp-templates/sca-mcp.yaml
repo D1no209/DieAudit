@@ -25,6 +25,8 @@ tools:
   - detect_dependencies
   - generate_sbom
   - query_osv
+required_binaries:
+  - syft
 permissions:
   workspace: read-only
   docker_api: false

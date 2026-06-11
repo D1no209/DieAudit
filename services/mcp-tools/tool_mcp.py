@@ -317,13 +317,29 @@ def tool_capabilities(required: list[str] | None = None) -> dict[str, Any]:
     tools = required or ["rg", "semgrep", "syft", "codeql", "joern"]
     binaries: dict[str, dict[str, Any]] = {}
     for tool in tools:
-        path = shutil.which(tool)
-        binaries[tool] = {"available": bool(path), "path": path}
+        binaries[tool] = _tool_binary_info(tool)
     return {
         "ok": all(item["available"] for item in binaries.values()),
         "service": MCP_NAME,
         "binaries": binaries,
     }
+
+
+def _tool_binary_info(tool: str) -> dict[str, Any]:
+    path = shutil.which(tool)
+    info: dict[str, Any] = {"available": bool(path), "path": path, "version": None}
+    if not path:
+        return info
+    for args in ([path, "--version"], [path, "version"]):
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        output = (result.stdout or result.stderr or "").strip()
+        if result.returncode == 0 and output:
+            info["version"] = output.splitlines()[0][:200]
+            break
+    return info
 
 
 @mcp.tool()

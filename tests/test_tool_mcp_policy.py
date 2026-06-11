@@ -78,6 +78,7 @@ def test_tool_capabilities_reports_requested_binaries() -> None:
     result = tool_mcp.tool_capabilities(["python", "definitely-not-a-dieaudit-tool"])
 
     assert result["binaries"]["python"]["available"] is True
+    assert "version" in result["binaries"]["python"]
     assert result["binaries"]["definitely-not-a-dieaudit-tool"]["available"] is False
     assert result["ok"] is False
 

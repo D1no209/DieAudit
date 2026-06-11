@@ -24,6 +24,8 @@ healthcheck:
 tools:
   - semgrep_scan
   - semgrep_results
+required_binaries:
+  - semgrep
 permissions:
   workspace: read-only
   docker_api: false

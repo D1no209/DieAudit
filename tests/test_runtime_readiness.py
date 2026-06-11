@@ -88,6 +88,14 @@ def test_heavy_analyzer_templates_use_dedicated_images() -> None:
     assert joern["required_binaries"] == ["joern"]
 
 
+def test_core_tool_templates_declare_required_binaries() -> None:
+    semgrep = yaml.safe_load((ROOT / "configs/mcp-templates/semgrep-mcp.yaml").read_text(encoding="utf-8"))
+    sca = yaml.safe_load((ROOT / "configs/mcp-templates/sca-mcp.yaml").read_text(encoding="utf-8"))
+
+    assert semgrep["required_binaries"] == ["semgrep"]
+    assert sca["required_binaries"] == ["syft"]
+
+
 def test_bare_role_agent_templates_use_opencode_runtime() -> None:
     for role in ["orchestrator", "recon-auditor", "sca-analyst", "validator", "judger", "poc-writer"]:
         template = yaml.safe_load((ROOT / f"configs/agent-templates/{role}.yaml").read_text(encoding="utf-8"))

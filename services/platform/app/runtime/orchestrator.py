@@ -98,9 +98,21 @@ class RuntimeOrchestrator:
                 "binaries": {binary: {"available": False, "path": None} for binary in binaries},
             }
         script = (
-            "import json, shutil, sys; "
-            "tools=json.loads(sys.argv[1]); "
-            "print(json.dumps({'binaries': {tool: {'available': bool(shutil.which(tool)), 'path': shutil.which(tool)} for tool in tools}}))"
+            "import json, shutil, subprocess, sys\n"
+            "tools=json.loads(sys.argv[1])\n"
+            "def info(tool):\n"
+            "    path=shutil.which(tool); data={'available': bool(path), 'path': path, 'version': None}\n"
+            "    if not path: return data\n"
+            "    for args in ([path, '--version'], [path, 'version']):\n"
+            "        try:\n"
+            "            p=subprocess.run(args, capture_output=True, text=True, timeout=10)\n"
+            "        except Exception:\n"
+            "            continue\n"
+            "        out=(p.stdout or p.stderr or '').strip()\n"
+            "        if p.returncode == 0 and out:\n"
+            "            data['version']=out.splitlines()[0][:200]; break\n"
+            "    return data\n"
+            "print(json.dumps({'binaries': {tool: info(tool) for tool in tools}}))"
         )
         labels = {
             "dieaudit.managed": "true",
