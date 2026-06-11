@@ -76,6 +76,7 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
     readiness_panel = read_source("services/web-ui/src/pages/runtime/RuntimeReadinessPanel.tsx")
     readiness_overview = read_source("services/web-ui/src/pages/runtime/ReadinessOverviewPanel.tsx")
     readiness_actions = read_source("services/web-ui/src/pages/runtime/ReadinessNextActionsPanel.tsx")
+    containers_panel = read_source("services/web-ui/src/pages/runtime/RuntimeContainersPanel.tsx")
     sandbox_panel = read_source("services/web-ui/src/pages/runtime/RuntimeSandboxPanel.tsx")
 
     assert "List.Item.Meta" not in runtime_page
@@ -107,6 +108,8 @@ def test_runtime_page_uses_focused_subcomponents() -> None:
     assert 'name="command"' in sandbox_panel
     assert "onRunSandboxPoc" in sandbox_panel
     assert "onStartSandboxService" in sandbox_panel
+    assert "Sandbox is using weak isolation" in sandbox_panel
+    assert "Runtime containers are retained" in containers_panel
 
     for path in (
         "services/web-ui/src/pages/runtime/RuntimeActionBar.tsx",

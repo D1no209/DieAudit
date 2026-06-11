@@ -25,11 +25,20 @@ export function RuntimeSandboxPanel({
   const [pocForm] = Form.useForm<SandboxPocFormValues>();
   const [serviceForm] = Form.useForm<SandboxServiceFormValues>();
   const sandboxExecutionAvailable = Boolean(sandboxCapabilities?.sandbox_execution_available);
+  const weakIsolation = Boolean(sandboxCapabilities?.sandbox_execution_available && !sandboxCapabilities?.strong_isolation_available);
 
   return (
     <Space direction="vertical" size={16} className="drawer-stack">
       {!sandboxExecutionAvailable && (
         <Alert type="warning" showIcon message="Sandbox execution is unavailable" description={sandboxUnavailableReason} />
+      )}
+      {weakIsolation && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Sandbox is using weak isolation"
+          description="ALLOW_RUNC_SANDBOX is enabled. Use this only for local trusted testing, not untrusted PoC execution."
+        />
       )}
       {!auditRun && <Alert type="warning" showIcon message="Create or select an AuditRun before starting sandbox execution." />}
       {sandboxTarget && (

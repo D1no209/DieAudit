@@ -1035,6 +1035,37 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 "finding": await _get_finding_detail(finding_id),
             }
         except Exception as exc:
+            if _is_sandbox_unavailable_error(str(exc)):
+                unavailable = _sandbox_unavailable_result(str(exc), request_body=body.model_dump())
+                async with SessionLocal() as session:
+                    row = await session.scalar(select(ValidationAttempt).where(ValidationAttempt.attempt_id == attempt.attempt_id))
+                    if row:
+                        row.status = "unavailable"
+                        row.result = {"kind": "poc", **unavailable}
+                    session.add(
+                        Evidence(
+                            evidence_id=str(uuid.uuid4()),
+                            finding_id=finding_id,
+                            audit_run_id=audit_run_id,
+                            kind="poc-unavailable",
+                            summary=f"PoC execution unavailable: {exc}",
+                            payload=unavailable,
+                        )
+                    )
+                    await session.commit()
+                await _record_audit_run_event(
+                    audit_run_id,
+                    "finding_poc_unavailable",
+                    {"finding_id": finding_id, "attempt_id": attempt.attempt_id, **unavailable},
+                )
+                return {
+                    "finding_id": finding_id,
+                    "attempt_id": attempt.attempt_id,
+                    "status": "unavailable",
+                    "matched_expected_exit_code": False,
+                    "poc": unavailable,
+                    "finding": await _get_finding_detail(finding_id),
+                }
             async with SessionLocal() as session:
                 row = await session.scalar(select(ValidationAttempt).where(ValidationAttempt.attempt_id == attempt.attempt_id))
                 if row:
@@ -1639,6 +1670,10 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 allow_weak_isolation=body.allow_weak_isolation,
             )
         except (DockerApiError, RuntimeError, ValueError) as exc:
+            if _is_sandbox_unavailable_error(str(exc)):
+                result = _sandbox_unavailable_result(str(exc), request_body=body.model_dump())
+                await _record_audit_run_event(audit_run_id, "poc_run_unavailable", result)
+                return result
             await _record_audit_run_event(audit_run_id, "poc_run_failed", {"error": str(exc), "request": body.model_dump()})
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await _record_audit_run_event(audit_run_id, "poc_run_completed", result)
@@ -1677,6 +1712,10 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 allow_weak_isolation=body.allow_weak_isolation,
             )
         except (DockerApiError, RuntimeError, ValueError) as exc:
+            if _is_sandbox_unavailable_error(str(exc)):
+                result = _sandbox_unavailable_result(str(exc), request_body=body.model_dump())
+                await _record_audit_run_event(audit_run_id, "sandbox_service_unavailable", result)
+                return result
             await _record_audit_run_event(audit_run_id, "sandbox_service_failed", {"error": str(exc), "request": body.model_dump()})
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await _record_audit_run_event(audit_run_id, "sandbox_service_started", result)
@@ -1964,6 +2003,29 @@ def _effective_sandbox_external_network(settings: Settings, requested: bool) -> 
             detail="sandbox external network is disabled by platform policy; set ALLOW_SANDBOX_EXTERNAL_NETWORK=true to permit it",
         )
     return bool(requested)
+
+
+def _is_sandbox_unavailable_error(message: str) -> bool:
+    normalized = message.lower()
+    return any(
+        token in normalized
+        for token in (
+            "sandbox execution is not available",
+            "sandbox execution requires",
+            "gvisor",
+            "runsc",
+            "configured sandbox runtime",
+        )
+    )
+
+
+def _sandbox_unavailable_result(message: str, *, request_body: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "status": "unavailable",
+        "reason": message,
+        "request": request_body,
+    }
 
 
 def _resource_attr(resource: dict[str, Any] | Any, key: str) -> str:
