@@ -23,13 +23,41 @@ class CreateProjectRequest(BaseModel):
 class CreateAuditRunRequest(BaseModel):
     snapshot_id: str | None = None
     agent_name: str = "opencode-orchestrator"
+    enabled_agents: list[str] = Field(
+        default_factory=lambda: [
+            "orchestrator",
+            "code-auditor",
+            "source-sink-finder",
+            "validator",
+            "judger",
+            "poc-writer",
+            "poc-verifier",
+        ]
+    )
+    preflight_prompt: str | None = None
     validator_rounds: int = Field(default=1, ge=1)
     max_parallel_validators: int = Field(default=2, ge=1)
+    validator_agent_name: str = "opencode-validator"
     enable_code_batch_analysis: bool = True
     max_code_audit_tasks: int = Field(default=8, ge=1, le=100)
     max_files_per_code_audit_task: int = Field(default=25, ge=1, le=200)
     max_parallel_code_auditors: int = Field(default=2, ge=1, le=20)
     code_auditor_agent_name: str = "opencode-code-auditor"
+    enable_source_sink_analysis: bool = True
+    source_sink_finder_agent_name: str = "opencode-source-sink-finder"
+    max_parallel_source_sink_finders: int = Field(default=2, ge=1, le=20)
+    max_source_sink_findings: int = Field(default=50, ge=1, le=500)
+    enable_validators: bool = True
+    enable_judgement: bool = True
+    judger_agent_name: str = "opencode-judger"
+    max_parallel_judgers: int = Field(default=2, ge=1, le=20)
+    enable_poc_writing: bool = True
+    poc_writer_agent_name: str = "opencode-poc-writer"
+    max_parallel_poc_writers: int = Field(default=2, ge=1, le=20)
+    max_poc_findings: int = Field(default=25, ge=1, le=500)
+    enable_poc_verification: bool = True
+    poc_verifier_agent_name: str = "opencode-poc-verifier"
+    max_parallel_poc_verifiers: int = Field(default=2, ge=1, le=20)
     enable_joern: bool = True
     joern_required: bool = True
     allow_joern_unavailable: bool = False

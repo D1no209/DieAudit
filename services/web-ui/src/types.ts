@@ -442,6 +442,44 @@ export type CreateAuditRunResponse = {
   agent_run?: AgentRun | null;
 };
 
+export type CreateAuditRunPayload = {
+  agent_name?: string;
+  enabled_agents?: string[];
+  preflight_prompt?: string;
+  validator_rounds?: number;
+  max_parallel_validators?: number;
+  validator_agent_name?: string;
+  enable_code_batch_analysis?: boolean;
+  max_code_audit_tasks?: number;
+  max_files_per_code_audit_task?: number;
+  max_parallel_code_auditors?: number;
+  code_auditor_agent_name?: string;
+  enable_source_sink_analysis?: boolean;
+  source_sink_finder_agent_name?: string;
+  max_parallel_source_sink_finders?: number;
+  max_source_sink_findings?: number;
+  enable_validators?: boolean;
+  enable_judgement?: boolean;
+  judger_agent_name?: string;
+  max_parallel_judgers?: number;
+  enable_poc_writing?: boolean;
+  poc_writer_agent_name?: string;
+  max_parallel_poc_writers?: number;
+  max_poc_findings?: number;
+  enable_poc_verification?: boolean;
+  poc_verifier_agent_name?: string;
+  max_parallel_poc_verifiers?: number;
+  enable_joern?: boolean;
+  joern_required?: boolean;
+  allow_joern_unavailable?: boolean;
+  joern_timeout_seconds?: number;
+  joern_query_packs?: string[];
+  allow_external_network?: boolean;
+  retain_runtime_on_failure?: boolean;
+  input_payload?: Record<string, unknown>;
+  start_agent?: boolean;
+};
+
 export type KnowledgeSearchResponse = {
   query: string;
   matches: KnowledgeMatch[];

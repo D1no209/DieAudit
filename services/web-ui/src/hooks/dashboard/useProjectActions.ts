@@ -1,5 +1,6 @@
 import { message } from "antd";
 import * as dashboardApi from "../../client/dashboardApi";
+import type { CreateAuditRunPayload } from "../../types";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
@@ -48,13 +49,13 @@ export function useProjectActions(dashboardState: DashboardStateController, runn
     });
   }
 
-  async function startAudit() {
+  async function startAudit(payload: CreateAuditRunPayload) {
     if (!selectedProjectId) {
       message.error("请选择项目");
       return;
     }
     await runner.runAction(async () => {
-      const result = await dashboardApi.createAuditRun(selectedProjectId);
+      const result = await dashboardApi.createAuditRun(selectedProjectId, payload);
       setLastResponse(result);
       await runner.refreshAuditRun(result.audit_run.audit_run_id);
     });

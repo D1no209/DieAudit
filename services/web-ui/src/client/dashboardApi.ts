@@ -8,6 +8,7 @@ import type {
   AuthStatus,
   CodeAnalysisTask,
   ContainerRow,
+  CreateAuditRunPayload,
   CreateAuditRunResponse,
   DependencyInventory,
   DockerHealth,
@@ -116,14 +117,8 @@ export function uploadZipProject(formData: FormData) {
   return readJson<ProjectMutationResponse>("/gateway/projects/upload-zip", { method: "POST", body: formData });
 }
 
-export function createAuditRun(projectId: string) {
-  return postJson<CreateAuditRunResponse>(`/gateway/projects/${projectId}/audit-runs`, {
-    agent_name: "opencode-orchestrator",
-    allow_external_network: false,
-    input_payload: {
-      goal: "Run an initial security audit. Inspect the mounted source and report vulnerability candidates with file paths.",
-    },
-  });
+export function createAuditRun(projectId: string, payload: CreateAuditRunPayload) {
+  return postJson<CreateAuditRunResponse>(`/gateway/projects/${projectId}/audit-runs`, payload);
 }
 
 export function runSca(auditRunId: string) {

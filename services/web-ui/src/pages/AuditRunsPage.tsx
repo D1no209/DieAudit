@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Alert } from "antd";
-import type { AuditRun, CodeAnalysisTask, PipelineStatus, Project } from "../types";
+import type { AuditRun, CodeAnalysisTask, CreateAuditRunPayload, PipelineStatus, Project } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { AuditRunActionBar } from "./audit-runs/AuditRunActionBar";
+import { AuditRunConfigModal } from "./audit-runs/AuditRunConfigModal";
 import { AuditRunSummary } from "./audit-runs/AuditRunSummary";
 import { CodeAnalysisTasksPanel } from "./audit-runs/CodeAnalysisTasksPanel";
 import { PipelineStatePanel } from "./audit-runs/PipelineStatePanel";
@@ -22,7 +24,7 @@ type Props = {
   onRunJudge: () => void;
   onRunPipeline: () => void;
   onRunSca: () => void;
-  onStartAudit: () => void;
+  onStartAudit: (values: CreateAuditRunPayload) => void;
 };
 
 export function AuditRunsPage({
@@ -42,6 +44,13 @@ export function AuditRunsPage({
   onRunSca,
   onStartAudit,
 }: Props) {
+  const [configOpen, setConfigOpen] = useState(false);
+
+  function submitAuditConfig(values: CreateAuditRunPayload) {
+    onStartAudit(values);
+    setConfigOpen(false);
+  }
+
   const pageActions = (
     <AuditRunActionBar
       auditRun={auditRun}
@@ -54,7 +63,7 @@ export function AuditRunsPage({
       onRunJudge={onRunJudge}
       onRunPipeline={onRunPipeline}
       onRunSca={onRunSca}
-      onStartAudit={onStartAudit}
+      onStartAudit={() => setConfigOpen(true)}
     />
   );
 
@@ -95,6 +104,12 @@ export function AuditRunsPage({
         <PipelineStatePanel pipelineStatus={pipelineStatus} />
       </div>
       <CodeAnalysisTasksPanel tasks={codeAnalysisTasks} />
+      <AuditRunConfigModal
+        loading={loading}
+        open={configOpen}
+        onCancel={() => setConfigOpen(false)}
+        onSubmit={submitAuditConfig}
+      />
     </>
   );
 }

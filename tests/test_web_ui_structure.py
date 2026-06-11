@@ -39,17 +39,42 @@ def test_audit_runs_page_does_not_embed_result_tables() -> None:
 def test_audit_runs_page_uses_focused_subcomponents() -> None:
     audit_runs_page = read_source("services/web-ui/src/pages/AuditRunsPage.tsx")
 
-    for component in ("AuditRunActionBar", "AuditRunSummary", "RunContextPanel", "PipelineStatePanel", "CodeAnalysisTasksPanel"):
+    for component in ("AuditRunActionBar", "AuditRunConfigModal", "AuditRunSummary", "RunContextPanel", "PipelineStatePanel", "CodeAnalysisTasksPanel"):
         assert component in audit_runs_page
 
     for path in (
         "services/web-ui/src/pages/audit-runs/AuditRunActionBar.tsx",
+        "services/web-ui/src/pages/audit-runs/AuditRunConfigModal.tsx",
         "services/web-ui/src/pages/audit-runs/AuditRunSummary.tsx",
         "services/web-ui/src/pages/audit-runs/CodeAnalysisTasksPanel.tsx",
         "services/web-ui/src/pages/audit-runs/RunContextPanel.tsx",
         "services/web-ui/src/pages/audit-runs/PipelineStatePanel.tsx",
     ):
         assert (ROOT / path).is_file()
+
+
+def test_audit_run_config_modal_exposes_swarm_controls() -> None:
+    modal = read_source("services/web-ui/src/pages/audit-runs/AuditRunConfigModal.tsx")
+    api = read_source("services/web-ui/src/client/dashboardApi.ts")
+
+    for field in (
+        "enabled_agents",
+        "preflight_prompt",
+        "validator_rounds",
+        "max_parallel_validators",
+        "max_parallel_source_sink_finders",
+        "max_parallel_judgers",
+        "max_parallel_poc_writers",
+        "max_parallel_poc_verifiers",
+        "source_sink_finder_agent_name",
+        "poc_verifier_agent_name",
+        "joern_query_packs",
+    ):
+        assert field in modal
+
+    assert "CreateAuditRunPayload" in api
+    assert "createAuditRun(projectId: string, payload: CreateAuditRunPayload)" in api
+    assert "Run an initial security audit" not in api
 
 
 def test_projects_page_uses_focused_subcomponents() -> None:

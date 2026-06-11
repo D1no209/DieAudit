@@ -605,6 +605,9 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 raise HTTPException(status_code=404, detail="project not found")
             snapshot = await _resolve_snapshot(session, project_id, body.snapshot_id)
             audit_run_id = str(uuid.uuid4())
+            input_payload = dict(body.input_payload or {})
+            if body.preflight_prompt:
+                input_payload["preflight_prompt"] = body.preflight_prompt
             audit_run = AuditRun(
                 audit_run_id=audit_run_id,
                 project_id=project_id,
@@ -616,13 +619,31 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
                 config={
                     "agent_name": body.agent_name,
-                    "input_payload": body.input_payload,
+                    "enabled_agents": body.enabled_agents,
+                    "preflight_prompt": body.preflight_prompt,
+                    "input_payload": input_payload,
                     "workspace_host_path": snapshot.workspace_path,
                     "enable_code_batch_analysis": body.enable_code_batch_analysis,
                     "max_code_audit_tasks": body.max_code_audit_tasks,
                     "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
                     "max_parallel_code_auditors": body.max_parallel_code_auditors,
                     "code_auditor_agent_name": body.code_auditor_agent_name,
+                    "enable_source_sink_analysis": body.enable_source_sink_analysis,
+                    "source_sink_finder_agent_name": body.source_sink_finder_agent_name,
+                    "max_parallel_source_sink_finders": body.max_parallel_source_sink_finders,
+                    "max_source_sink_findings": body.max_source_sink_findings,
+                    "enable_validators": body.enable_validators,
+                    "validator_agent_name": body.validator_agent_name,
+                    "enable_judgement": body.enable_judgement,
+                    "judger_agent_name": body.judger_agent_name,
+                    "max_parallel_judgers": body.max_parallel_judgers,
+                    "enable_poc_writing": body.enable_poc_writing,
+                    "poc_writer_agent_name": body.poc_writer_agent_name,
+                    "max_parallel_poc_writers": body.max_parallel_poc_writers,
+                    "max_poc_findings": body.max_poc_findings,
+                    "enable_poc_verification": body.enable_poc_verification,
+                    "poc_verifier_agent_name": body.poc_verifier_agent_name,
+                    "max_parallel_poc_verifiers": body.max_parallel_poc_verifiers,
                     "enable_joern": body.enable_joern,
                     "joern_required": body.joern_required,
                     "allow_joern_unavailable": body.allow_joern_unavailable,
@@ -641,7 +662,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 workspace_host_path=snapshot.workspace_path,
                 allow_external_network=body.allow_external_network,
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
-                input_payload=body.input_payload
+                input_payload=input_payload
                 or {
                     "goal": "Run an initial code audit pass over the mounted project and report vulnerability candidates with file paths."
                 },

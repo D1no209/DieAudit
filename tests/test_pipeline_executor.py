@@ -222,6 +222,70 @@ async def test_pipeline_executor_can_disable_agent_external_network_per_audit_ru
 
 
 @pytest.mark.asyncio
+async def test_pipeline_executor_respects_disabled_swarm_agents() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {
+                "workspace_host_path": "/workspace/project",
+                "enabled_agents": ["orchestrator"],
+                "enable_code_batch_analysis": True,
+                "enable_source_sink_analysis": True,
+                "enable_validators": True,
+                "enable_judgement": True,
+                "enable_poc_writing": True,
+                "enable_poc_verification": True,
+            },
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 2,
+            "max_parallel_validators": 3,
+        }
+    )
+
+    await build_executor(recorder, runtime).execute("run-1")
+
+    assert len(runtime.agent_runs) == 1
+    assert runtime.agent_runs[0]["agent_name"] == "opencode-orchestrator"
+    assert runtime.validator_runs == []
+    skipped = [event for event in recorder.events if event["event_type"] == "pipeline_step_skipped"]
+    assert {event["payload"]["step"] for event in skipped} == {
+        "code-analysis",
+        "source-sink-analysis",
+        "validators",
+        "judgement",
+        "poc-writing",
+        "poc-verification",
+    }
+    assert recorder.statuses == ["running", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_uses_configured_validator_agent_name() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {
+                "workspace_host_path": "/workspace/project",
+                "validator_agent_name": "opencode-custom-validator",
+            },
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+
+    await build_executor(recorder, runtime).execute("run-1")
+
+    assert runtime.validator_runs[0]["validator_agent_name"] == "opencode-custom-validator"
+
+
+@pytest.mark.asyncio
 async def test_pipeline_executor_marks_completed_with_warnings_for_parse_warning() -> None:
     runtime = FakeRuntime()
     runtime.agent_result = {

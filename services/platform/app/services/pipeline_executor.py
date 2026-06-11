@@ -77,6 +77,8 @@ class PipelineExecutor:
         initial_stage = "joern-cpg" if self._joern_enabled(audit_run) else "agent-audit"
         await self.record_audit_run_event(audit_run_id, "pipeline_started", {"stage": initial_stage})
         steps: list[dict[str, Any]] = []
+        judge_result: dict[str, Any] = {}
+        agent_external_network = self._agent_external_network(audit_run)
         try:
             await self.raise_if_cancelled(audit_run_id)
             if self._joern_enabled(audit_run):
@@ -108,37 +110,41 @@ class PipelineExecutor:
                     raise RuntimeError(str(joern_result.get("error") or joern_result.get("reason") or "Joern CPG build failed"))
                 await self.raise_if_cancelled(audit_run_id)
 
-            await self.set_pipeline_state(audit_run_id, stage="agent-audit", status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "agent-audit"})
-            agent_input_payload = audit_run.get("config", {}).get("input_payload") or {
-                "goal": (
-                    "Run a structured security audit pass. Return JSON with summary, findings, and evidence. "
-                    "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
+            if self._agent_audit_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="agent-audit", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "agent-audit"})
+                agent_input_payload = audit_run.get("config", {}).get("input_payload") or {
+                    "goal": (
+                        "Run a structured security audit pass. Return JSON with summary, findings, and evidence. "
+                        "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
+                    )
+                }
+                if isinstance(agent_input_payload, dict):
+                    joern_context = self._agent_joern_context(audit_run)
+                    if joern_context["enabled"]:
+                        agent_input_payload = {**agent_input_payload, "joern": joern_context}
+                agent_result = await self.runtime.start_agent_run(
+                    audit_run_id=audit_run_id,
+                    project_id=audit_run["project_id"],
+                    agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
+                    workspace_host_path=workspace_path,
+                    allow_external_network=agent_external_network,
+                    retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+                    input_payload=agent_input_payload,
                 )
-            }
-            if isinstance(agent_input_payload, dict):
-                joern_context = self._agent_joern_context(audit_run)
-                if joern_context["enabled"]:
-                    agent_input_payload = {**agent_input_payload, "joern": joern_context}
-            agent_external_network = self._agent_external_network(audit_run)
-            agent_result = await self.runtime.start_agent_run(
-                audit_run_id=audit_run_id,
-                project_id=audit_run["project_id"],
-                agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
-                workspace_host_path=workspace_path,
-                allow_external_network=agent_external_network,
-                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                input_payload=agent_input_payload,
-            )
-            steps.append({"step": "agent-audit", "result": agent_result})
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": "agent-audit", "result": self.compact_event_payload(agent_result)},
-            )
-            if self._agent_run_failed(agent_result):
-                raise RuntimeError(self._agent_run_error(agent_result) or "agent-audit failed")
-            await self.raise_if_cancelled(audit_run_id)
+                steps.append({"step": "agent-audit", "result": agent_result})
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "agent-audit", "result": self.compact_event_payload(agent_result)},
+                )
+                if self._agent_run_failed(agent_result):
+                    raise RuntimeError(self._agent_run_error(agent_result) or "agent-audit failed")
+                await self.raise_if_cancelled(audit_run_id)
+            else:
+                agent_result = self._skipped_result("orchestrator agent disabled")
+                steps.append({"step": "agent-audit", "result": agent_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "agent-audit", "reason": agent_result["reason"]})
 
             if self._code_batch_analysis_enabled(audit_run):
                 await self.set_pipeline_state(audit_run_id, stage="code-analysis", status="running")
@@ -164,6 +170,10 @@ class PipelineExecutor:
                     {"step": "code-analysis", "result": self.compact_event_payload(code_result)},
                 )
                 await self.raise_if_cancelled(audit_run_id)
+            else:
+                code_result = self._skipped_result("code-auditor agent disabled")
+                steps.append({"step": "code-analysis", "result": code_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "code-analysis", "reason": code_result["reason"]})
 
             await self.set_pipeline_state(audit_run_id, stage="sca", status="running")
             await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "sca"})
@@ -226,74 +236,102 @@ class PipelineExecutor:
                 )
                 findings = await self.list_findings(audit_run_id)
                 await self.raise_if_cancelled(audit_run_id)
+            else:
+                source_sink_result = self._skipped_result("source-sink-finder agent disabled")
+                steps.append({"step": "source-sink-analysis", "result": source_sink_result})
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_skipped",
+                    {"step": "source-sink-analysis", "reason": source_sink_result["reason"]},
+                )
 
-            await self.set_pipeline_state(audit_run_id, stage="validators", status="running")
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_started",
-                {"step": "validators", "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"]},
-            )
-            validator_result = await self.runtime.scale_validators(
-                audit_run_id=audit_run_id,
-                project_id=audit_run["project_id"],
-                findings=findings,
-                workspace_host_path=workspace_path,
-                validator_rounds=audit_run["validator_rounds"],
-                max_parallel_validators=audit_run["max_parallel_validators"],
-                validator_agent_name="opencode-validator",
-                allow_external_network=agent_external_network,
-                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                wait_for_completion=True,
-                cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
-                cancel_reason=lambda: self.cancel_reason(audit_run_id),
-            )
-            steps.append({"step": "validators", "result": validator_result})
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": "validators", "result": self.compact_event_payload(validator_result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
+            if self._validators_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="validators", status="running")
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_started",
+                    {"step": "validators", "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"]},
+                )
+                validator_result = await self.runtime.scale_validators(
+                    audit_run_id=audit_run_id,
+                    project_id=audit_run["project_id"],
+                    findings=findings,
+                    workspace_host_path=workspace_path,
+                    validator_rounds=audit_run["validator_rounds"],
+                    max_parallel_validators=audit_run["max_parallel_validators"],
+                    validator_agent_name=self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
+                    allow_external_network=agent_external_network,
+                    retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+                    wait_for_completion=True,
+                    cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
+                    cancel_reason=lambda: self.cancel_reason(audit_run_id),
+                )
+                steps.append({"step": "validators", "result": validator_result})
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "validators", "result": self.compact_event_payload(validator_result)},
+                )
+                await self.raise_if_cancelled(audit_run_id)
+            else:
+                validator_result = self._skipped_result("validator agent disabled")
+                steps.append({"step": "validators", "result": validator_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "validators", "reason": validator_result["reason"]})
 
-            await self.set_pipeline_state(audit_run_id, stage="judgement", status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "judgement"})
-            judge_result = await self.judge_audit_run(audit_run_id, self.runtime)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": "judgement", "result": self.compact_event_payload(judge_result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
+            if self._judgement_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="judgement", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "judgement"})
+                judge_result = await self.judge_audit_run(audit_run_id, self.runtime)
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "judgement", "result": self.compact_event_payload(judge_result)},
+                )
+                await self.raise_if_cancelled(audit_run_id)
+            else:
+                judge_result = self._skipped_result("judger agent disabled")
+                steps.append({"step": "judgement", "result": judge_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "judgement", "reason": judge_result["reason"]})
 
-            await self.set_pipeline_state(audit_run_id, stage="poc-writing", status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "poc-writing"})
-            try:
-                poc_result = await self.generate_pocs(audit_run_id, self.runtime)
-            except Exception as exc:
-                poc_result = {"ok": False, "error": str(exc)}
-                await self.record_pipeline_event(audit_run_id, "poc_writing_failed", poc_result)
-            steps.append({"step": "poc-writing", "result": poc_result})
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": "poc-writing", "result": self.compact_event_payload(poc_result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
+            if self._poc_writing_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="poc-writing", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "poc-writing"})
+                try:
+                    poc_result = await self.generate_pocs(audit_run_id, self.runtime)
+                except Exception as exc:
+                    poc_result = {"ok": False, "error": str(exc)}
+                    await self.record_pipeline_event(audit_run_id, "poc_writing_failed", poc_result)
+                steps.append({"step": "poc-writing", "result": poc_result})
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "poc-writing", "result": self.compact_event_payload(poc_result)},
+                )
+                await self.raise_if_cancelled(audit_run_id)
+            else:
+                poc_result = self._skipped_result("poc-writer agent disabled")
+                steps.append({"step": "poc-writing", "result": poc_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "poc-writing", "reason": poc_result["reason"]})
 
-            await self.set_pipeline_state(audit_run_id, stage="poc-verification", status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "poc-verification"})
-            try:
-                poc_verify_result = await self.verify_pocs(audit_run_id, self.runtime)
-            except Exception as exc:
-                poc_verify_result = {"ok": False, "error": str(exc)}
-                await self.record_pipeline_event(audit_run_id, "poc_verification_failed", poc_verify_result)
-            steps.append({"step": "poc-verification", "result": poc_verify_result})
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": "poc-verification", "result": self.compact_event_payload(poc_verify_result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
+            if self._poc_verification_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="poc-verification", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "poc-verification"})
+                try:
+                    poc_verify_result = await self.verify_pocs(audit_run_id, self.runtime)
+                except Exception as exc:
+                    poc_verify_result = {"ok": False, "error": str(exc)}
+                    await self.record_pipeline_event(audit_run_id, "poc_verification_failed", poc_verify_result)
+                steps.append({"step": "poc-verification", "result": poc_verify_result})
+                await self.record_audit_run_event(
+                    audit_run_id,
+                    "pipeline_step_completed",
+                    {"step": "poc-verification", "result": self.compact_event_payload(poc_verify_result)},
+                )
+                await self.raise_if_cancelled(audit_run_id)
+            else:
+                poc_verify_result = self._skipped_result("poc-verifier agent disabled")
+                steps.append({"step": "poc-verification", "result": poc_verify_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "poc-verification", "reason": poc_verify_result["reason"]})
 
             await self.set_pipeline_state(audit_run_id, stage="report", status="running")
             await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "report"})
@@ -437,6 +475,8 @@ class PipelineExecutor:
             elif step_name == "code-analysis":
                 if result.get("ok") is False:
                     warnings.append({"kind": "code_batch_analysis_failed", "result": result})
+                if result.get("skipped") and "disabled" in str(result.get("reason") or ""):
+                    continue
                 skipped = int(result.get("skipped") or 0)
                 failed = int(result.get("failed") or 0)
                 if skipped or failed:
@@ -444,7 +484,7 @@ class PipelineExecutor:
             elif step_name == "source-sink-analysis":
                 if result.get("ok") is False:
                     warnings.append({"kind": "source_sink_analysis_failed", "result": result})
-                if result.get("skipped"):
+                if result.get("skipped") and "disabled" not in str(result.get("reason") or ""):
                     warnings.append({"kind": "source_sink_analysis_skipped", "result": result})
             elif step_name == "validators":
                 status_counts = result.get("status_counts") if isinstance(result.get("status_counts"), dict) else {}
@@ -491,12 +531,54 @@ class PipelineExecutor:
     @staticmethod
     def _code_batch_analysis_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        return bool(config.get("enable_code_batch_analysis", True))
+        return bool(config.get("enable_code_batch_analysis", True)) and PipelineExecutor._agent_enabled(config, "code-auditor")
 
     @staticmethod
     def _source_sink_analysis_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        return bool(config.get("enable_source_sink_analysis", True))
+        return bool(config.get("enable_source_sink_analysis", True)) and PipelineExecutor._agent_enabled(config, "source-sink-finder")
+
+    @staticmethod
+    def _agent_audit_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return PipelineExecutor._agent_enabled(config, "orchestrator")
+
+    @staticmethod
+    def _validators_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_validators", True)) and PipelineExecutor._agent_enabled(config, "validator")
+
+    @staticmethod
+    def _judgement_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_judgement", True)) and PipelineExecutor._agent_enabled(config, "judger")
+
+    @staticmethod
+    def _poc_writing_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_poc_writing", True)) and PipelineExecutor._agent_enabled(config, "poc-writer")
+
+    @staticmethod
+    def _poc_verification_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_poc_verification", True)) and PipelineExecutor._agent_enabled(config, "poc-verifier")
+
+    @staticmethod
+    def _agent_enabled(config: dict[str, Any], agent: str) -> bool:
+        enabled_agents = config.get("enabled_agents")
+        if not isinstance(enabled_agents, list):
+            return True
+        return agent in {str(item) for item in enabled_agents}
+
+    @staticmethod
+    def _config_str(audit_run: dict[str, Any], key: str, default: str) -> str:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        value = config.get(key)
+        return str(value) if value else default
+
+    @staticmethod
+    def _skipped_result(reason: str) -> dict[str, Any]:
+        return {"ok": True, "skipped": True, "reason": reason}
 
     def _agent_external_network(self, audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
