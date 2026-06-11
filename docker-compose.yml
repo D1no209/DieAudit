@@ -467,6 +467,9 @@ services:
       - "13000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./configs/observability/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./configs/observability/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./configs/observability/grafana/dashboard-definitions:/var/lib/grafana/dashboards:ro
     networks:
       - platform
 

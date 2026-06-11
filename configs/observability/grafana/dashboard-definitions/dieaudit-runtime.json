@@ -1,0 +1,57 @@
+{
+  "uid": "dieaudit-runtime",
+  "title": "DieAudit Runtime",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Services Up",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(dieaudit_service_up)",
+          "legendFormat": "up"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Demo Templates Enabled",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "max(dieaudit_demo_templates_enabled)",
+          "legendFormat": "enabled"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Weak runc Sandbox Enabled",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "max(dieaudit_weak_runc_sandbox_enabled)",
+          "legendFormat": "enabled"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Service Up By Component",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "dieaudit_service_up",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    }
+  ]
+}
