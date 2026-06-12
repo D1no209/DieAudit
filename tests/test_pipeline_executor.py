@@ -24,6 +24,29 @@ class FakeRuntime:
         self.validator_runs.append(kwargs)
         return self.validator_result or {"ok": True, "created": len(kwargs.get("findings") or []), "status_counts": {"completed": len(kwargs.get("findings") or [])}}
 
+    async def run_validator_attempt(self, **kwargs: Any) -> dict[str, Any]:
+        result = await self.start_agent_run(
+            audit_run_id=kwargs["audit_run_id"],
+            project_id=kwargs["project_id"],
+            agent_name=kwargs["validator_agent_name"],
+            workspace_host_path=kwargs["workspace_host_path"],
+            allow_external_network=kwargs["allow_external_network"],
+            retain_runtime_on_failure=kwargs["retain_runtime_on_failure"],
+            input_payload={
+                "finding": kwargs["finding"],
+                "round": kwargs["round_index"],
+                "finding_artifact_contract": {
+                    "finding_markdown_path": "/finding/finding.md",
+                },
+            },
+        )
+        return {
+            "status": "completed",
+            "finding_id": kwargs["finding"]["finding_id"],
+            "round": kwargs["round_index"],
+            "result": result,
+        }
+
     async def cleanup_run(self, audit_run_id: str) -> dict[str, Any]:
         self.cleanup_runs.append(audit_run_id)
         return {"audit_run_id": audit_run_id, "removed_containers": [], "removed_networks": []}
@@ -221,6 +244,21 @@ async def test_pipeline_executor_temporal_stage_methods_run_fixed_pipeline_to_co
         result = await executor.execute_temporal_stage("run-1", stage, steps)
         if result.get("append_to_steps", True) and result.get("step"):
             steps.append({"step": result["step"], "result": result.get("result")})
+        fanout = result.get("temporal_fanout") if isinstance(result.get("temporal_fanout"), dict) else {}
+        if fanout.get("kind") == "validator-attempts":
+            attempt_results = [
+                await executor.execute_temporal_validator_attempt(attempt)
+                for attempt in fanout["attempts"]
+            ]
+            result = await executor.complete_temporal_validator_stage(
+                "run-1",
+                project_id="project-1",
+                validator_rounds=2,
+                max_parallel_validators=3,
+                validator_agent_name="opencode-validator",
+                results=attempt_results,
+            )
+            steps.append({"step": result["step"], "result": result.get("result")})
         if isinstance(result.get("judge_result"), dict):
             judge_result = result["judge_result"]
         if isinstance(result.get("report_result"), dict):
@@ -251,6 +289,69 @@ async def test_pipeline_executor_temporal_stage_methods_run_fixed_pipeline_to_co
     ]
     assert runtime.agent_runs[0]["input_payload"]["joern"]["cpg_artifact_id"] == "joern-artifact"
     assert recorder.events[-1]["event_type"] == "pipeline_completed"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_temporal_validators_return_fanout_plan() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 2,
+            "max_parallel_validators": 3,
+        }
+    )
+    executor = build_executor(recorder, runtime)
+
+    result = await executor.execute_temporal_stage("run-1", "validators", [])
+
+    fanout = result["temporal_fanout"]
+    assert fanout["kind"] == "validator-attempts"
+    assert fanout["max_parallel"] == 3
+    assert len(fanout["attempts"]) == 2
+    assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
+    assert fanout["attempts"][0]["round_index"] == 1
+    assert fanout["attempts"][1]["round_index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_temporal_validator_attempt_runs_single_agent() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+    executor = build_executor(recorder, runtime)
+
+    result = await executor.execute_temporal_validator_attempt(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "finding": {"finding_id": "finding-1", "title": "test"},
+            "workspace_host_path": "/workspace/project",
+            "round_index": 1,
+            "validator_rounds": 1,
+            "validator_agent_name": "opencode-validator",
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+        }
+    )
+
+    assert result["status"] == "completed"
+    assert result["finding_id"] == "finding-1"
+    assert len(runtime.agent_runs) == 1
+    assert runtime.agent_runs[0]["input_payload"]["finding_artifact_contract"]["finding_markdown_path"] == "/finding/finding.md"
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ TEMPORAL_PIPELINE_STAGES = [
     "poc-verification",
     "report",
 ]
+TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY = "dieaudit.validator_attempt"
 
 
 class PipelineExecutor:
@@ -581,27 +582,60 @@ class PipelineExecutor:
                     "pipeline_step_started",
                     {"step": stage, "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"], "backend": "temporal"},
                 )
-                result = await self.runtime.scale_validators(
+                await self._prepare_temporal_validator_attempts(
                     audit_run_id=audit_run_id,
                     project_id=audit_run["project_id"],
                     findings=findings,
-                    workspace_host_path=workspace_path,
                     validator_rounds=audit_run["validator_rounds"],
                     max_parallel_validators=audit_run["max_parallel_validators"],
                     validator_agent_name=self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
                     allow_external_network=agent_external_network,
                     retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                    wait_for_completion=True,
-                    cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
-                    cancel_reason=lambda: self.cancel_reason(audit_run_id),
                 )
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                )
-                await self.raise_if_cancelled(audit_run_id)
-                return {"step": stage, "result": result, "append_to_steps": True}
+                attempts = []
+                for finding in findings:
+                    for round_index in range(1, int(audit_run["validator_rounds"]) + 1):
+                        attempts.append(
+                            {
+                                "audit_run_id": audit_run_id,
+                                "project_id": audit_run["project_id"],
+                                "finding": finding,
+                                "workspace_host_path": workspace_path,
+                                "round_index": round_index,
+                                "validator_rounds": audit_run["validator_rounds"],
+                                "validator_agent_name": self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
+                                "allow_external_network": agent_external_network,
+                                "retain_runtime_on_failure": audit_run["retain_runtime_on_failure"],
+                            }
+                        )
+                if not attempts:
+                    result = {
+                        "audit_run_id": audit_run_id,
+                        "project_id": audit_run["project_id"],
+                        "status": "accepted",
+                        "scheduled": 0,
+                        "validator_rounds": audit_run["validator_rounds"],
+                        "max_parallel_validators": audit_run["max_parallel_validators"],
+                        "validator_agent_name": self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
+                        "results": [],
+                        "status_counts": {},
+                        "note": "No findings were provided.",
+                    }
+                    await self.record_audit_run_event(
+                        audit_run_id,
+                        "pipeline_step_completed",
+                        {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
+                    )
+                    return {"step": stage, "result": result, "append_to_steps": True}
+                return {
+                    "step": stage,
+                    "append_to_steps": False,
+                    "temporal_fanout": {
+                        "kind": "validator-attempts",
+                        "max_parallel": int(audit_run["max_parallel_validators"]),
+                        "attempts": attempts,
+                    },
+                }
             result = self._skipped_result("validator agent disabled")
             await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
             return {"step": stage, "result": result, "append_to_steps": True}
@@ -674,6 +708,86 @@ class PipelineExecutor:
             return {"step": stage, "result": result, "report_result": result, "append_to_steps": False}
 
         raise RuntimeError(f"unknown temporal pipeline stage: {stage}")
+
+    async def execute_temporal_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
+        audit_run_id = str(payload["audit_run_id"])
+        await self.raise_if_cancelled(audit_run_id)
+        result = await self.runtime.run_validator_attempt(
+            audit_run_id=audit_run_id,
+            project_id=str(payload["project_id"]),
+            finding=dict(payload.get("finding") or {}),
+            workspace_host_path=payload.get("workspace_host_path"),
+            round_index=int(payload["round_index"]),
+            validator_rounds=int(payload["validator_rounds"]),
+            validator_agent_name=str(payload["validator_agent_name"]),
+            allow_external_network=bool(payload.get("allow_external_network")),
+            retain_runtime_on_failure=bool(payload.get("retain_runtime_on_failure")),
+            cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
+            cancel_reason=lambda: self.cancel_reason(audit_run_id),
+        )
+        await self.raise_if_cancelled(audit_run_id)
+        return result
+
+    async def complete_temporal_validator_stage(
+        self,
+        audit_run_id: str,
+        *,
+        project_id: str,
+        validator_rounds: int,
+        max_parallel_validators: int,
+        validator_agent_name: str,
+        results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        status_counts: dict[str, int] = {}
+        for result in results:
+            status = str(result.get("status") or "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+        summary = {
+            "audit_run_id": audit_run_id,
+            "project_id": project_id,
+            "status": "accepted",
+            "scheduled": len(results),
+            "validator_rounds": validator_rounds,
+            "max_parallel_validators": max_parallel_validators,
+            "validator_agent_name": validator_agent_name,
+            "results": results,
+            "status_counts": status_counts,
+            "temporal_fanout": True,
+        }
+        await self.record_audit_run_event(
+            audit_run_id,
+            "pipeline_step_completed",
+            {"step": "validators", "backend": "temporal", "result": self.compact_event_payload(summary)},
+        )
+        await self.raise_if_cancelled(audit_run_id)
+        return {"step": "validators", "result": summary, "append_to_steps": True}
+
+    async def _prepare_temporal_validator_attempts(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        findings: list[dict[str, Any]],
+        validator_rounds: int,
+        max_parallel_validators: int,
+        validator_agent_name: str,
+        allow_external_network: bool,
+        retain_runtime_on_failure: bool,
+    ) -> None:
+        record_audit_run = getattr(self.runtime, "_record_audit_run", None)
+        if record_audit_run is not None:
+            await record_audit_run(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                validator_rounds=validator_rounds,
+                max_parallel_validators=max_parallel_validators,
+                allow_external_network=allow_external_network,
+                retain_runtime_on_failure=retain_runtime_on_failure,
+                config={"validator_agent_name": validator_agent_name, "finding_count": len(findings), "backend": "temporal"},
+            )
+        mark_findings_status = getattr(self.runtime, "_mark_findings_status", None)
+        if mark_findings_status is not None:
+            await mark_findings_status([str(finding.get("finding_id")) for finding in findings if finding.get("finding_id")], "validating")
 
     async def finalize_temporal_pipeline(
         self,

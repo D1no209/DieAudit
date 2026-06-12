@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.domain.models import AuditRun, AuditRunEvent
 from app.repositories import SessionLocal
-from app.services.pipeline_executor import TEMPORAL_PIPELINE_STAGES
+from app.services.pipeline_executor import TEMPORAL_PIPELINE_STAGES, TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY
 
 try:  # pragma: no cover - import availability is tested through helpers.
     from temporalio import activity, workflow
@@ -28,6 +28,7 @@ PREPARE_PIPELINE_ACTIVITY = "dieaudit.prepare_pipeline"
 RUN_PIPELINE_STAGE_ACTIVITY = "dieaudit.run_pipeline_stage"
 FINALIZE_PIPELINE_ACTIVITY = "dieaudit.finalize_pipeline"
 FAIL_PIPELINE_ACTIVITY = "dieaudit.fail_pipeline"
+COMPLETE_VALIDATOR_STAGE_ACTIVITY = "dieaudit.complete_validator_stage"
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,8 @@ async def run_temporal_worker(config: TemporalPipelineConfig, *, executor: Any |
         activities=[
             pipeline_activities.prepare_pipeline,
             pipeline_activities.run_pipeline_stage,
+            pipeline_activities.run_validator_attempt,
+            pipeline_activities.complete_validator_stage,
             pipeline_activities.finalize_pipeline,
             pipeline_activities.fail_pipeline,
         ],
@@ -119,6 +122,11 @@ if workflow is not None:
                     )
                     if stage_result.get("append_to_steps", True) and stage_result.get("step"):
                         steps.append({"step": stage_result["step"], "result": stage_result.get("result")})
+                    fanout = stage_result.get("temporal_fanout") if isinstance(stage_result.get("temporal_fanout"), dict) else {}
+                    if fanout.get("kind") == "validator-attempts":
+                        validator_result = await self._run_validator_fanout(audit_run_id, fanout)
+                        if validator_result.get("append_to_steps", True) and validator_result.get("step"):
+                            steps.append({"step": validator_result["step"], "result": validator_result.get("result")})
                     if isinstance(stage_result.get("judge_result"), dict):
                         judge_result = stage_result["judge_result"]
                     if isinstance(stage_result.get("report_result"), dict):
@@ -141,6 +149,38 @@ if workflow is not None:
                     start_to_close_timeout=timedelta(minutes=10),
                 )
                 return {"audit_run_id": audit_run_id, "prepare": prepare_result, "failure": failure_result}
+
+        async def _run_validator_fanout(self, audit_run_id: str, fanout: dict[str, Any]) -> dict[str, Any]:
+            attempts = list(fanout.get("attempts") or [])
+            max_parallel = max(1, int(fanout.get("max_parallel") or 1))
+            results: list[dict[str, Any]] = []
+            for offset in range(0, len(attempts), max_parallel):
+                batch = attempts[offset : offset + max_parallel]
+                batch_results = await asyncio.gather(
+                    *[
+                        workflow.execute_activity(
+                            TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY,
+                            attempt,
+                            start_to_close_timeout=timedelta(days=7),
+                            heartbeat_timeout=timedelta(seconds=30),
+                        )
+                        for attempt in batch
+                    ]
+                )
+                results.extend(batch_results)
+            first = attempts[0] if attempts else {}
+            return await workflow.execute_activity(
+                COMPLETE_VALIDATOR_STAGE_ACTIVITY,
+                {
+                    "audit_run_id": audit_run_id,
+                    "project_id": first.get("project_id"),
+                    "validator_rounds": first.get("validator_rounds"),
+                    "max_parallel_validators": max_parallel,
+                    "validator_agent_name": first.get("validator_agent_name"),
+                    "results": results,
+                },
+                start_to_close_timeout=timedelta(minutes=10),
+            )
 
 else:
 
@@ -165,6 +205,21 @@ class TemporalPipelineActivities:
                 str(payload["audit_run_id"]),
                 str(payload["stage"]),
                 list(payload.get("steps") or []),
+            )
+
+        @activity.defn(name=TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY)
+        async def run_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.execute_temporal_validator_attempt(payload)
+
+        @activity.defn(name=COMPLETE_VALIDATOR_STAGE_ACTIVITY)
+        async def complete_validator_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.complete_temporal_validator_stage(
+                str(payload["audit_run_id"]),
+                project_id=str(payload.get("project_id") or ""),
+                validator_rounds=int(payload.get("validator_rounds") or 0),
+                max_parallel_validators=int(payload.get("max_parallel_validators") or 1),
+                validator_agent_name=str(payload.get("validator_agent_name") or ""),
+                results=list(payload.get("results") or []),
             )
 
         @activity.defn(name=FINALIZE_PIPELINE_ACTIVITY)
@@ -194,6 +249,19 @@ class TemporalPipelineActivities:
                 str(payload["audit_run_id"]),
                 str(payload["stage"]),
                 list(payload.get("steps") or []),
+            )
+
+        async def run_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.execute_temporal_validator_attempt(payload)
+
+        async def complete_validator_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.complete_temporal_validator_stage(
+                str(payload["audit_run_id"]),
+                project_id=str(payload.get("project_id") or ""),
+                validator_rounds=int(payload.get("validator_rounds") or 0),
+                max_parallel_validators=int(payload.get("max_parallel_validators") or 1),
+                validator_agent_name=str(payload.get("validator_agent_name") or ""),
+                results=list(payload.get("results") or []),
             )
 
         async def finalize_pipeline(self, payload: dict[str, Any]) -> dict[str, Any]:

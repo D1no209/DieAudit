@@ -93,6 +93,23 @@ async def test_temporal_pipeline_activities_call_stage_executor_methods() -> Non
             calls.append(("finalize", {"audit_run_id": audit_run_id, "steps": steps, "judge": judge_result, "report": report_result}))
             return {"status": "completed"}
 
+        async def execute_temporal_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
+            calls.append(("validator-attempt", payload))
+            return {"status": "completed", "finding_id": payload["finding"]["finding_id"], "round": payload["round_index"]}
+
+        async def complete_temporal_validator_stage(
+            self,
+            audit_run_id: str,
+            *,
+            project_id: str,
+            validator_rounds: int,
+            max_parallel_validators: int,
+            validator_agent_name: str,
+            results: list[dict[str, Any]],
+        ) -> dict[str, Any]:
+            calls.append(("validator-complete", {"audit_run_id": audit_run_id, "results": results}))
+            return {"step": "validators", "result": {"scheduled": len(results)}}
+
         async def fail_temporal_pipeline(self, audit_run_id: str, *, error: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
             calls.append(("fail", {"audit_run_id": audit_run_id, "error": error, "steps": steps}))
             return {"status": "failed"}
@@ -104,11 +121,24 @@ async def test_temporal_pipeline_activities_call_stage_executor_methods() -> Non
         "step": "joern-cpg",
         "result": {"ok": True},
     }
+    assert await activities.run_validator_attempt(
+        {"audit_run_id": "run-1", "finding": {"finding_id": "finding-1"}, "round_index": 1}
+    ) == {"status": "completed", "finding_id": "finding-1", "round": 1}
+    assert await activities.complete_validator_stage(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+            "validator_agent_name": "opencode-validator",
+            "results": [{"status": "completed"}],
+        }
+    ) == {"step": "validators", "result": {"scheduled": 1}}
     assert await activities.finalize_pipeline(
         {"audit_run_id": "run-1", "steps": [{"step": "joern-cpg"}], "judge_result": {}, "report_result": {}}
     ) == {"status": "completed"}
     assert await activities.fail_pipeline({"audit_run_id": "run-1", "error": "boom", "steps": []}) == {"status": "failed"}
-    assert [item[0] for item in calls] == ["prepare", "stage", "finalize", "fail"]
+    assert [item[0] for item in calls] == ["prepare", "stage", "validator-attempt", "validator-complete", "finalize", "fail"]
 
 
 def test_temporal_workflow_uses_stage_activity_names() -> None:
@@ -116,6 +146,7 @@ def test_temporal_workflow_uses_stage_activity_names() -> None:
 
     assert "PREPARE_PIPELINE_ACTIVITY" in source
     assert "RUN_PIPELINE_STAGE_ACTIVITY" in source
+    assert "_run_validator_fanout" in source
     assert "FINALIZE_PIPELINE_ACTIVITY" in source
     assert "FAIL_PIPELINE_ACTIVITY" in source
 

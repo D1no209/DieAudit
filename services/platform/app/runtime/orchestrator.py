@@ -845,136 +845,28 @@ class RuntimeOrchestrator:
 
         semaphore = asyncio.Semaphore(max(1, int(max_parallel_validators)))
 
-        async def validator_cancel_state() -> tuple[bool, str | None]:
-            if cancel_requested is None:
-                return False, None
-            if not await cancel_requested():
-                return False, None
-            reason = await cancel_reason() if cancel_reason is not None else None
-            return True, reason or "cancel_requested"
-
-        async def record_cancelled_attempt(
-            *,
-            attempt_id: str,
-            finding_id: str,
-            finding: dict[str, Any],
-            round_index: int,
-            reason: str,
-        ) -> dict[str, Any]:
-            result = {"finding": finding, "reason": reason, "round": round_index}
-            await self._record_validation_attempt(
-                attempt_id=attempt_id,
-                finding_id=finding_id,
-                audit_run_id=audit_run_id,
-                round_index=round_index,
-                status="cancelled",
-                result=result,
-            )
-            await self._record_validation_evidence(
-                finding_id=finding_id,
-                audit_run_id=audit_run_id,
-                kind="validator-cancelled",
-                summary=f"Validator round {round_index} was cancelled before starting an AgentRun.",
-                payload=result,
-            )
-            return {"status": "cancelled", "finding_id": finding_id, "round": round_index, "reason": reason}
-
-        async def run_validator(finding: dict[str, Any], round_index: int) -> dict[str, Any]:
-            finding_id = str(finding.get("finding_id") or finding.get("id") or f"inline-{uuid.uuid4()}")
-            attempt_id = str(uuid.uuid4())
-            await self._record_validation_attempt(
-                attempt_id=attempt_id,
-                finding_id=finding_id,
-                audit_run_id=audit_run_id,
-                round_index=round_index,
-                status="queued",
-                result={"finding": finding},
-            )
-            cancelled, reason = await validator_cancel_state()
-            if cancelled:
-                return await record_cancelled_attempt(
-                    attempt_id=attempt_id,
-                    finding_id=finding_id,
-                    finding=finding,
-                    round_index=round_index,
-                    reason=reason or "cancel_requested",
-                )
-            async with semaphore:
-                cancelled, reason = await validator_cancel_state()
-                if cancelled:
-                    return await record_cancelled_attempt(
-                        attempt_id=attempt_id,
-                        finding_id=finding_id,
-                        finding=finding,
-                        round_index=round_index,
-                        reason=reason or "cancel_requested",
-                    )
-                await self._record_validation_attempt(
-                    attempt_id=attempt_id,
-                    finding_id=finding_id,
-                    audit_run_id=audit_run_id,
-                    round_index=round_index,
-                    status="running",
-                    result={"finding": finding},
-                )
-                payload = {
-                    "goal": "Validate the supplied finding and produce evidence, confidence, and next steps.",
-                    "finding": finding,
-                    "round": round_index,
-                    "validator_rounds": validator_rounds,
-                    "finding_artifact_contract": self._finding_artifact_contract(audit_run_id, finding_id, f"validator-round-{round_index}"),
-                }
-                try:
-                    result = await self.start_agent_run(
-                        audit_run_id=audit_run_id,
-                        project_id=project_id,
-                        agent_name=validator_agent_name,
-                        workspace_host_path=workspace_host_path,
-                        allow_external_network=allow_external_network,
-                        retain_runtime_on_failure=retain_runtime_on_failure,
-                        input_payload=payload,
-                    )
-                except Exception as exc:
-                    await self._record_validation_attempt(
-                        attempt_id=attempt_id,
-                        finding_id=finding_id,
-                        audit_run_id=audit_run_id,
-                        round_index=round_index,
-                        status="failed",
-                        result={"finding": finding, "error": str(exc)},
-                    )
-                    await self._record_validation_evidence(
-                        finding_id=finding_id,
-                        audit_run_id=audit_run_id,
-                        kind="validator-error",
-                        summary=f"Validator round {round_index} failed: {exc}",
-                        payload={"round": round_index, "error": str(exc), "finding": finding},
-                    )
-                    raise
-                agent_run_id = str(result.get("agent_run_id") or result.get("run_id") or "")
-                await self._record_validation_attempt(
-                    attempt_id=attempt_id,
-                    finding_id=finding_id,
-                    audit_run_id=audit_run_id,
-                    round_index=round_index,
-                    status="completed",
-                    agent_run_id=agent_run_id or None,
-                    result={"finding": finding, "agent_run": result},
-                )
-                await self._record_validation_evidence(
-                    finding_id=finding_id,
-                    audit_run_id=audit_run_id,
-                    kind="validator-agent-run",
-                    summary=f"Validator round {round_index} completed with AgentRun {agent_run_id or 'unknown'}.",
-                    payload={"round": round_index, "agent_run_id": agent_run_id, "result": result},
-                )
-                return {"status": "completed", "finding_id": finding_id, "round": round_index, "result": result}
-
         scheduled: list[asyncio.Task] = []
         await self._mark_findings_status([str(finding.get("finding_id")) for finding in findings if finding.get("finding_id")], "validating")
         for finding in findings:
             for round_index in range(1, validator_rounds + 1):
-                scheduled.append(asyncio.create_task(run_validator(finding, round_index)))
+                scheduled.append(
+                    asyncio.create_task(
+                        self.run_validator_attempt(
+                            audit_run_id=audit_run_id,
+                            project_id=project_id,
+                            finding=finding,
+                            workspace_host_path=workspace_host_path,
+                            round_index=round_index,
+                            validator_rounds=validator_rounds,
+                            validator_agent_name=validator_agent_name,
+                            allow_external_network=allow_external_network,
+                            retain_runtime_on_failure=retain_runtime_on_failure,
+                            semaphore=semaphore,
+                            cancel_requested=cancel_requested,
+                            cancel_reason=cancel_reason,
+                        )
+                    )
+                )
 
         async def drain(tasks: list[asyncio.Task]) -> list[dict[str, Any]]:
             results: list[dict[str, Any]] = []
@@ -1005,6 +897,196 @@ class RuntimeOrchestrator:
             "results": results if wait_for_completion else [],
             "status_counts": status_counts,
         }
+
+    async def run_validator_attempt(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        finding: dict[str, Any],
+        workspace_host_path: str | None,
+        round_index: int,
+        validator_rounds: int,
+        validator_agent_name: str,
+        allow_external_network: bool,
+        retain_runtime_on_failure: bool,
+        semaphore: asyncio.Semaphore | None = None,
+        cancel_requested: Callable[[], Awaitable[bool]] | None = None,
+        cancel_reason: Callable[[], Awaitable[str | None]] | None = None,
+    ) -> dict[str, Any]:
+        async def validator_cancel_state() -> tuple[bool, str | None]:
+            if cancel_requested is None:
+                return False, None
+            if not await cancel_requested():
+                return False, None
+            reason = await cancel_reason() if cancel_reason is not None else None
+            return True, reason or "cancel_requested"
+
+        finding_id = str(finding.get("finding_id") or finding.get("id") or f"inline-{uuid.uuid4()}")
+        attempt_id = str(uuid.uuid4())
+        await self._record_validation_attempt(
+            attempt_id=attempt_id,
+            finding_id=finding_id,
+            audit_run_id=audit_run_id,
+            round_index=round_index,
+            status="queued",
+            result={"finding": finding},
+        )
+        cancelled, reason = await validator_cancel_state()
+        if cancelled:
+            return await self._record_cancelled_validator_attempt(
+                attempt_id=attempt_id,
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                finding=finding,
+                round_index=round_index,
+                reason=reason or "cancel_requested",
+            )
+        if semaphore is None:
+            return await self._run_validator_attempt_inner(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                finding=finding,
+                finding_id=finding_id,
+                attempt_id=attempt_id,
+                workspace_host_path=workspace_host_path,
+                round_index=round_index,
+                validator_rounds=validator_rounds,
+                validator_agent_name=validator_agent_name,
+                allow_external_network=allow_external_network,
+                retain_runtime_on_failure=retain_runtime_on_failure,
+                cancel_state=validator_cancel_state,
+            )
+        async with semaphore:
+            return await self._run_validator_attempt_inner(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                finding=finding,
+                finding_id=finding_id,
+                attempt_id=attempt_id,
+                workspace_host_path=workspace_host_path,
+                round_index=round_index,
+                validator_rounds=validator_rounds,
+                validator_agent_name=validator_agent_name,
+                allow_external_network=allow_external_network,
+                retain_runtime_on_failure=retain_runtime_on_failure,
+                cancel_state=validator_cancel_state,
+            )
+
+    async def _run_validator_attempt_inner(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        finding: dict[str, Any],
+        finding_id: str,
+        attempt_id: str,
+        workspace_host_path: str | None,
+        round_index: int,
+        validator_rounds: int,
+        validator_agent_name: str,
+        allow_external_network: bool,
+        retain_runtime_on_failure: bool,
+        cancel_state: Callable[[], Awaitable[tuple[bool, str | None]]],
+    ) -> dict[str, Any]:
+        cancelled, reason = await cancel_state()
+        if cancelled:
+            return await self._record_cancelled_validator_attempt(
+                attempt_id=attempt_id,
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                finding=finding,
+                round_index=round_index,
+                reason=reason or "cancel_requested",
+            )
+        await self._record_validation_attempt(
+            attempt_id=attempt_id,
+            finding_id=finding_id,
+            audit_run_id=audit_run_id,
+            round_index=round_index,
+            status="running",
+            result={"finding": finding},
+        )
+        payload = {
+            "goal": "Validate the supplied finding and produce evidence, confidence, and next steps.",
+            "finding": finding,
+            "round": round_index,
+            "validator_rounds": validator_rounds,
+            "finding_artifact_contract": self._finding_artifact_contract(audit_run_id, finding_id, f"validator-round-{round_index}"),
+        }
+        try:
+            result = await self.start_agent_run(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                agent_name=validator_agent_name,
+                workspace_host_path=workspace_host_path,
+                allow_external_network=allow_external_network,
+                retain_runtime_on_failure=retain_runtime_on_failure,
+                input_payload=payload,
+            )
+        except Exception as exc:
+            await self._record_validation_attempt(
+                attempt_id=attempt_id,
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                round_index=round_index,
+                status="failed",
+                result={"finding": finding, "error": str(exc)},
+            )
+            await self._record_validation_evidence(
+                finding_id=finding_id,
+                audit_run_id=audit_run_id,
+                kind="validator-error",
+                summary=f"Validator round {round_index} failed: {exc}",
+                payload={"round": round_index, "error": str(exc), "finding": finding},
+            )
+            raise
+        agent_run_id = str(result.get("agent_run_id") or result.get("run_id") or "")
+        await self._record_validation_attempt(
+            attempt_id=attempt_id,
+            finding_id=finding_id,
+            audit_run_id=audit_run_id,
+            round_index=round_index,
+            status="completed",
+            agent_run_id=agent_run_id or None,
+            result={"finding": finding, "agent_run": result},
+        )
+        await self._record_validation_evidence(
+            finding_id=finding_id,
+            audit_run_id=audit_run_id,
+            kind="validator-agent-run",
+            summary=f"Validator round {round_index} completed with AgentRun {agent_run_id or 'unknown'}.",
+            payload={"round": round_index, "agent_run_id": agent_run_id, "result": result},
+        )
+        return {"status": "completed", "finding_id": finding_id, "round": round_index, "result": result}
+
+    async def _record_cancelled_validator_attempt(
+        self,
+        *,
+        attempt_id: str,
+        finding_id: str,
+        audit_run_id: str,
+        finding: dict[str, Any],
+        round_index: int,
+        reason: str,
+    ) -> dict[str, Any]:
+        result = {"finding": finding, "reason": reason, "round": round_index}
+        await self._record_validation_attempt(
+            attempt_id=attempt_id,
+            finding_id=finding_id,
+            audit_run_id=audit_run_id,
+            round_index=round_index,
+            status="cancelled",
+            result=result,
+        )
+        await self._record_validation_evidence(
+            finding_id=finding_id,
+            audit_run_id=audit_run_id,
+            kind="validator-cancelled",
+            summary=f"Validator round {round_index} was cancelled before starting an AgentRun.",
+            payload=result,
+        )
+        return {"status": "cancelled", "finding_id": finding_id, "round": round_index, "reason": reason}
 
     async def _start_mcp(
         self,

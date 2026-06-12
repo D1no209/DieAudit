@@ -264,11 +264,15 @@ The default `workflow-worker` backend still uses the existing durable database
 queue and `PipelineExecutor` path. Temporal mode does not enqueue into that
 database queue.
 
-Current limitation: fan-out inside a stage, such as per-Finding Validator,
-Source-Sink Finder, Judger, PoC Writer, and Verifier concurrency, is still
-managed inside the stage implementation. A future hardening pass should split
-those per-Finding tasks into Temporal child workflows or activities with
-per-agent retry, timeout, and idempotency boundaries.
+Validator fan-out is also Temporal-aware: each Finding/round Validator attempt
+is scheduled as a separate Temporal activity, bounded by
+`max_parallel_validators`.
+
+Current limitation: Source-Sink Finder, Judger, PoC Writer, and Verifier
+per-Finding fan-out is still managed inside the stage implementation. A future
+hardening pass should split those per-Finding tasks into Temporal child
+workflows or activities with per-agent retry, timeout, and idempotency
+boundaries.
 
 ## Demo Profile
 
