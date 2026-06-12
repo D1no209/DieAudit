@@ -255,16 +255,20 @@ More details are in [docs/production-readiness.md](docs/production-readiness.md)
 
 Temporal is available as an execution backend. When
 `PIPELINE_EXECUTION_BACKEND=temporal`, `/run-pipeline` starts a Temporal
-workflow on `TEMPORAL_TASK_QUEUE`; the workflow enqueues the AuditRun into the
-existing durable worker queue and waits for terminal status. This gives each
-AuditRun Temporal workflow history and a migration path toward native
-step-level activities.
+workflow on `TEMPORAL_TASK_QUEUE`. The workflow runs the main audit pipeline as
+stage-level Temporal activities:
 
-Current limitation: the individual audit stages are still executed by the
-existing `PipelineExecutor`. Future work should split `snapshot -> joern ->
-agents -> validators -> judger -> poc -> report -> cleanup` into separate
-Temporal activities with activity-level retry, timeout, heartbeat, and
-idempotency boundaries.
+`joern-cpg -> agent-audit -> code-analysis -> sca -> semgrep -> source-sink-analysis -> validators -> judgement -> poc-writing -> poc-verification -> report -> cleanup`.
+
+The default `workflow-worker` backend still uses the existing durable database
+queue and `PipelineExecutor` path. Temporal mode does not enqueue into that
+database queue.
+
+Current limitation: fan-out inside a stage, such as per-Finding Validator,
+Source-Sink Finder, Judger, PoC Writer, and Verifier concurrency, is still
+managed inside the stage implementation. A future hardening pass should split
+those per-Finding tasks into Temporal child workflows or activities with
+per-agent retry, timeout, and idempotency boundaries.
 
 ## Demo Profile
 

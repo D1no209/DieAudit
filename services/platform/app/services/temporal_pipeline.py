@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.domain.models import AuditRun, AuditRunEvent
 from app.repositories import SessionLocal
+from app.services.pipeline_executor import TEMPORAL_PIPELINE_STAGES
 
 try:  # pragma: no cover - import availability is tested through helpers.
     from temporalio import activity, workflow
@@ -23,6 +24,10 @@ except Exception:  # pragma: no cover
 
 TERMINAL_AUDIT_STATUSES = {"completed", "completed_with_warnings", "failed", "cancelled"}
 TEMPORAL_PIPELINE_WORKFLOW = "DieAuditPipelineWorkflow"
+PREPARE_PIPELINE_ACTIVITY = "dieaudit.prepare_pipeline"
+RUN_PIPELINE_STAGE_ACTIVITY = "dieaudit.run_pipeline_stage"
+FINALIZE_PIPELINE_ACTIVITY = "dieaudit.finalize_pipeline"
+FAIL_PIPELINE_ACTIVITY = "dieaudit.fail_pipeline"
 
 
 @dataclass(frozen=True)
@@ -60,15 +65,23 @@ def temporal_workflow_id(audit_run_id: str) -> str:
     return f"dieaudit-audit-run-{audit_run_id}"
 
 
-async def run_temporal_worker(config: TemporalPipelineConfig, *, stop_event: asyncio.Event | None = None) -> None:
+async def run_temporal_worker(config: TemporalPipelineConfig, *, executor: Any | None = None, stop_event: asyncio.Event | None = None) -> None:
     if Worker is None:
         raise RuntimeError("temporalio package is not installed")
+    if executor is None:
+        raise RuntimeError("Temporal pipeline worker requires a PipelineExecutor")
     client = await connect_temporal_client(config)
+    pipeline_activities = TemporalPipelineActivities(executor)
     worker = Worker(
         client,
         task_queue=config.task_queue,
         workflows=[DieAuditPipelineWorkflow],
-        activities=[enqueue_pipeline_activity, wait_for_pipeline_completion_activity],
+        activities=[
+            pipeline_activities.prepare_pipeline,
+            pipeline_activities.run_pipeline_stage,
+            pipeline_activities.finalize_pipeline,
+            pipeline_activities.fail_pipeline,
+        ],
     )
     if stop_event is None:
         await worker.run()
@@ -88,24 +101,115 @@ if workflow is not None:
     class DieAuditPipelineWorkflow:
         @workflow.run
         async def run(self, audit_run_id: str) -> dict[str, Any]:
-            enqueue_result = await workflow.execute_activity(
-                enqueue_pipeline_activity,
+            prepare_result = await workflow.execute_activity(
+                PREPARE_PIPELINE_ACTIVITY,
                 audit_run_id,
                 start_to_close_timeout=timedelta(seconds=30),
             )
-            completion = await workflow.execute_activity(
-                wait_for_pipeline_completion_activity,
-                audit_run_id,
-                start_to_close_timeout=timedelta(days=7),
-                heartbeat_timeout=timedelta(seconds=30),
-            )
-            return {"audit_run_id": audit_run_id, "enqueue": enqueue_result, "completion": completion}
+            steps: list[dict[str, Any]] = []
+            judge_result: dict[str, Any] = {}
+            report_result: dict[str, Any] = {}
+            try:
+                for stage in TEMPORAL_PIPELINE_STAGES:
+                    stage_result = await workflow.execute_activity(
+                        RUN_PIPELINE_STAGE_ACTIVITY,
+                        {"audit_run_id": audit_run_id, "stage": stage, "steps": steps},
+                        start_to_close_timeout=timedelta(days=7),
+                        heartbeat_timeout=timedelta(seconds=30),
+                    )
+                    if stage_result.get("append_to_steps", True) and stage_result.get("step"):
+                        steps.append({"step": stage_result["step"], "result": stage_result.get("result")})
+                    if isinstance(stage_result.get("judge_result"), dict):
+                        judge_result = stage_result["judge_result"]
+                    if isinstance(stage_result.get("report_result"), dict):
+                        report_result = stage_result["report_result"]
+                final_result = await workflow.execute_activity(
+                    FINALIZE_PIPELINE_ACTIVITY,
+                    {
+                        "audit_run_id": audit_run_id,
+                        "steps": steps,
+                        "judge_result": judge_result,
+                        "report_result": report_result,
+                    },
+                    start_to_close_timeout=timedelta(minutes=10),
+                )
+                return {"audit_run_id": audit_run_id, "prepare": prepare_result, "final": final_result}
+            except Exception as exc:
+                failure_result = await workflow.execute_activity(
+                    FAIL_PIPELINE_ACTIVITY,
+                    {"audit_run_id": audit_run_id, "error": str(exc), "steps": steps},
+                    start_to_close_timeout=timedelta(minutes=10),
+                )
+                return {"audit_run_id": audit_run_id, "prepare": prepare_result, "failure": failure_result}
 
 else:
 
     class DieAuditPipelineWorkflow:  # type: ignore[no-redef]
         async def run(self, audit_run_id: str) -> dict[str, Any]:
             raise RuntimeError("temporalio package is not installed")
+
+
+class TemporalPipelineActivities:
+    def __init__(self, executor: Any) -> None:
+        self.executor = executor
+
+    if activity is not None:
+
+        @activity.defn(name=PREPARE_PIPELINE_ACTIVITY)
+        async def prepare_pipeline(self, audit_run_id: str) -> dict[str, Any]:
+            return await self.executor.prepare_temporal_pipeline(audit_run_id)
+
+        @activity.defn(name=RUN_PIPELINE_STAGE_ACTIVITY)
+        async def run_pipeline_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.execute_temporal_stage(
+                str(payload["audit_run_id"]),
+                str(payload["stage"]),
+                list(payload.get("steps") or []),
+            )
+
+        @activity.defn(name=FINALIZE_PIPELINE_ACTIVITY)
+        async def finalize_pipeline(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.finalize_temporal_pipeline(
+                str(payload["audit_run_id"]),
+                steps=list(payload.get("steps") or []),
+                judge_result=dict(payload.get("judge_result") or {}),
+                report_result=dict(payload.get("report_result") or {}),
+            )
+
+        @activity.defn(name=FAIL_PIPELINE_ACTIVITY)
+        async def fail_pipeline(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.fail_temporal_pipeline(
+                str(payload["audit_run_id"]),
+                error=str(payload.get("error") or "Temporal pipeline failed"),
+                steps=list(payload.get("steps") or []),
+            )
+
+    else:
+
+        async def prepare_pipeline(self, audit_run_id: str) -> dict[str, Any]:
+            return await self.executor.prepare_temporal_pipeline(audit_run_id)
+
+        async def run_pipeline_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.execute_temporal_stage(
+                str(payload["audit_run_id"]),
+                str(payload["stage"]),
+                list(payload.get("steps") or []),
+            )
+
+        async def finalize_pipeline(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.finalize_temporal_pipeline(
+                str(payload["audit_run_id"]),
+                steps=list(payload.get("steps") or []),
+                judge_result=dict(payload.get("judge_result") or {}),
+                report_result=dict(payload.get("report_result") or {}),
+            )
+
+        async def fail_pipeline(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.fail_temporal_pipeline(
+                str(payload["audit_run_id"]),
+                error=str(payload.get("error") or "Temporal pipeline failed"),
+                steps=list(payload.get("steps") or []),
+            )
 
 
 if activity is not None:

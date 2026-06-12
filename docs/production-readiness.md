@@ -13,11 +13,14 @@ but cannot install safely by itself.
 - Use the workflow worker execution backend:
   - Set `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable
     queue, or `PIPELINE_EXECUTION_BACKEND=temporal` to start AuditRuns through
-    Temporal.
+    Temporal stage activities.
   - Keep `workflow-worker` running in the `core` Compose profile.
   - Verify `/runtime/workers` reports a fresh running worker heartbeat.
   - When using `temporal`, verify `/runtime/temporal/health` and set
     `TEMPORAL_TASK_QUEUE` consistently for API and worker services.
+  - Temporal mode runs the main pipeline stages as activities; per-Finding
+    Agent fan-out inside those stages is still managed by the application
+    runtime and should be split into child workflows in a later hardening pass.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
   - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when

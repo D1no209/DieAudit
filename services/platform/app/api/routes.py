@@ -961,10 +961,15 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if is_active_pipeline(audit_run.get("status"), audit_run.get("config")):
             raise HTTPException(status_code=409, detail="audit run pipeline is already active")
         await _clear_pipeline_cancel(audit_run_id)
-        await _mark_audit_run_status(audit_run_id, "queued")
-        await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
         backend = _normalized_pipeline_backend(settings)
-        await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": backend})
+        if backend == "temporal":
+            await _mark_audit_run_status(audit_run_id, "running")
+            await _set_pipeline_state(audit_run_id, stage="temporal-starting", status="running")
+            await _record_audit_run_event(audit_run_id, "pipeline_temporal_starting", {"status": "running", "backend": backend})
+        else:
+            await _mark_audit_run_status(audit_run_id, "queued")
+            await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
+            await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": backend})
         if backend == "background-tasks":
             background_tasks.add_task(pipeline_executor(runtime).execute, audit_run_id)
         elif backend == "temporal":

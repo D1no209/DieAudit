@@ -129,6 +129,7 @@ async def run_worker() -> None:
                     namespace=settings.temporal_namespace,
                     task_queue=settings.temporal_task_queue,
                 ),
+                executor=executor,
                 stop_event=stop_event,
             )
         )
@@ -136,6 +137,12 @@ async def run_worker() -> None:
     try:
         worker_status = "idle"
         while not stop_event.is_set():
+            if temporal_task is not None:
+                if temporal_task.done():
+                    temporal_task.result()
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop_event.wait(), timeout=settings.pipeline_worker_poll_interval_seconds)
+                continue
             claimed = await claim_next_queued_pipeline(worker_id=worker_id)
             if not claimed:
                 with contextlib.suppress(asyncio.TimeoutError):

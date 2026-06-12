@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from app.services.pipeline_executor import PipelineExecutor
+from app.services.pipeline_executor import TEMPORAL_PIPELINE_STAGES, PipelineExecutor
 
 
 class FakeRuntime:
@@ -195,6 +195,62 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     assert recorder.summary is not None
     assert recorder.events[-1]["event_type"] == "pipeline_completed"
     assert recorder.pipeline_events[-1]["event_type"] == "runtime_cleanup_completed"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_temporal_stage_methods_run_fixed_pipeline_to_completion() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 2,
+            "max_parallel_validators": 3,
+        }
+    )
+    executor = build_executor(recorder, runtime)
+    steps: list[dict[str, Any]] = []
+    judge_result: dict[str, Any] = {}
+    report_result: dict[str, Any] = {}
+
+    prepare = await executor.prepare_temporal_pipeline("run-1")
+    for stage in TEMPORAL_PIPELINE_STAGES:
+        result = await executor.execute_temporal_stage("run-1", stage, steps)
+        if result.get("append_to_steps", True) and result.get("step"):
+            steps.append({"step": result["step"], "result": result.get("result")})
+        if isinstance(result.get("judge_result"), dict):
+            judge_result = result["judge_result"]
+        if isinstance(result.get("report_result"), dict):
+            report_result = result["report_result"]
+    final = await executor.finalize_temporal_pipeline(
+        "run-1",
+        steps=steps,
+        judge_result=judge_result,
+        report_result=report_result,
+    )
+
+    assert prepare["status"] == "running"
+    assert final["status"] == "completed"
+    assert recorder.statuses == ["running", "completed"]
+    assert [item["stage"] for item in recorder.pipeline_states] == [
+        "joern-cpg",
+        "agent-audit",
+        "code-analysis",
+        "sca",
+        "semgrep",
+        "source-sink-analysis",
+        "validators",
+        "judgement",
+        "poc-writing",
+        "poc-verification",
+        "report",
+        "completed",
+    ]
+    assert runtime.agent_runs[0]["input_payload"]["joern"]["cpg_artifact_id"] == "joern-artifact"
+    assert recorder.events[-1]["event_type"] == "pipeline_completed"
 
 
 @pytest.mark.asyncio

@@ -70,6 +70,57 @@ def test_temporal_workflow_id_is_stable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_temporal_pipeline_activities_call_stage_executor_methods() -> None:
+    calls: list[tuple[str, Any]] = []
+
+    class _FakeExecutor:
+        async def prepare_temporal_pipeline(self, audit_run_id: str) -> dict[str, Any]:
+            calls.append(("prepare", audit_run_id))
+            return {"audit_run_id": audit_run_id}
+
+        async def execute_temporal_stage(self, audit_run_id: str, stage: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+            calls.append(("stage", {"audit_run_id": audit_run_id, "stage": stage, "steps": steps}))
+            return {"step": stage, "result": {"ok": True}}
+
+        async def finalize_temporal_pipeline(
+            self,
+            audit_run_id: str,
+            *,
+            steps: list[dict[str, Any]],
+            judge_result: dict[str, Any],
+            report_result: dict[str, Any],
+        ) -> dict[str, Any]:
+            calls.append(("finalize", {"audit_run_id": audit_run_id, "steps": steps, "judge": judge_result, "report": report_result}))
+            return {"status": "completed"}
+
+        async def fail_temporal_pipeline(self, audit_run_id: str, *, error: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+            calls.append(("fail", {"audit_run_id": audit_run_id, "error": error, "steps": steps}))
+            return {"status": "failed"}
+
+    activities = temporal_pipeline.TemporalPipelineActivities(_FakeExecutor())
+
+    assert await activities.prepare_pipeline("run-1") == {"audit_run_id": "run-1"}
+    assert await activities.run_pipeline_stage({"audit_run_id": "run-1", "stage": "joern-cpg", "steps": []}) == {
+        "step": "joern-cpg",
+        "result": {"ok": True},
+    }
+    assert await activities.finalize_pipeline(
+        {"audit_run_id": "run-1", "steps": [{"step": "joern-cpg"}], "judge_result": {}, "report_result": {}}
+    ) == {"status": "completed"}
+    assert await activities.fail_pipeline({"audit_run_id": "run-1", "error": "boom", "steps": []}) == {"status": "failed"}
+    assert [item[0] for item in calls] == ["prepare", "stage", "finalize", "fail"]
+
+
+def test_temporal_workflow_uses_stage_activity_names() -> None:
+    source = temporal_pipeline.DieAuditPipelineWorkflow.run.__code__.co_names
+
+    assert "PREPARE_PIPELINE_ACTIVITY" in source
+    assert "RUN_PIPELINE_STAGE_ACTIVITY" in source
+    assert "FINALIZE_PIPELINE_ACTIVITY" in source
+    assert "FAIL_PIPELINE_ACTIVITY" in source
+
+
+@pytest.mark.asyncio
 async def test_start_temporal_pipeline_uses_configured_task_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
