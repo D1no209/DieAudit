@@ -53,6 +53,7 @@ class PipelineExecutor:
         verify_pocs: AsyncCallback,
         generate_report: AsyncCallback,
         compact_event_payload: Callable[[Any], Any],
+        list_evidence: AsyncCallback | None = None,
         run_joern: AsyncCallback | None = None,
         run_code_batch_analysis: AsyncCallback | None = None,
         run_source_sink_analysis: AsyncCallback | None = None,
@@ -60,6 +61,10 @@ class PipelineExecutor:
         complete_source_sink_analysis: AsyncCallback | None = None,
         run_judger_finding: AsyncCallback | None = None,
         complete_judgement: AsyncCallback | None = None,
+        run_poc_writer_finding: AsyncCallback | None = None,
+        complete_poc_writing: AsyncCallback | None = None,
+        run_poc_verifier_finding: AsyncCallback | None = None,
+        complete_poc_verification: AsyncCallback | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -73,6 +78,7 @@ class PipelineExecutor:
         self.is_cancel_requested = is_cancel_requested
         self.cancel_reason = cancel_reason
         self.list_findings = list_findings
+        self.list_evidence = list_evidence
         self.run_joern = run_joern
         self.run_code_batch_analysis = run_code_batch_analysis
         self.run_source_sink_analysis = run_source_sink_analysis
@@ -80,6 +86,10 @@ class PipelineExecutor:
         self.complete_source_sink_analysis = complete_source_sink_analysis
         self.run_judger_finding = run_judger_finding
         self.complete_judgement = complete_judgement
+        self.run_poc_writer_finding = run_poc_writer_finding
+        self.complete_poc_writing = complete_poc_writing
+        self.run_poc_verifier_finding = run_poc_verifier_finding
+        self.complete_poc_verification = complete_poc_verification
         self.run_sca = run_sca
         self.run_semgrep = run_semgrep
         self.judge_audit_run = judge_audit_run
@@ -734,6 +744,39 @@ class PipelineExecutor:
             if self._poc_writing_enabled(audit_run):
                 await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
                 await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
+                if self.run_poc_writer_finding is not None and self.complete_poc_writing is not None:
+                    findings = await self.list_findings(audit_run_id)
+                    selected = [finding for finding in findings if str(finding.get("status") or "").lower() == "confirmed"]
+                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+                    selected = selected[: max(1, int(config.get("max_poc_findings") or 25))]
+                    if not selected:
+                        result = {"ok": True, "scheduled": 0, "completed": 0, "failed": 0, "skipped": True, "reason": "no confirmed findings"}
+                        await self.record_pipeline_event(audit_run_id, "poc_writing_skipped", result)
+                        await self.record_audit_run_event(
+                            audit_run_id,
+                            "pipeline_step_completed",
+                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
+                        )
+                        return {"step": stage, "result": result, "append_to_steps": True}
+                    return {
+                        "step": stage,
+                        "append_to_steps": False,
+                        "temporal_fanout": {
+                            "kind": "poc-writer-findings",
+                            "stage": stage,
+                            "max_parallel": max(1, int(config.get("max_parallel_poc_writers") or 2)),
+                            "attempts": [
+                                {
+                                    "audit_run_id": audit_run_id,
+                                    "project_id": audit_run["project_id"],
+                                    "workspace_host_path": workspace_path,
+                                    "audit_run": audit_run,
+                                    "finding": finding,
+                                }
+                                for finding in selected
+                            ],
+                        },
+                    }
                 try:
                     result = await self.generate_pocs(audit_run_id, self.runtime)
                 except Exception as exc:
@@ -754,6 +797,57 @@ class PipelineExecutor:
             if self._poc_verification_enabled(audit_run):
                 await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
                 await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
+                if self.run_poc_verifier_finding is not None and self.complete_poc_verification is not None and self.list_evidence is not None:
+                    findings = await self.list_findings(audit_run_id)
+                    evidence = await self.list_evidence(audit_run_id)
+                    findings_by_id = {str(item.get("finding_id")): item for item in findings}
+                    grouped: dict[str, list[dict[str, Any]]] = {}
+                    for item in evidence:
+                        if str(item.get("kind") or "") in {"poc-artifact", "poc-plan"}:
+                            grouped.setdefault(str(item.get("finding_id") or ""), []).append(item)
+                    if not grouped:
+                        result = {
+                            "ok": True,
+                            "scheduled": 0,
+                            "completed": 0,
+                            "failed": 0,
+                            "skipped": True,
+                            "reason": "no PoC artifacts or workspace unavailable",
+                        }
+                        await self.record_pipeline_event(audit_run_id, "poc_verification_skipped", result)
+                        await self.record_audit_run_event(
+                            audit_run_id,
+                            "pipeline_step_completed",
+                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
+                        )
+                        return {"step": stage, "result": result, "append_to_steps": True}
+                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+                    attempts = []
+                    for finding_id, items in grouped.items():
+                        finding = findings_by_id.get(finding_id)
+                        if finding is None:
+                            attempts.append({"audit_run_id": audit_run_id, "finding_id": finding_id, "poc_evidence": items, "missing_finding": True})
+                            continue
+                        attempts.append(
+                            {
+                                "audit_run_id": audit_run_id,
+                                "project_id": audit_run["project_id"],
+                                "workspace_host_path": workspace_path,
+                                "audit_run": audit_run,
+                                "finding": finding,
+                                "poc_evidence": items,
+                            }
+                        )
+                    return {
+                        "step": stage,
+                        "append_to_steps": False,
+                        "temporal_fanout": {
+                            "kind": "poc-verifier-findings",
+                            "stage": stage,
+                            "max_parallel": max(1, int(config.get("max_parallel_poc_verifiers") or 2)),
+                            "attempts": attempts,
+                        },
+                    }
                 try:
                     result = await self.verify_pocs(audit_run_id, self.runtime)
                 except Exception as exc:
@@ -864,6 +958,31 @@ class PipelineExecutor:
             )
             await self.raise_if_cancelled(audit_run_id)
             return result
+        if kind == "poc-writer-finding":
+            if self.run_poc_writer_finding is None:
+                return {"status": "failed", "error": "poc writer finding callback is not configured"}
+            result = await self.run_poc_writer_finding(
+                audit_run_id,
+                self.runtime,
+                dict(payload.get("audit_run") or {}),
+                dict(payload.get("finding") or {}),
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return result
+        if kind == "poc-verifier-finding":
+            if payload.get("missing_finding"):
+                return {"finding_id": str(payload.get("finding_id") or ""), "status": "skipped", "reason": "finding not found"}
+            if self.run_poc_verifier_finding is None:
+                return {"status": "failed", "error": "poc verifier finding callback is not configured"}
+            result = await self.run_poc_verifier_finding(
+                audit_run_id,
+                self.runtime,
+                dict(payload.get("audit_run") or {}),
+                dict(payload.get("finding") or {}),
+                list(payload.get("poc_evidence") or []),
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return result
         raise RuntimeError(f"unknown temporal swarm agent kind: {kind}")
 
     async def complete_temporal_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -905,6 +1024,34 @@ class PipelineExecutor:
             )
             await self.raise_if_cancelled(audit_run_id)
             return {"step": stage, "result": summary, "judge_result": summary, "append_to_steps": True}
+        if stage == "poc-writing":
+            if self.complete_poc_writing is None:
+                status_counts = self._count_results_by_status(results)
+                failed = int(status_counts.get("failed") or 0)
+                summary = {"ok": failed == 0, "scheduled": len(results), "failed": failed, "status_counts": status_counts, "results": results}
+            else:
+                summary = await self.complete_poc_writing(audit_run_id, results)
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return {"step": stage, "result": summary, "append_to_steps": True}
+        if stage == "poc-verification":
+            if self.complete_poc_verification is None:
+                status_counts = self._count_results_by_status(results)
+                failed = int(status_counts.get("failed") or 0)
+                summary = {"ok": failed == 0, "scheduled": len(results), "failed": failed, "status_counts": status_counts, "results": results}
+            else:
+                summary = await self.complete_poc_verification(audit_run_id, results)
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return {"step": stage, "result": summary, "append_to_steps": True}
         raise RuntimeError(f"unknown temporal swarm stage: {stage}")
 
     async def _prepare_temporal_validator_attempts(
