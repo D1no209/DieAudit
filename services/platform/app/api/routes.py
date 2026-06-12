@@ -160,6 +160,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             run_source_sink_analysis=_run_source_sink_analysis,
             run_source_sink_finding=_run_source_sink_finding_internal,
             complete_source_sink_analysis=_complete_source_sink_analysis_internal,
+            run_judger_finding=_run_judger_finding_internal,
+            complete_judgement=_complete_judgement_internal,
             run_sca=_run_sca_mcp,
             run_semgrep=_run_semgrep_mcp,
             judge_audit_run=_judge_audit_run_internal,
@@ -3395,9 +3397,6 @@ async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str
         return {"missing": True}
     workspace_path = audit_run.get("config", {}).get("workspace_host_path")
     findings = await _list_findings(audit_run_id)
-    evidence = await _list_evidence(audit_run_id)
-    attempts = await _list_validation_attempts(audit_run_id)
-    parsed_decisions: list[dict[str, Any]] = []
     agent_results: list[dict[str, Any]] = []
     if findings and workspace_path:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
@@ -3405,61 +3404,78 @@ async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str
         semaphore = asyncio.Semaphore(max_parallel)
 
         async def judge_one(finding: dict[str, Any]) -> dict[str, Any]:
-            finding_id = str(finding.get("finding_id") or "")
             async with semaphore:
-                try:
-                    _ensure_finding_state_markdown(
-                        audit_run_id,
-                        finding,
-                        evidence=[item for item in evidence if str(item.get("finding_id")) == finding_id],
-                        attempts=[item for item in attempts if str(item.get("finding_id")) == finding_id],
-                    )
-                    agent_result = await runtime.start_agent_run(
-                        audit_run_id=audit_run_id,
-                        project_id=audit_run["project_id"],
-                        agent_name=str(config.get("judger_agent_name") or "opencode-judger"),
-                        workspace_host_path=workspace_path,
-                        allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
-                        retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                        input_payload={
-                            "goal": (
-                                "Judge this single Finding after source-to-sink analysis and validation. Return JSON with decisions: "
-                                "[{\"finding_id\":\"...\",\"status\":\"confirmed|false_positive|needs_review\",\"reason\":\"...\"}]."
-                            ),
-                            "audit_phase": "judgement",
-                            "finding": finding,
-                            "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
-                            "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
-                            "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "judger"),
-                            "joern": _latest_joern_context(audit_run),
-                        },
-                    )
-                    agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
-                    decisions = await _extract_judger_decisions(agent_run_id) if agent_run_id else []
-                    await _write_finding_agent_report(
-                        audit_run_id=audit_run_id,
-                        finding_id=finding_id,
-                        stage="judger",
-                        agent_run_id=agent_run_id or None,
-                        title="Judger Report",
-                        payload={"decisions": decisions, "agent_result": _compact_event_payload(agent_result)},
-                    )
-                    failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
-                    return {
-                        "finding_id": finding_id,
-                        "status": "failed" if failed else "completed",
-                        "agent_run_id": agent_run_id or None,
-                        "decisions": decisions,
-                        "agent_result": _compact_event_payload(agent_result),
-                    }
-                except Exception as exc:
-                    result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
-                    await _record_pipeline_event(audit_run_id, "judger_finding_failed", result)
-                    return result
+                return await _run_judger_finding_internal(audit_run_id, runtime, audit_run, finding)
 
         agent_results = await asyncio.gather(*(judge_one(finding) for finding in findings))
-        for result in agent_results:
-            parsed_decisions.extend([item for item in result.get("decisions", []) if isinstance(item, dict)])
+    return await _complete_judgement_internal(audit_run_id, agent_results)
+
+
+async def _run_judger_finding_internal(audit_run_id: str, runtime: Any, audit_run: dict[str, Any], finding: dict[str, Any]) -> dict[str, Any]:
+    workspace_path = audit_run.get("config", {}).get("workspace_host_path")
+    if not workspace_path:
+        return {"finding_id": str(finding.get("finding_id") or ""), "status": "failed", "error": "audit run has no workspace path"}
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    finding_id = str(finding.get("finding_id") or "")
+    evidence = await _list_evidence(audit_run_id)
+    attempts = await _list_validation_attempts(audit_run_id)
+    finding_evidence = [item for item in evidence if str(item.get("finding_id")) == finding_id]
+    finding_attempts = [item for item in attempts if str(item.get("finding_id")) == finding_id]
+    try:
+        _ensure_finding_state_markdown(
+            audit_run_id,
+            finding,
+            evidence=finding_evidence,
+            attempts=finding_attempts,
+        )
+        agent_result = await runtime.start_agent_run(
+            audit_run_id=audit_run_id,
+            project_id=audit_run["project_id"],
+            agent_name=str(config.get("judger_agent_name") or "opencode-judger"),
+            workspace_host_path=workspace_path,
+            allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+            retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
+            input_payload={
+                "goal": (
+                    "Judge this single Finding after source-to-sink analysis and validation. Return JSON with decisions: "
+                    "[{\"finding_id\":\"...\",\"status\":\"confirmed|false_positive|needs_review\",\"reason\":\"...\"}]."
+                ),
+                "audit_phase": "judgement",
+                "finding": finding,
+                "evidence": finding_evidence,
+                "validation_attempts": finding_attempts,
+                "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "judger"),
+                "joern": _latest_joern_context(audit_run),
+            },
+        )
+        agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+        decisions = await _extract_judger_decisions(agent_run_id) if agent_run_id else []
+        await _write_finding_agent_report(
+            audit_run_id=audit_run_id,
+            finding_id=finding_id,
+            stage="judger",
+            agent_run_id=agent_run_id or None,
+            title="Judger Report",
+            payload={"decisions": decisions, "agent_result": _compact_event_payload(agent_result)},
+        )
+        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        return {
+            "finding_id": finding_id,
+            "status": "failed" if failed else "completed",
+            "agent_run_id": agent_run_id or None,
+            "decisions": decisions,
+            "agent_result": _compact_event_payload(agent_result),
+        }
+    except Exception as exc:
+        result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
+        await _record_pipeline_event(audit_run_id, "judger_finding_failed", result)
+        return result
+
+
+async def _complete_judgement_internal(audit_run_id: str, agent_results: list[dict[str, Any]]) -> dict[str, Any]:
+    parsed_decisions: list[dict[str, Any]] = []
+    for result in agent_results:
+        parsed_decisions.extend([item for item in result.get("decisions", []) if isinstance(item, dict)])
     decisions = await _apply_judgement(audit_run_id, parsed_decisions)
     result = {"audit_run_id": audit_run_id, "agent_runs": agent_results, "decisions": decisions}
     await _record_pipeline_event(audit_run_id, "judgement_completed", result)

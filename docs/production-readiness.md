@@ -19,9 +19,10 @@ but cannot install safely by itself.
   - When using `temporal`, verify `/runtime/temporal/health` and set
     `TEMPORAL_TASK_QUEUE` consistently for API and worker services.
   - Temporal mode runs the main pipeline stages as activities, schedules each
-    Source-Sink Finder Finding as its own activity, and schedules each
-    Validator Finding/round attempt as its own activity.
-  - Judger, PoC Writer, and Verifier fan-out is still managed inside stage
+    Source-Sink Finder Finding as its own activity, schedules each Validator
+    Finding/round attempt as its own activity, and schedules each Judger
+    Finding as its own activity.
+  - PoC Writer and Verifier fan-out is still managed inside stage
     implementations and should be split into child workflows in a later
     hardening pass.
 - Keep HTTP guard rails enabled:

@@ -121,6 +121,19 @@ class CallbackRecorder:
             "results": results,
         }
 
+    async def run_judger_finding(self, *args: Any) -> dict[str, Any]:
+        finding = args[-1]
+        return {
+            "finding_id": finding["finding_id"],
+            "status": "completed",
+            "agent_run_id": "judger-agent-1",
+            "decisions": [{"finding_id": finding["finding_id"], "status": "needs_review", "reason": "test"}],
+        }
+
+    async def complete_judgement(self, audit_run_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+        decisions = [decision for result in results for decision in result.get("decisions", [])]
+        return {"audit_run_id": audit_run_id, "agent_runs": results, "decisions": decisions}
+
     async def run_sca(self, *args: Any) -> dict[str, Any]:
         return {"ok": True, "findings_created": 0}
 
@@ -168,6 +181,8 @@ def build_executor(recorder: CallbackRecorder, runtime: FakeRuntime | None = Non
         run_source_sink_analysis=recorder.run_source_sink_analysis,
         run_source_sink_finding=recorder.run_source_sink_finding,
         complete_source_sink_analysis=recorder.complete_source_sink_analysis,
+        run_judger_finding=recorder.run_judger_finding,
+        complete_judgement=recorder.complete_judgement,
         run_sca=recorder.run_sca,
         run_semgrep=recorder.run_semgrep,
         judge_audit_run=recorder.judge,
@@ -271,6 +286,15 @@ async def test_pipeline_executor_temporal_stage_methods_run_fixed_pipeline_to_co
             ]
             result = await executor.complete_temporal_swarm_stage(
                 {"audit_run_id": "run-1", "stage": "source-sink-analysis", "kind": fanout["kind"], "results": attempt_results}
+            )
+            steps.append({"step": result["step"], "result": result.get("result")})
+        if fanout.get("kind") == "judger-findings":
+            attempt_results = [
+                await executor.execute_temporal_swarm_agent({"kind": "judger-finding", **attempt})
+                for attempt in fanout["attempts"]
+            ]
+            result = await executor.complete_temporal_swarm_stage(
+                {"audit_run_id": "run-1", "stage": "judgement", "kind": fanout["kind"], "results": attempt_results}
             )
             steps.append({"step": result["step"], "result": result.get("result")})
         if fanout.get("kind") == "validator-attempts":
@@ -410,6 +434,68 @@ async def test_pipeline_executor_temporal_source_sink_runs_single_finding_and_co
     assert result["step"] == "source-sink-analysis"
     assert result["result"]["scheduled"] == 1
     assert result["result"]["chains_created"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_temporal_judgement_returns_finding_fanout_plan() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project", "max_parallel_judgers": 5},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+    executor = build_executor(recorder, runtime)
+
+    result = await executor.execute_temporal_stage("run-1", "judgement", [])
+
+    fanout = result["temporal_fanout"]
+    assert fanout["kind"] == "judger-findings"
+    assert fanout["stage"] == "judgement"
+    assert fanout["max_parallel"] == 5
+    assert len(fanout["attempts"]) == 1
+    assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_temporal_judgement_runs_single_finding_and_completes_stage() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+    executor = build_executor(recorder, runtime)
+
+    attempt = await executor.execute_temporal_swarm_agent(
+        {
+            "kind": "judger-finding",
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "workspace_host_path": "/workspace/project",
+            "audit_run": recorder.audit_run,
+            "finding": {"finding_id": "finding-1", "title": "test"},
+        }
+    )
+    result = await executor.complete_temporal_swarm_stage(
+        {"audit_run_id": "run-1", "stage": "judgement", "kind": "judger-findings", "results": [attempt]}
+    )
+
+    assert attempt["status"] == "completed"
+    assert attempt["decisions"][0]["status"] == "needs_review"
+    assert result["step"] == "judgement"
+    assert result["judge_result"]["decisions"][0]["finding_id"] == "finding-1"
 
 
 @pytest.mark.asyncio

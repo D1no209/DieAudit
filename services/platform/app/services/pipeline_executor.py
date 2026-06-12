@@ -58,6 +58,8 @@ class PipelineExecutor:
         run_source_sink_analysis: AsyncCallback | None = None,
         run_source_sink_finding: AsyncCallback | None = None,
         complete_source_sink_analysis: AsyncCallback | None = None,
+        run_judger_finding: AsyncCallback | None = None,
+        complete_judgement: AsyncCallback | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -76,6 +78,8 @@ class PipelineExecutor:
         self.run_source_sink_analysis = run_source_sink_analysis
         self.run_source_sink_finding = run_source_sink_finding
         self.complete_source_sink_analysis = complete_source_sink_analysis
+        self.run_judger_finding = run_judger_finding
+        self.complete_judgement = complete_judgement
         self.run_sca = run_sca
         self.run_semgrep = run_semgrep
         self.judge_audit_run = judge_audit_run
@@ -681,8 +685,39 @@ class PipelineExecutor:
 
         if stage == "judgement":
             if self._judgement_enabled(audit_run):
+                findings = await self.list_findings(audit_run_id)
                 await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal", "finding_count": len(findings)})
+                if self.run_judger_finding is not None and self.complete_judgement is not None:
+                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+                    if not findings:
+                        result = await self.complete_judgement(audit_run_id, [])
+                        await self.record_audit_run_event(
+                            audit_run_id,
+                            "pipeline_step_completed",
+                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
+                        )
+                        return {"step": stage, "result": result, "judge_result": result, "append_to_steps": True}
+                    attempts = [
+                        {
+                            "audit_run_id": audit_run_id,
+                            "project_id": audit_run["project_id"],
+                            "workspace_host_path": workspace_path,
+                            "audit_run": audit_run,
+                            "finding": finding,
+                        }
+                        for finding in findings
+                    ]
+                    return {
+                        "step": stage,
+                        "append_to_steps": False,
+                        "temporal_fanout": {
+                            "kind": "judger-findings",
+                            "stage": stage,
+                            "max_parallel": max(1, int(config.get("max_parallel_judgers") or 2)),
+                            "attempts": attempts,
+                        },
+                    }
                 result = await self.judge_audit_run(audit_run_id, self.runtime)
                 await self.record_audit_run_event(
                     audit_run_id,
@@ -818,6 +853,17 @@ class PipelineExecutor:
             )
             await self.raise_if_cancelled(audit_run_id)
             return result
+        if kind == "judger-finding":
+            if self.run_judger_finding is None:
+                return {"status": "failed", "error": "judger finding callback is not configured"}
+            result = await self.run_judger_finding(
+                audit_run_id,
+                self.runtime,
+                dict(payload.get("audit_run") or {}),
+                dict(payload.get("finding") or {}),
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return result
         raise RuntimeError(f"unknown temporal swarm agent kind: {kind}")
 
     async def complete_temporal_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -848,6 +894,17 @@ class PipelineExecutor:
             )
             await self.raise_if_cancelled(audit_run_id)
             return {"step": stage, "result": summary, "append_to_steps": True}
+        if stage == "judgement":
+            if self.complete_judgement is None:
+                return {"step": stage, "result": {"agent_runs": results, "decisions": []}, "judge_result": {"agent_runs": results, "decisions": []}, "append_to_steps": True}
+            summary = await self.complete_judgement(audit_run_id, results)
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return {"step": stage, "result": summary, "judge_result": summary, "append_to_steps": True}
         raise RuntimeError(f"unknown temporal swarm stage: {stage}")
 
     async def _prepare_temporal_validator_attempts(

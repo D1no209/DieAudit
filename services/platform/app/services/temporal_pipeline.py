@@ -138,6 +138,14 @@ if workflow is not None:
                         swarm_result = await self._run_swarm_fanout(audit_run_id, fanout)
                         if swarm_result.get("append_to_steps", True) and swarm_result.get("step"):
                             steps.append({"step": swarm_result["step"], "result": swarm_result.get("result")})
+                        if isinstance(swarm_result.get("judge_result"), dict):
+                            judge_result = swarm_result["judge_result"]
+                    elif fanout.get("kind") == "judger-findings":
+                        swarm_result = await self._run_swarm_fanout(audit_run_id, fanout)
+                        if swarm_result.get("append_to_steps", True) and swarm_result.get("step"):
+                            steps.append({"step": swarm_result["step"], "result": swarm_result.get("result")})
+                        if isinstance(swarm_result.get("judge_result"), dict):
+                            judge_result = swarm_result["judge_result"]
                     if isinstance(stage_result.get("judge_result"), dict):
                         judge_result = stage_result["judge_result"]
                     if isinstance(stage_result.get("report_result"), dict):
@@ -198,6 +206,7 @@ if workflow is not None:
             max_parallel = max(1, int(fanout.get("max_parallel") or 1))
             stage = str(fanout.get("stage") or "")
             kind = str(fanout.get("kind") or "")
+            activity_kind = {"source-sink-findings": "source-sink-finding", "judger-findings": "judger-finding"}.get(kind, kind)
             results: list[dict[str, Any]] = []
             for offset in range(0, len(attempts), max_parallel):
                 batch = attempts[offset : offset + max_parallel]
@@ -205,7 +214,7 @@ if workflow is not None:
                     *[
                         workflow.execute_activity(
                             TEMPORAL_SWARM_AGENT_ACTIVITY,
-                            {"kind": "source-sink-finding" if kind == "source-sink-findings" else kind, **attempt},
+                            {"kind": activity_kind, **attempt},
                             start_to_close_timeout=timedelta(days=7),
                             heartbeat_timeout=timedelta(seconds=30),
                         )
