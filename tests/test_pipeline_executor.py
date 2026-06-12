@@ -58,6 +58,51 @@ class FailingRuntime(FakeRuntime):
         raise RuntimeError("agent crashed")
 
 
+class _ScalarRows:
+    def __init__(self, rows: list[Any]) -> None:
+        self.rows = rows
+
+    def scalars(self) -> "_ScalarRows":
+        return self
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class _AgentRunRow:
+    def __init__(self, *, agent_run_id: str, input_summary: dict[str, Any]) -> None:
+        self.agent_run_id = agent_run_id
+        self.audit_run_id = "run-1"
+        self.status = "completed"
+        self.input_summary = input_summary
+        self.updated_at = None
+
+
+class _AgentRunSession:
+    def __init__(self, rows: list[_AgentRunRow]) -> None:
+        self.rows = rows
+
+    async def __aenter__(self) -> "_AgentRunSession":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def execute(self, query: Any) -> _ScalarRows:
+        return _ScalarRows(self.rows)
+
+    async def scalar(self, query: Any) -> _AgentRunRow | None:
+        return self.rows[0] if self.rows else None
+
+    async def commit(self) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pipeline_executor_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.services.pipeline_executor.SessionLocal", lambda: _AgentRunSession([]))
+
+
 class CallbackRecorder:
     def __init__(self, audit_run: dict[str, Any]) -> None:
         self.audit_run = audit_run
@@ -675,6 +720,52 @@ async def test_pipeline_executor_temporal_poc_verifier_runs_single_finding_and_c
     assert attempt["status"] == "completed"
     assert result["step"] == "poc-verification"
     assert result["result"]["verification_evidence_created"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_reuses_completed_temporal_agent_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+    cached = {
+        "finding_id": "finding-1",
+        "status": "completed",
+        "chains_created": 1,
+    }
+    row = _AgentRunRow(
+        agent_run_id="agent-cached",
+        input_summary={
+            "activity_key": "dieaudit-run-1-source-sink-finding-1",
+            "activity_result": cached,
+        },
+    )
+    monkeypatch.setattr("app.services.pipeline_executor.SessionLocal", lambda: _AgentRunSession([row]))
+    executor = build_executor(recorder, runtime)
+
+    result = await executor.execute_temporal_swarm_agent(
+        {
+            "kind": "source-sink-finding",
+            "activity_key": "dieaudit-run-1-source-sink-finding-1",
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "workspace_host_path": "/workspace/project",
+            "audit_run": recorder.audit_run,
+            "finding": {"finding_id": "finding-1", "title": "test"},
+        }
+    )
+
+    assert result["agent_run_id"] == "agent-cached"
+    assert result["reused_activity_key"] == "dieaudit-run-1-source-sink-finding-1"
+    assert runtime.agent_runs == []
 
 
 @pytest.mark.asyncio

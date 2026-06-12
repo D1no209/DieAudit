@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
+from sqlalchemy import select
+
+from app.domain.models import AgentRun
+from app.repositories import SessionLocal
 from app.settings import Settings
 
 
@@ -893,6 +897,9 @@ class PipelineExecutor:
     async def execute_temporal_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
         audit_run_id = str(payload["audit_run_id"])
         await self.raise_if_cancelled(audit_run_id)
+        cached = await self._reuse_completed_agent_activity(audit_run_id, payload)
+        if cached is not None:
+            return cached
         result = await self.runtime.run_validator_attempt(
             audit_run_id=audit_run_id,
             project_id=str(payload["project_id"]),
@@ -906,6 +913,7 @@ class PipelineExecutor:
             cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
             cancel_reason=lambda: self.cancel_reason(audit_run_id),
         )
+        await self._mark_agent_activity_key(audit_run_id, payload, result)
         await self.raise_if_cancelled(audit_run_id)
         return result
 
@@ -947,6 +955,9 @@ class PipelineExecutor:
         audit_run_id = str(payload["audit_run_id"])
         kind = str(payload.get("kind") or "")
         await self.raise_if_cancelled(audit_run_id)
+        cached = await self._reuse_completed_agent_activity(audit_run_id, payload)
+        if cached is not None:
+            return cached
         if kind == "source-sink-finding":
             if self.run_source_sink_finding is None:
                 return {"status": "failed", "error": "source-to-sink finding callback is not configured"}
@@ -958,6 +969,7 @@ class PipelineExecutor:
                 dict(payload.get("audit_run") or {}),
                 dict(payload.get("finding") or {}),
             )
+            await self._mark_agent_activity_key(audit_run_id, payload, result)
             await self.raise_if_cancelled(audit_run_id)
             return result
         if kind == "judger-finding":
@@ -969,6 +981,7 @@ class PipelineExecutor:
                 dict(payload.get("audit_run") or {}),
                 dict(payload.get("finding") or {}),
             )
+            await self._mark_agent_activity_key(audit_run_id, payload, result)
             await self.raise_if_cancelled(audit_run_id)
             return result
         if kind == "poc-writer-finding":
@@ -980,6 +993,7 @@ class PipelineExecutor:
                 dict(payload.get("audit_run") or {}),
                 dict(payload.get("finding") or {}),
             )
+            await self._mark_agent_activity_key(audit_run_id, payload, result)
             await self.raise_if_cancelled(audit_run_id)
             return result
         if kind == "poc-verifier-finding":
@@ -994,6 +1008,7 @@ class PipelineExecutor:
                 dict(payload.get("finding") or {}),
                 list(payload.get("poc_evidence") or []),
             )
+            await self._mark_agent_activity_key(audit_run_id, payload, result)
             await self.raise_if_cancelled(audit_run_id)
             return result
         raise RuntimeError(f"unknown temporal swarm agent kind: {kind}")
@@ -1114,6 +1129,46 @@ class PipelineExecutor:
             parts.append(f"round-{round_index}")
         raw = "-".join(parts)
         return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw)[:255]
+
+    async def _reuse_completed_agent_activity(self, audit_run_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        activity_key = str(payload.get("activity_key") or "")
+        if not activity_key:
+            return None
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(AgentRun)
+                    .where(AgentRun.audit_run_id == audit_run_id)
+                    .where(AgentRun.status == "completed")
+                    .order_by(AgentRun.updated_at.desc())
+                )
+            ).scalars()
+            for row in rows:
+                input_summary = row.input_summary or {}
+                if input_summary.get("activity_key") == activity_key:
+                    cached = dict(input_summary.get("activity_result") or {})
+                    if cached:
+                        cached.setdefault("agent_run_id", row.agent_run_id)
+                        cached.setdefault("status", "completed")
+                        cached["reused_activity_key"] = activity_key
+                        return cached
+        return None
+
+    async def _mark_agent_activity_key(self, audit_run_id: str, payload: dict[str, Any], result: dict[str, Any]) -> None:
+        activity_key = str(payload.get("activity_key") or "")
+        agent_run_id = str(result.get("agent_run_id") or result.get("run_id") or "")
+        if not activity_key or not agent_run_id:
+            return
+        async with SessionLocal() as session:
+            row = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id).where(AgentRun.audit_run_id == audit_run_id))
+            if row is None:
+                return
+            input_summary = dict(row.input_summary or {})
+            input_summary["activity_key"] = activity_key
+            input_summary["activity_kind"] = payload.get("kind") or "validator-attempt"
+            input_summary["activity_result"] = result
+            row.input_summary = input_summary
+            await session.commit()
 
     async def finalize_temporal_pipeline(
         self,

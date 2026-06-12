@@ -22,9 +22,10 @@ but cannot install safely by itself.
     Finder, Judger, PoC Writer, and PoC Verifier run one activity per Finding,
     while Validators run one activity per Finding/round.
   - Fan-out activities use stable activity IDs derived from AuditRun, stage,
-    Finding, and Validator round, with bounded retry policies. A later
-    hardening pass should add deeper idempotent write guards and stronger
-    heartbeat semantics inside each Agent adapter.
+    Finding, and Validator round, with bounded retry policies. Completed
+    AgentRuns with the same activity key are reused on retry to avoid duplicate
+    Agent containers. A later hardening pass should add stronger heartbeat
+    semantics inside each Agent adapter.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
   - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when
