@@ -24,8 +24,11 @@ but cannot install safely by itself.
   - Fan-out activities use stable activity IDs derived from AuditRun, stage,
     Finding, and Validator round, with bounded retry policies. Completed
     AgentRuns with the same activity key are reused on retry to avoid duplicate
-    Agent containers. A later hardening pass should add stronger heartbeat
-    semantics inside each Agent adapter.
+    Agent containers. Long-running stage, Validator, and Agent fan-out
+    activities emit Temporal heartbeats, while AgentRun events record container
+    start, OpenCode wait, log capture, result parsing, and terminal status. A
+    later hardening pass should add finer-grained streaming progress from inside
+    the ACP/OpenCode adapter.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
   - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when

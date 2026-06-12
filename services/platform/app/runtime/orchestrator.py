@@ -284,11 +284,23 @@ class RuntimeOrchestrator:
             status="starting",
             input_summary=input_payload or {},
         )
+        await self._record_agent_event(
+            run_id,
+            "agent_run_started",
+            {
+                "audit_run_id": audit_run_id,
+                "project_id": project_id,
+                "agent_name": agent_name,
+                "template_name": agent.get("name", agent_name),
+                "protocol_kind": protocol_kind,
+            },
+        )
         mcp_results: list[dict[str, Any]] = []
         mcp_servers: dict[str, dict[str, str]] = {}
 
         try:
             for mcp_name in agent.get("required_mcp", []):
+                await self._record_agent_event(run_id, "mcp_sidecar_starting", {"mcp_name": mcp_name})
                 mcp = self.mcp_templates.get(mcp_name)
                 mcp_container = await self._start_mcp(
                     audit_run_id=audit_run_id,
@@ -297,6 +309,15 @@ class RuntimeOrchestrator:
                     network_name=network_name,
                     workspace_host_path=workspace_host_path,
                     template=mcp,
+                )
+                await self._record_agent_event(
+                    run_id,
+                    "mcp_sidecar_started",
+                    {
+                        "mcp_name": mcp_name,
+                        "container_id": mcp_container.get("id"),
+                        "container_name": mcp_container.get("name"),
+                    },
                 )
                 mcp_results.append(mcp_container)
                 if mcp.get("transport", "http") in {"http", "sse"}:
@@ -316,6 +337,15 @@ class RuntimeOrchestrator:
                     mcp_servers=mcp_servers,
                     input_payload=input_payload or {},
                 )
+                await self._record_agent_event(
+                    run_id,
+                    "runtime_package_created",
+                    {
+                        "path": runtime_package["host_path"],
+                        "content_hash": runtime_package["content_hash"],
+                        "manifest": runtime_package["manifest"],
+                    },
+                )
 
             agent_container = await self._start_agent(
                 audit_run_id=audit_run_id,
@@ -328,6 +358,15 @@ class RuntimeOrchestrator:
                 template=agent,
                 mcp_servers=mcp_servers,
                 input_payload=input_payload or {},
+            )
+            await self._record_agent_event(
+                run_id,
+                "agent_container_started",
+                {
+                    "container_id": agent_container.get("id"),
+                    "container_name": agent_container.get("name"),
+                    "image": agent_container.get("image"),
+                },
             )
             opencode_result: dict[str, Any] | None = None
             structured_ingest: dict[str, Any] | None = None
@@ -344,14 +383,12 @@ class RuntimeOrchestrator:
                     project_id=project_id,
                     payload=opencode_result,
                 )
-            if runtime_package:
                 await self._record_agent_event(
                     run_id,
-                    "runtime_package",
+                    "structured_output_ingest_completed",
                     {
-                        "path": runtime_package["host_path"],
-                        "content_hash": runtime_package["content_hash"],
-                        "manifest": runtime_package["manifest"],
+                        "status": opencode_result.get("status") if opencode_result else None,
+                        "structured_ingest": structured_ingest,
                     },
                 )
             final_status = "running"
@@ -376,6 +413,16 @@ class RuntimeOrchestrator:
                 artifact_path=opencode_result.get("artifact") if opencode_result else None,
                 error=opencode_result.get("error") if opencode_result and opencode_result.get("status") == "failed" else None,
             )
+            await self._record_agent_event(
+                run_id,
+                "agent_run_finished",
+                {
+                    "status": final_status,
+                    "opencode_status": opencode_result.get("status") if opencode_result else None,
+                    "artifact": opencode_result.get("artifact") if opencode_result else None,
+                    "error": opencode_result.get("error") if opencode_result else None,
+                },
+            )
             return {
                 "run_id": run_id,
                 "agent_run_id": run_id,
@@ -389,6 +436,14 @@ class RuntimeOrchestrator:
                 "opencode_status": opencode_result.get("status") if opencode_result else None,
             }
         except Exception as exc:
+            await self._record_agent_event(
+                run_id,
+                "agent_run_failed",
+                {
+                    "error": str(exc),
+                    "retain_runtime_on_failure": retain_runtime_on_failure,
+                },
+            )
             await self._record_agent_run(
                 agent_run_id=run_id,
                 audit_run_id=audit_run_id,
@@ -1284,6 +1339,11 @@ class RuntimeOrchestrator:
         artifact_dir: Path,
     ) -> dict[str, Any]:
         wait_error: str | None = None
+        await self._record_agent_event(
+            agent_run_id,
+            "opencode_wait_started",
+            {"container_id": container_id, "timeout_seconds": getattr(self.settings, "opencode_agent_timeout_seconds", 600)},
+        )
         try:
             wait_result = await asyncio.wait_for(
                 self.docker.wait_container(container_id),
@@ -1291,12 +1351,19 @@ class RuntimeOrchestrator:
             )
         except asyncio.TimeoutError:
             wait_error = f"OpenCode agent timed out after {getattr(self.settings, 'opencode_agent_timeout_seconds', 600)}s"
+            await self._record_agent_event(agent_run_id, "opencode_wait_timeout", {"container_id": container_id, "error": wait_error})
             await self.docker.stop_container(container_id, timeout_seconds=3)
             wait_result = {"StatusCode": 124, "error": wait_error}
         except Exception as exc:
             wait_error = str(exc)
+            await self._record_agent_event(agent_run_id, "opencode_wait_failed", {"container_id": container_id, "error": wait_error})
             wait_result = {"StatusCode": 1, "error": wait_error}
         status_code = int(wait_result.get("StatusCode") or 0)
+        await self._record_agent_event(
+            agent_run_id,
+            "opencode_container_exited",
+            {"container_id": container_id, "exit_code": status_code, "wait_result": wait_result},
+        )
         log_artifact = await self._capture_container_logs(
             audit_run_id=audit_run_id,
             container_id=container_id,
@@ -1309,6 +1376,11 @@ class RuntimeOrchestrator:
             log_artifact=log_artifact,
         )
         result_file = artifact_dir / "agent_result.json"
+        await self._record_agent_event(
+            agent_run_id,
+            "opencode_logs_captured",
+            {"container_id": container_id, "log_artifact": log_artifact, "result_file": str(result_file)},
+        )
         payload: dict[str, Any] = {
             "status": "failed",
             "wait_result": wait_result,
@@ -1320,10 +1392,21 @@ class RuntimeOrchestrator:
         if result_file.exists():
             try:
                 payload.update(json.loads(result_file.read_text(encoding="utf-8")))
+                await self._record_agent_event(
+                    agent_run_id,
+                    "opencode_result_file_loaded",
+                    {"artifact": str(result_file), "status": payload.get("status")},
+                )
             except json.JSONDecodeError as exc:
                 payload["error"] = f"invalid agent_result.json: {exc}"
+                await self._record_agent_event(
+                    agent_run_id,
+                    "opencode_result_file_invalid",
+                    {"artifact": str(result_file), "error": payload["error"]},
+                )
         elif not wait_error:
             payload["error"] = "agent_result.json not found"
+            await self._record_agent_event(agent_run_id, "opencode_result_file_missing", {"artifact": str(result_file)})
 
         for event in payload.get("events", []):
             await self._record_agent_event(agent_run_id, event.get("event_type", "acp_event"), event)

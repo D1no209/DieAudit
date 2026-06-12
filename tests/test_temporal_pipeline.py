@@ -187,6 +187,49 @@ def test_temporal_workflow_uses_retry_policy_and_stable_activity_ids() -> None:
 
 
 @pytest.mark.asyncio
+async def test_activity_heartbeat_wrapper_records_started_and_completed(monkeypatch: pytest.MonkeyPatch) -> None:
+    heartbeats: list[dict[str, Any]] = []
+
+    class _FakeActivity:
+        @staticmethod
+        def heartbeat(payload: dict[str, Any]) -> None:
+            heartbeats.append(payload)
+
+    async def _work() -> dict[str, Any]:
+        return {"ok": True}
+
+    monkeypatch.setattr(temporal_pipeline, "activity", _FakeActivity)
+
+    result = await temporal_pipeline._await_with_activity_heartbeat(_work(), {"audit_run_id": "run-1", "activity": "test"})
+
+    assert result == {"ok": True}
+    assert heartbeats[0]["status"] == "started"
+    assert heartbeats[-1]["status"] == "completed"
+    assert all(item["audit_run_id"] == "run-1" for item in heartbeats)
+
+
+@pytest.mark.asyncio
+async def test_activity_heartbeat_wrapper_records_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    heartbeats: list[dict[str, Any]] = []
+
+    class _FakeActivity:
+        @staticmethod
+        def heartbeat(payload: dict[str, Any]) -> None:
+            heartbeats.append(payload)
+
+    async def _work() -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(temporal_pipeline, "activity", _FakeActivity)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await temporal_pipeline._await_with_activity_heartbeat(_work(), {"audit_run_id": "run-1", "activity": "test"})
+
+    assert heartbeats[0]["status"] == "started"
+    assert heartbeats[-1]["status"] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_start_temporal_pipeline_uses_configured_task_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 

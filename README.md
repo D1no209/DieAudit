@@ -273,8 +273,11 @@ Fan-out activities use stable activity IDs derived from AuditRun, stage,
 Finding, and Validator round, and use bounded Temporal retry policies. On
 activity retry, completed AgentRuns with the same activity key are reused
 instead of starting duplicate Agent containers. Current limitation: these
-fan-outs are activities, not child workflows. A future hardening pass can add
-stronger activity heartbeat semantics inside each Agent adapter.
+fan-outs are activities, not child workflows. Temporal activities emit periodic
+heartbeats while long-running Agent work is active, and AgentRun events record
+container start, OpenCode wait, log capture, result file parsing, and final
+status. A future hardening pass can add finer-grained streaming progress from
+inside the ACP/OpenCode adapter.
 
 ## Demo Profile
 

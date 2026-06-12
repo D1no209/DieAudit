@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -38,6 +39,7 @@ FAIL_PIPELINE_ACTIVITY = "dieaudit.fail_pipeline"
 COMPLETE_VALIDATOR_STAGE_ACTIVITY = "dieaudit.complete_validator_stage"
 SHORT_ACTIVITY_RETRY_POLICY = RetryPolicy(maximum_attempts=3) if RetryPolicy is not None else None
 AGENT_ACTIVITY_RETRY_POLICY = RetryPolicy(maximum_attempts=2) if RetryPolicy is not None else None
+ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -273,15 +275,27 @@ class TemporalPipelineActivities:
 
         @activity.defn(name=RUN_PIPELINE_STAGE_ACTIVITY)
         async def run_pipeline_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
-            return await self.executor.execute_temporal_stage(
-                str(payload["audit_run_id"]),
-                str(payload["stage"]),
-                list(payload.get("steps") or []),
+            audit_run_id = str(payload["audit_run_id"])
+            stage = str(payload["stage"])
+            return await _await_with_activity_heartbeat(
+                self.executor.execute_temporal_stage(
+                    audit_run_id,
+                    stage,
+                    list(payload.get("steps") or []),
+                ),
+                {
+                    "audit_run_id": audit_run_id,
+                    "activity": RUN_PIPELINE_STAGE_ACTIVITY,
+                    "stage": stage,
+                },
             )
 
         @activity.defn(name=TEMPORAL_SWARM_AGENT_ACTIVITY)
         async def run_swarm_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
-            return await self.executor.execute_temporal_swarm_agent(payload)
+            return await _await_with_activity_heartbeat(
+                self.executor.execute_temporal_swarm_agent(payload),
+                _agent_activity_heartbeat_payload(payload, TEMPORAL_SWARM_AGENT_ACTIVITY),
+            )
 
         @activity.defn(name=TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY)
         async def complete_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -289,7 +303,10 @@ class TemporalPipelineActivities:
 
         @activity.defn(name=TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY)
         async def run_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
-            return await self.executor.execute_temporal_validator_attempt(payload)
+            return await _await_with_activity_heartbeat(
+                self.executor.execute_temporal_validator_attempt(payload),
+                _agent_activity_heartbeat_payload(payload, TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY),
+            )
 
         @activity.defn(name=COMPLETE_VALIDATOR_STAGE_ACTIVITY)
         async def complete_validator_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -426,3 +443,50 @@ async def wait_for_pipeline_completion(audit_run_id: str, *, poll_seconds: float
         if activity is not None:
             activity.heartbeat({"audit_run_id": audit_run_id, "status": status})
         await asyncio.sleep(max(0.2, poll_seconds))
+
+
+def _agent_activity_heartbeat_payload(payload: dict[str, Any], activity_name: str) -> dict[str, Any]:
+    finding = payload.get("finding") if isinstance(payload.get("finding"), dict) else {}
+    return {
+        "audit_run_id": payload.get("audit_run_id"),
+        "activity": activity_name,
+        "activity_key": payload.get("activity_key"),
+        "kind": payload.get("kind"),
+        "finding_id": finding.get("finding_id"),
+        "round_index": payload.get("round_index"),
+    }
+
+
+async def _await_with_activity_heartbeat(awaitable: Any, payload: dict[str, Any]) -> Any:
+    if activity is None:
+        return await awaitable
+
+    stop = asyncio.Event()
+
+    async def heartbeat_loop() -> None:
+        while not stop.is_set():
+            _activity_heartbeat({**payload, "status": "running"})
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=ACTIVITY_HEARTBEAT_INTERVAL_SECONDS)
+
+    _activity_heartbeat({**payload, "status": "started"})
+    task = asyncio.create_task(heartbeat_loop())
+    try:
+        result = await awaitable
+    except Exception:
+        _activity_heartbeat({**payload, "status": "failed"})
+        raise
+    finally:
+        stop.set()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    _activity_heartbeat({**payload, "status": "completed"})
+    return result
+
+
+def _activity_heartbeat(payload: dict[str, Any]) -> None:
+    if activity is None:
+        return
+    with contextlib.suppress(Exception):
+        activity.heartbeat({key: value for key, value in payload.items() if value is not None})
