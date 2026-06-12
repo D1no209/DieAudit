@@ -18,11 +18,12 @@ but cannot install safely by itself.
   - Verify `/runtime/workers` reports a fresh running worker heartbeat.
   - When using `temporal`, verify `/runtime/temporal/health` and set
     `TEMPORAL_TASK_QUEUE` consistently for API and worker services.
-  - Temporal mode runs the main pipeline stages as activities and schedules
-    each Validator Finding/round attempt as its own activity.
-  - Source-Sink Finder, Judger, PoC Writer, and Verifier fan-out is still
-    managed inside stage implementations and should be split into child
-    workflows in a later hardening pass.
+  - Temporal mode runs the main pipeline stages as activities, schedules each
+    Source-Sink Finder Finding as its own activity, and schedules each
+    Validator Finding/round attempt as its own activity.
+  - Judger, PoC Writer, and Verifier fan-out is still managed inside stage
+    implementations and should be split into child workflows in a later
+    hardening pass.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
   - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when

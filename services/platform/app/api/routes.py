@@ -158,6 +158,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             run_joern=_run_joern_mcp,
             run_code_batch_analysis=_run_code_batch_analysis,
             run_source_sink_analysis=_run_source_sink_analysis,
+            run_source_sink_finding=_run_source_sink_finding_internal,
+            complete_source_sink_analysis=_complete_source_sink_analysis_internal,
             run_sca=_run_sca_mcp,
             run_semgrep=_run_semgrep_mcp,
             judge_audit_run=_judge_audit_run_internal,
@@ -3481,83 +3483,99 @@ async def _run_source_sink_analysis(
     max_parallel = max(1, int(config.get("max_parallel_source_sink_finders") or config.get("max_parallel_code_auditors") or 2))
     max_findings = max(1, int(config.get("max_source_sink_findings") or 50))
     selected = findings[:max_findings]
-    evidence = await _list_evidence(audit_run_id)
-    attempts = await _list_validation_attempts(audit_run_id)
     semaphore = asyncio.Semaphore(max_parallel)
 
     async def run_one(finding: dict[str, Any]) -> dict[str, Any]:
-        finding_id = str(finding.get("finding_id") or "")
         async with semaphore:
-            _ensure_finding_state_markdown(
-                audit_run_id,
-                finding,
-                evidence=[item for item in evidence if str(item.get("finding_id")) == finding_id],
-                attempts=[item for item in attempts if str(item.get("finding_id")) == finding_id],
-            )
-            input_payload = {
-                "goal": "For this single Finding, build or reject a source-to-sink attack chain. Return strict JSON with chains[].",
-                "audit_phase": "source-sink-analysis",
-                "finding": finding,
-                "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "source-sink"),
-                "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
-                "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
-                "joern": _latest_joern_context(audit_run),
-                "output_contract": {
-                    "chains": [
-                        {
-                            "finding_id": finding_id,
-                            "status": "chain_found|partial|not_found",
-                            "source": {"file_path": "...", "line_start": 1, "symbol": "...", "description": "..."},
-                            "sink": {"file_path": finding.get("file_path"), "line_start": finding.get("line_start"), "symbol": "...", "description": "..."},
-                            "steps": [],
-                            "sanitizers": [],
-                            "exploitability": "...",
-                            "confidence": "high|medium|low",
-                            "joern_queries": [],
-                        }
-                    ]
-                },
-            }
-            try:
-                agent_result = await runtime.start_agent_run(
-                    audit_run_id=audit_run_id,
-                    project_id=project_id,
-                    agent_name=str(config.get("source_sink_finder_agent_name") or "opencode-source-sink-finder"),
-                    workspace_host_path=workspace_path,
-                    allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
-                    retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
-                    input_payload=input_payload,
-                )
-                agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
-                chains = await _extract_agent_structured_list(agent_run_id, "chains")
-                created = await _persist_source_sink_chains(
-                    audit_run_id=audit_run_id,
-                    finding_id=finding_id,
-                    agent_run_id=agent_run_id or None,
-                    chains=chains,
-                )
-                failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
-                status = "failed" if failed else "completed"
-                result = {
-                    "finding_id": finding_id,
-                    "status": status,
-                    "agent_run_id": agent_run_id or None,
-                    "chains_created": created,
-                    "agent_result": _compact_event_payload(agent_result),
-                }
-            except Exception as exc:
-                result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
-            await _record_pipeline_event(audit_run_id, "source_sink_finding_completed", result)
-            return result
+            return await _run_source_sink_finding_internal(audit_run_id, project_id, workspace_path, runtime, audit_run, finding)
 
     results = await asyncio.gather(*(run_one(finding) for finding in selected))
+    return await _complete_source_sink_analysis_internal(audit_run_id, results)
+
+
+async def _run_source_sink_finding_internal(
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    runtime: Any,
+    audit_run: dict[str, Any],
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    evidence = await _list_evidence(audit_run_id)
+    attempts = await _list_validation_attempts(audit_run_id)
+    finding_id = str(finding.get("finding_id") or "")
+    _ensure_finding_state_markdown(
+        audit_run_id,
+        finding,
+        evidence=[item for item in evidence if str(item.get("finding_id")) == finding_id],
+        attempts=[item for item in attempts if str(item.get("finding_id")) == finding_id],
+    )
+    input_payload = {
+        "goal": "For this single Finding, build or reject a source-to-sink attack chain. Return strict JSON with chains[].",
+        "audit_phase": "source-sink-analysis",
+        "finding": finding,
+        "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "source-sink"),
+        "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
+        "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
+        "joern": _latest_joern_context(audit_run),
+        "output_contract": {
+            "chains": [
+                {
+                    "finding_id": finding_id,
+                    "status": "chain_found|partial|not_found",
+                    "source": {"file_path": "...", "line_start": 1, "symbol": "...", "description": "..."},
+                    "sink": {"file_path": finding.get("file_path"), "line_start": finding.get("line_start"), "symbol": "...", "description": "..."},
+                    "steps": [],
+                    "sanitizers": [],
+                    "exploitability": "...",
+                    "confidence": "high|medium|low",
+                    "joern_queries": [],
+                }
+            ]
+        },
+    }
+    try:
+        agent_result = await runtime.start_agent_run(
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            agent_name=str(config.get("source_sink_finder_agent_name") or "opencode-source-sink-finder"),
+            workspace_host_path=workspace_path,
+            allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+            retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+            input_payload=input_payload,
+        )
+        agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+        chains = await _extract_agent_structured_list(agent_run_id, "chains")
+        created = await _persist_source_sink_chains(
+            audit_run_id=audit_run_id,
+            finding_id=finding_id,
+            agent_run_id=agent_run_id or None,
+            chains=chains,
+        )
+        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        status = "failed" if failed else "completed"
+        result = {
+            "finding_id": finding_id,
+            "status": status,
+            "agent_run_id": agent_run_id or None,
+            "chains_created": created,
+            "agent_result": _compact_event_payload(agent_result),
+        }
+    except Exception as exc:
+        result = {"finding_id": finding_id, "status": "failed", "error": str(exc)}
+    await _record_pipeline_event(audit_run_id, "source_sink_finding_completed", result)
+    return result
+
+
+async def _complete_source_sink_analysis_internal(audit_run_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
     status_counts = _count_by(results, "status")
     completed = int(status_counts.get("completed") or 0)
     failed = int(status_counts.get("failed") or 0)
     final = {
         "ok": failed == 0,
         "available": True,
-        "scheduled": len(selected),
+        "scheduled": len(results),
         "completed": completed,
         "failed": failed,
         "skipped": 0,

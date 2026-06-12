@@ -104,6 +104,23 @@ class CallbackRecorder:
         findings = next((item for item in reversed(args) if isinstance(item, list)), [])
         return {"ok": True, "scheduled": len(findings), "completed": len(findings), "failed": 0, "chains_created": len(findings)}
 
+    async def run_source_sink_finding(self, *args: Any) -> dict[str, Any]:
+        finding = args[-1]
+        return {"finding_id": finding["finding_id"], "status": "completed", "chains_created": 1}
+
+    async def complete_source_sink_analysis(self, audit_run_id: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+        failed = sum(1 for item in results if item.get("status") == "failed")
+        completed = sum(1 for item in results if item.get("status") == "completed")
+        return {
+            "ok": failed == 0,
+            "available": True,
+            "scheduled": len(results),
+            "completed": completed,
+            "failed": failed,
+            "chains_created": sum(int(item.get("chains_created") or 0) for item in results),
+            "results": results,
+        }
+
     async def run_sca(self, *args: Any) -> dict[str, Any]:
         return {"ok": True, "findings_created": 0}
 
@@ -149,6 +166,8 @@ def build_executor(recorder: CallbackRecorder, runtime: FakeRuntime | None = Non
         run_joern=recorder.run_joern,
         run_code_batch_analysis=recorder.run_code_batch_analysis,
         run_source_sink_analysis=recorder.run_source_sink_analysis,
+        run_source_sink_finding=recorder.run_source_sink_finding,
+        complete_source_sink_analysis=recorder.complete_source_sink_analysis,
         run_sca=recorder.run_sca,
         run_semgrep=recorder.run_semgrep,
         judge_audit_run=recorder.judge,
@@ -245,6 +264,15 @@ async def test_pipeline_executor_temporal_stage_methods_run_fixed_pipeline_to_co
         if result.get("append_to_steps", True) and result.get("step"):
             steps.append({"step": result["step"], "result": result.get("result")})
         fanout = result.get("temporal_fanout") if isinstance(result.get("temporal_fanout"), dict) else {}
+        if fanout.get("kind") == "source-sink-findings":
+            attempt_results = [
+                await executor.execute_temporal_swarm_agent({"kind": "source-sink-finding", **attempt})
+                for attempt in fanout["attempts"]
+            ]
+            result = await executor.complete_temporal_swarm_stage(
+                {"audit_run_id": "run-1", "stage": "source-sink-analysis", "kind": fanout["kind"], "results": attempt_results}
+            )
+            steps.append({"step": result["step"], "result": result.get("result")})
         if fanout.get("kind") == "validator-attempts":
             attempt_results = [
                 await executor.execute_temporal_validator_attempt(attempt)
@@ -316,6 +344,72 @@ async def test_pipeline_executor_temporal_validators_return_fanout_plan() -> Non
     assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
     assert fanout["attempts"][0]["round_index"] == 1
     assert fanout["attempts"][1]["round_index"] == 2
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_temporal_source_sink_returns_finding_fanout_plan() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {
+                "workspace_host_path": "/workspace/project",
+                "max_parallel_source_sink_finders": 4,
+                "max_source_sink_findings": 1,
+            },
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+    executor = build_executor(recorder, runtime)
+
+    result = await executor.execute_temporal_stage("run-1", "source-sink-analysis", [])
+
+    fanout = result["temporal_fanout"]
+    assert fanout["kind"] == "source-sink-findings"
+    assert fanout["stage"] == "source-sink-analysis"
+    assert fanout["max_parallel"] == 4
+    assert len(fanout["attempts"]) == 1
+    assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_executor_temporal_source_sink_runs_single_finding_and_completes_stage() -> None:
+    runtime = FakeRuntime()
+    recorder = CallbackRecorder(
+        {
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "config": {"workspace_host_path": "/workspace/project"},
+            "allow_external_network": False,
+            "retain_runtime_on_failure": False,
+            "validator_rounds": 1,
+            "max_parallel_validators": 1,
+        }
+    )
+    executor = build_executor(recorder, runtime)
+
+    attempt = await executor.execute_temporal_swarm_agent(
+        {
+            "kind": "source-sink-finding",
+            "audit_run_id": "run-1",
+            "project_id": "project-1",
+            "workspace_host_path": "/workspace/project",
+            "audit_run": recorder.audit_run,
+            "finding": {"finding_id": "finding-1", "title": "test"},
+        }
+    )
+    result = await executor.complete_temporal_swarm_stage(
+        {"audit_run_id": "run-1", "stage": "source-sink-analysis", "kind": "source-sink-findings", "results": [attempt]}
+    )
+
+    assert attempt == {"finding_id": "finding-1", "status": "completed", "chains_created": 1}
+    assert result["step"] == "source-sink-analysis"
+    assert result["result"]["scheduled"] == 1
+    assert result["result"]["chains_created"] == 1
 
 
 @pytest.mark.asyncio

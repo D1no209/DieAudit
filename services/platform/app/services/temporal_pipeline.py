@@ -9,7 +9,12 @@ from sqlalchemy import select
 
 from app.domain.models import AuditRun, AuditRunEvent
 from app.repositories import SessionLocal
-from app.services.pipeline_executor import TEMPORAL_PIPELINE_STAGES, TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY
+from app.services.pipeline_executor import (
+    TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY,
+    TEMPORAL_PIPELINE_STAGES,
+    TEMPORAL_SWARM_AGENT_ACTIVITY,
+    TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY,
+)
 
 try:  # pragma: no cover - import availability is tested through helpers.
     from temporalio import activity, workflow
@@ -80,6 +85,8 @@ async def run_temporal_worker(config: TemporalPipelineConfig, *, executor: Any |
         activities=[
             pipeline_activities.prepare_pipeline,
             pipeline_activities.run_pipeline_stage,
+            pipeline_activities.run_swarm_agent,
+            pipeline_activities.complete_swarm_stage,
             pipeline_activities.run_validator_attempt,
             pipeline_activities.complete_validator_stage,
             pipeline_activities.finalize_pipeline,
@@ -127,6 +134,10 @@ if workflow is not None:
                         validator_result = await self._run_validator_fanout(audit_run_id, fanout)
                         if validator_result.get("append_to_steps", True) and validator_result.get("step"):
                             steps.append({"step": validator_result["step"], "result": validator_result.get("result")})
+                    elif fanout.get("kind") == "source-sink-findings":
+                        swarm_result = await self._run_swarm_fanout(audit_run_id, fanout)
+                        if swarm_result.get("append_to_steps", True) and swarm_result.get("step"):
+                            steps.append({"step": swarm_result["step"], "result": swarm_result.get("result")})
                     if isinstance(stage_result.get("judge_result"), dict):
                         judge_result = stage_result["judge_result"]
                     if isinstance(stage_result.get("report_result"), dict):
@@ -182,6 +193,32 @@ if workflow is not None:
                 start_to_close_timeout=timedelta(minutes=10),
             )
 
+        async def _run_swarm_fanout(self, audit_run_id: str, fanout: dict[str, Any]) -> dict[str, Any]:
+            attempts = list(fanout.get("attempts") or [])
+            max_parallel = max(1, int(fanout.get("max_parallel") or 1))
+            stage = str(fanout.get("stage") or "")
+            kind = str(fanout.get("kind") or "")
+            results: list[dict[str, Any]] = []
+            for offset in range(0, len(attempts), max_parallel):
+                batch = attempts[offset : offset + max_parallel]
+                batch_results = await asyncio.gather(
+                    *[
+                        workflow.execute_activity(
+                            TEMPORAL_SWARM_AGENT_ACTIVITY,
+                            {"kind": "source-sink-finding" if kind == "source-sink-findings" else kind, **attempt},
+                            start_to_close_timeout=timedelta(days=7),
+                            heartbeat_timeout=timedelta(seconds=30),
+                        )
+                        for attempt in batch
+                    ]
+                )
+                results.extend(batch_results)
+            return await workflow.execute_activity(
+                TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY,
+                {"audit_run_id": audit_run_id, "stage": stage, "kind": kind, "max_parallel": max_parallel, "results": results},
+                start_to_close_timeout=timedelta(minutes=10),
+            )
+
 else:
 
     class DieAuditPipelineWorkflow:  # type: ignore[no-redef]
@@ -206,6 +243,14 @@ class TemporalPipelineActivities:
                 str(payload["stage"]),
                 list(payload.get("steps") or []),
             )
+
+        @activity.defn(name=TEMPORAL_SWARM_AGENT_ACTIVITY)
+        async def run_swarm_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.execute_temporal_swarm_agent(payload)
+
+        @activity.defn(name=TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY)
+        async def complete_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.complete_temporal_swarm_stage(payload)
 
         @activity.defn(name=TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY)
         async def run_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -250,6 +295,12 @@ class TemporalPipelineActivities:
                 str(payload["stage"]),
                 list(payload.get("steps") or []),
             )
+
+        async def run_swarm_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.execute_temporal_swarm_agent(payload)
+
+        async def complete_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+            return await self.executor.complete_temporal_swarm_stage(payload)
 
         async def run_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
             return await self.executor.execute_temporal_validator_attempt(payload)

@@ -26,6 +26,8 @@ TEMPORAL_PIPELINE_STAGES = [
     "report",
 ]
 TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY = "dieaudit.validator_attempt"
+TEMPORAL_SWARM_AGENT_ACTIVITY = "dieaudit.swarm_agent"
+TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY = "dieaudit.complete_swarm_stage"
 
 
 class PipelineExecutor:
@@ -54,6 +56,8 @@ class PipelineExecutor:
         run_joern: AsyncCallback | None = None,
         run_code_batch_analysis: AsyncCallback | None = None,
         run_source_sink_analysis: AsyncCallback | None = None,
+        run_source_sink_finding: AsyncCallback | None = None,
+        complete_source_sink_analysis: AsyncCallback | None = None,
     ) -> None:
         self.settings = settings
         self.runtime = runtime
@@ -70,6 +74,8 @@ class PipelineExecutor:
         self.run_joern = run_joern
         self.run_code_batch_analysis = run_code_batch_analysis
         self.run_source_sink_analysis = run_source_sink_analysis
+        self.run_source_sink_finding = run_source_sink_finding
+        self.complete_source_sink_analysis = complete_source_sink_analysis
         self.run_sca = run_sca
         self.run_semgrep = run_semgrep
         self.judge_audit_run = judge_audit_run
@@ -554,6 +560,39 @@ class PipelineExecutor:
                     "pipeline_step_started",
                     {"step": stage, "finding_count": len(findings), "backend": "temporal"},
                 )
+                if self.run_source_sink_finding is not None and self.complete_source_sink_analysis is not None:
+                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+                    max_findings = max(1, int(config.get("max_source_sink_findings") or 50))
+                    selected = findings[:max_findings]
+                    if not selected:
+                        result = {"ok": True, "available": True, "scheduled": 0, "completed": 0, "failed": 0, "skipped": True}
+                        await self.record_pipeline_event(audit_run_id, "source_sink_analysis_skipped", result)
+                        await self.record_audit_run_event(
+                            audit_run_id,
+                            "pipeline_step_completed",
+                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
+                        )
+                        return {"step": stage, "result": result, "append_to_steps": True}
+                    attempts = [
+                        {
+                            "audit_run_id": audit_run_id,
+                            "project_id": audit_run["project_id"],
+                            "workspace_host_path": workspace_path,
+                            "audit_run": audit_run,
+                            "finding": finding,
+                        }
+                        for finding in selected
+                    ]
+                    return {
+                        "step": stage,
+                        "append_to_steps": False,
+                        "temporal_fanout": {
+                            "kind": "source-sink-findings",
+                            "stage": stage,
+                            "max_parallel": max(1, int(config.get("max_parallel_source_sink_finders") or config.get("max_parallel_code_auditors") or 2)),
+                            "attempts": attempts,
+                        },
+                    }
                 try:
                     if self.run_source_sink_analysis is None:
                         result = {"ok": False, "available": False, "error": "source-to-sink callback is not configured"}
@@ -762,6 +801,55 @@ class PipelineExecutor:
         await self.raise_if_cancelled(audit_run_id)
         return {"step": "validators", "result": summary, "append_to_steps": True}
 
+    async def execute_temporal_swarm_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+        audit_run_id = str(payload["audit_run_id"])
+        kind = str(payload.get("kind") or "")
+        await self.raise_if_cancelled(audit_run_id)
+        if kind == "source-sink-finding":
+            if self.run_source_sink_finding is None:
+                return {"status": "failed", "error": "source-to-sink finding callback is not configured"}
+            result = await self.run_source_sink_finding(
+                audit_run_id,
+                str(payload["project_id"]),
+                str(payload["workspace_host_path"]),
+                self.runtime,
+                dict(payload.get("audit_run") or {}),
+                dict(payload.get("finding") or {}),
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return result
+        raise RuntimeError(f"unknown temporal swarm agent kind: {kind}")
+
+    async def complete_temporal_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+        audit_run_id = str(payload["audit_run_id"])
+        stage = str(payload.get("stage") or "")
+        results = list(payload.get("results") or [])
+        if stage == "source-sink-analysis":
+            if self.complete_source_sink_analysis is None:
+                status_counts = self._count_results_by_status(results)
+                failed = int(status_counts.get("failed") or 0)
+                summary = {
+                    "ok": failed == 0,
+                    "available": True,
+                    "scheduled": len(results),
+                    "completed": int(status_counts.get("completed") or 0),
+                    "failed": failed,
+                    "skipped": int(status_counts.get("skipped") or 0),
+                    "status_counts": status_counts,
+                    "chains_created": sum(int(item.get("chains_created") or 0) for item in results if isinstance(item, dict)),
+                    "results": results,
+                }
+            else:
+                summary = await self.complete_source_sink_analysis(audit_run_id, results)
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+            return {"step": stage, "result": summary, "append_to_steps": True}
+        raise RuntimeError(f"unknown temporal swarm stage: {stage}")
+
     async def _prepare_temporal_validator_attempts(
         self,
         *,
@@ -788,6 +876,14 @@ class PipelineExecutor:
         mark_findings_status = getattr(self.runtime, "_mark_findings_status", None)
         if mark_findings_status is not None:
             await mark_findings_status([str(finding.get("finding_id")) for finding in findings if finding.get("finding_id")], "validating")
+
+    @staticmethod
+    def _count_results_by_status(results: list[dict[str, Any]]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for result in results:
+            status = str(result.get("status") or "unknown") if isinstance(result, dict) else "unknown"
+            counts[status] = counts.get(status, 0) + 1
+        return counts
 
     async def finalize_temporal_pipeline(
         self,

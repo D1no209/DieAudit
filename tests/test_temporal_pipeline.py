@@ -82,6 +82,14 @@ async def test_temporal_pipeline_activities_call_stage_executor_methods() -> Non
             calls.append(("stage", {"audit_run_id": audit_run_id, "stage": stage, "steps": steps}))
             return {"step": stage, "result": {"ok": True}}
 
+        async def execute_temporal_swarm_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+            calls.append(("swarm-agent", payload))
+            return {"status": "completed", "finding_id": payload["finding"]["finding_id"]}
+
+        async def complete_temporal_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
+            calls.append(("swarm-complete", payload))
+            return {"step": payload["stage"], "result": {"scheduled": len(payload["results"])}}
+
         async def finalize_temporal_pipeline(
             self,
             audit_run_id: str,
@@ -121,6 +129,12 @@ async def test_temporal_pipeline_activities_call_stage_executor_methods() -> Non
         "step": "joern-cpg",
         "result": {"ok": True},
     }
+    assert await activities.run_swarm_agent(
+        {"kind": "source-sink-finding", "audit_run_id": "run-1", "finding": {"finding_id": "finding-1"}}
+    ) == {"status": "completed", "finding_id": "finding-1"}
+    assert await activities.complete_swarm_stage(
+        {"audit_run_id": "run-1", "stage": "source-sink-analysis", "results": [{"status": "completed"}]}
+    ) == {"step": "source-sink-analysis", "result": {"scheduled": 1}}
     assert await activities.run_validator_attempt(
         {"audit_run_id": "run-1", "finding": {"finding_id": "finding-1"}, "round_index": 1}
     ) == {"status": "completed", "finding_id": "finding-1", "round": 1}
@@ -138,7 +152,16 @@ async def test_temporal_pipeline_activities_call_stage_executor_methods() -> Non
         {"audit_run_id": "run-1", "steps": [{"step": "joern-cpg"}], "judge_result": {}, "report_result": {}}
     ) == {"status": "completed"}
     assert await activities.fail_pipeline({"audit_run_id": "run-1", "error": "boom", "steps": []}) == {"status": "failed"}
-    assert [item[0] for item in calls] == ["prepare", "stage", "validator-attempt", "validator-complete", "finalize", "fail"]
+    assert [item[0] for item in calls] == [
+        "prepare",
+        "stage",
+        "swarm-agent",
+        "swarm-complete",
+        "validator-attempt",
+        "validator-complete",
+        "finalize",
+        "fail",
+    ]
 
 
 def test_temporal_workflow_uses_stage_activity_names() -> None:
@@ -146,6 +169,7 @@ def test_temporal_workflow_uses_stage_activity_names() -> None:
 
     assert "PREPARE_PIPELINE_ACTIVITY" in source
     assert "RUN_PIPELINE_STAGE_ACTIVITY" in source
+    assert "_run_swarm_fanout" in source
     assert "_run_validator_fanout" in source
     assert "FINALIZE_PIPELINE_ACTIVITY" in source
     assert "FAIL_PIPELINE_ACTIVITY" in source

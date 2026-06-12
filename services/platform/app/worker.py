@@ -26,6 +26,8 @@ from app.api.routes import (
     _run_sca_mcp,
     _run_semgrep_mcp,
     _run_source_sink_analysis,
+    _run_source_sink_finding_internal,
+    _complete_source_sink_analysis_internal,
     _set_pipeline_state,
     _verify_pocs_internal,
 )
@@ -59,6 +61,8 @@ def build_pipeline_executor(settings, runtime: RuntimeOrchestrator) -> PipelineE
         run_joern=_run_joern_mcp,
         run_code_batch_analysis=_run_code_batch_analysis,
         run_source_sink_analysis=_run_source_sink_analysis,
+        run_source_sink_finding=_run_source_sink_finding_internal,
+        complete_source_sink_analysis=_complete_source_sink_analysis_internal,
         run_sca=_run_sca_mcp,
         run_semgrep=_run_semgrep_mcp,
         judge_audit_run=_judge_audit_run_internal,
