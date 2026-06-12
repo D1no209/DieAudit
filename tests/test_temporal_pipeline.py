@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -173,6 +174,16 @@ def test_temporal_workflow_uses_stage_activity_names() -> None:
     assert "_run_validator_fanout" in source
     assert "FINALIZE_PIPELINE_ACTIVITY" in source
     assert "FAIL_PIPELINE_ACTIVITY" in source
+
+
+def test_temporal_workflow_uses_retry_policy_and_stable_activity_ids() -> None:
+    source = (Path(__file__).resolve().parents[1] / "services/platform/app/services/temporal_pipeline.py").read_text(encoding="utf-8")
+
+    assert "RetryPolicy(maximum_attempts=3)" in source
+    assert "RetryPolicy(maximum_attempts=2)" in source
+    assert "retry_policy=AGENT_ACTIVITY_RETRY_POLICY" in source
+    assert "activity_id=str(attempt.get(\"activity_key\")" in source
+    assert "activity_id=f\"{audit_run_id}-stage-{stage}\"" in source
 
 
 @pytest.mark.asyncio

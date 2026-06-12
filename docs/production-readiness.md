@@ -21,9 +21,10 @@ but cannot install safely by itself.
   - Temporal mode runs the main pipeline stages as activities. Source-Sink
     Finder, Judger, PoC Writer, and PoC Verifier run one activity per Finding,
     while Validators run one activity per Finding/round.
-  - Finding-level fan-outs are activities, not child workflows. A later
-    hardening pass should add per-agent retry policies, idempotency keys, and
-    stronger heartbeat semantics.
+  - Fan-out activities use stable activity IDs derived from AuditRun, stage,
+    Finding, and Validator round, with bounded retry policies. A later
+    hardening pass should add deeper idempotent write guards and stronger
+    heartbeat semantics inside each Agent adapter.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
   - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when

@@ -423,6 +423,7 @@ async def test_pipeline_executor_temporal_validators_return_fanout_plan() -> Non
     assert len(fanout["attempts"]) == 2
     assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
     assert fanout["attempts"][0]["round_index"] == 1
+    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-validator-finding-1-round-1"
     assert fanout["attempts"][1]["round_index"] == 2
 
 
@@ -454,6 +455,7 @@ async def test_pipeline_executor_temporal_source_sink_returns_finding_fanout_pla
     assert fanout["max_parallel"] == 4
     assert len(fanout["attempts"]) == 1
     assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
+    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-source-sink-finding-1"
 
 
 @pytest.mark.asyncio
@@ -516,6 +518,7 @@ async def test_pipeline_executor_temporal_judgement_returns_finding_fanout_plan(
     assert fanout["max_parallel"] == 5
     assert len(fanout["attempts"]) == 1
     assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
+    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-judger-finding-1"
 
 
 @pytest.mark.asyncio
@@ -577,6 +580,7 @@ async def test_pipeline_executor_temporal_poc_writer_returns_finding_fanout_plan
     assert fanout["stage"] == "poc-writing"
     assert fanout["max_parallel"] == 3
     assert len(fanout["attempts"]) == 1
+    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-poc-writer-finding-1"
 
 
 @pytest.mark.asyncio
@@ -636,6 +640,7 @@ async def test_pipeline_executor_temporal_poc_verifier_returns_finding_fanout_pl
     assert fanout["max_parallel"] == 4
     assert len(fanout["attempts"]) == 1
     assert fanout["attempts"][0]["poc_evidence"][0]["kind"] == "poc-artifact"
+    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-poc-verifier-finding-1"
 
 
 @pytest.mark.asyncio

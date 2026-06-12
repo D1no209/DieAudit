@@ -17,10 +17,12 @@ from app.services.pipeline_executor import (
 )
 
 try:  # pragma: no cover - import availability is tested through helpers.
+    from temporalio.common import RetryPolicy
     from temporalio import activity, workflow
     from temporalio.client import Client
     from temporalio.worker import Worker
 except Exception:  # pragma: no cover
+    RetryPolicy = None  # type: ignore[assignment]
     activity = None  # type: ignore[assignment]
     workflow = None  # type: ignore[assignment]
     Client = None  # type: ignore[assignment]
@@ -34,6 +36,8 @@ RUN_PIPELINE_STAGE_ACTIVITY = "dieaudit.run_pipeline_stage"
 FINALIZE_PIPELINE_ACTIVITY = "dieaudit.finalize_pipeline"
 FAIL_PIPELINE_ACTIVITY = "dieaudit.fail_pipeline"
 COMPLETE_VALIDATOR_STAGE_ACTIVITY = "dieaudit.complete_validator_stage"
+SHORT_ACTIVITY_RETRY_POLICY = RetryPolicy(maximum_attempts=3) if RetryPolicy is not None else None
+AGENT_ACTIVITY_RETRY_POLICY = RetryPolicy(maximum_attempts=2) if RetryPolicy is not None else None
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,7 @@ if workflow is not None:
                 PREPARE_PIPELINE_ACTIVITY,
                 audit_run_id,
                 start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=SHORT_ACTIVITY_RETRY_POLICY,
             )
             steps: list[dict[str, Any]] = []
             judge_result: dict[str, Any] = {}
@@ -126,6 +131,8 @@ if workflow is not None:
                         {"audit_run_id": audit_run_id, "stage": stage, "steps": steps},
                         start_to_close_timeout=timedelta(days=7),
                         heartbeat_timeout=timedelta(seconds=30),
+                        retry_policy=AGENT_ACTIVITY_RETRY_POLICY,
+                        activity_id=f"{audit_run_id}-stage-{stage}",
                     )
                     if stage_result.get("append_to_steps", True) and stage_result.get("step"):
                         steps.append({"step": stage_result["step"], "result": stage_result.get("result")})
@@ -163,6 +170,7 @@ if workflow is not None:
                         "report_result": report_result,
                     },
                     start_to_close_timeout=timedelta(minutes=10),
+                    retry_policy=SHORT_ACTIVITY_RETRY_POLICY,
                 )
                 return {"audit_run_id": audit_run_id, "prepare": prepare_result, "final": final_result}
             except Exception as exc:
@@ -170,6 +178,7 @@ if workflow is not None:
                     FAIL_PIPELINE_ACTIVITY,
                     {"audit_run_id": audit_run_id, "error": str(exc), "steps": steps},
                     start_to_close_timeout=timedelta(minutes=10),
+                    retry_policy=SHORT_ACTIVITY_RETRY_POLICY,
                 )
                 return {"audit_run_id": audit_run_id, "prepare": prepare_result, "failure": failure_result}
 
@@ -186,6 +195,8 @@ if workflow is not None:
                             attempt,
                             start_to_close_timeout=timedelta(days=7),
                             heartbeat_timeout=timedelta(seconds=30),
+                            retry_policy=AGENT_ACTIVITY_RETRY_POLICY,
+                            activity_id=str(attempt.get("activity_key") or f"{audit_run_id}-validator-{offset}"),
                         )
                         for attempt in batch
                     ]
@@ -203,6 +214,8 @@ if workflow is not None:
                     "results": results,
                 },
                 start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=SHORT_ACTIVITY_RETRY_POLICY,
+                activity_id=f"{audit_run_id}-complete-validators",
             )
 
         async def _run_swarm_fanout(self, audit_run_id: str, fanout: dict[str, Any]) -> dict[str, Any]:
@@ -226,6 +239,8 @@ if workflow is not None:
                             {"kind": activity_kind, **attempt},
                             start_to_close_timeout=timedelta(days=7),
                             heartbeat_timeout=timedelta(seconds=30),
+                            retry_policy=AGENT_ACTIVITY_RETRY_POLICY,
+                            activity_id=str(attempt.get("activity_key") or f"{audit_run_id}-{activity_kind}-{offset}"),
                         )
                         for attempt in batch
                     ]
@@ -235,6 +250,8 @@ if workflow is not None:
                 TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY,
                 {"audit_run_id": audit_run_id, "stage": stage, "kind": kind, "max_parallel": max_parallel, "results": results},
                 start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=SHORT_ACTIVITY_RETRY_POLICY,
+                activity_id=f"{audit_run_id}-complete-{stage}",
             )
 
 else:

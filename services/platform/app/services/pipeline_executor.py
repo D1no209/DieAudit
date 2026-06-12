@@ -594,6 +594,7 @@ class PipelineExecutor:
                             "workspace_host_path": workspace_path,
                             "audit_run": audit_run,
                             "finding": finding,
+                            "activity_key": self._activity_key(audit_run_id, "source-sink", finding),
                         }
                         for finding in selected
                     ]
@@ -659,6 +660,7 @@ class PipelineExecutor:
                                 "validator_agent_name": self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
                                 "allow_external_network": agent_external_network,
                                 "retain_runtime_on_failure": audit_run["retain_runtime_on_failure"],
+                                "activity_key": self._activity_key(audit_run_id, "validator", finding, round_index),
                             }
                         )
                 if not attempts:
@@ -715,6 +717,7 @@ class PipelineExecutor:
                             "workspace_host_path": workspace_path,
                             "audit_run": audit_run,
                             "finding": finding,
+                            "activity_key": self._activity_key(audit_run_id, "judger", finding),
                         }
                         for finding in findings
                     ]
@@ -772,6 +775,7 @@ class PipelineExecutor:
                                     "workspace_host_path": workspace_path,
                                     "audit_run": audit_run,
                                     "finding": finding,
+                                    "activity_key": self._activity_key(audit_run_id, "poc-writer", finding),
                                 }
                                 for finding in selected
                             ],
@@ -826,7 +830,15 @@ class PipelineExecutor:
                     for finding_id, items in grouped.items():
                         finding = findings_by_id.get(finding_id)
                         if finding is None:
-                            attempts.append({"audit_run_id": audit_run_id, "finding_id": finding_id, "poc_evidence": items, "missing_finding": True})
+                            attempts.append(
+                                {
+                                    "audit_run_id": audit_run_id,
+                                    "finding_id": finding_id,
+                                    "poc_evidence": items,
+                                    "missing_finding": True,
+                                    "activity_key": self._activity_key_from_id(audit_run_id, "poc-verifier", finding_id),
+                                }
+                            )
                             continue
                         attempts.append(
                             {
@@ -836,6 +848,7 @@ class PipelineExecutor:
                                 "audit_run": audit_run,
                                 "finding": finding,
                                 "poc_evidence": items,
+                                "activity_key": self._activity_key(audit_run_id, "poc-verifier", finding),
                             }
                         )
                     return {
@@ -1088,6 +1101,19 @@ class PipelineExecutor:
             status = str(result.get("status") or "unknown") if isinstance(result, dict) else "unknown"
             counts[status] = counts.get(status, 0) + 1
         return counts
+
+    @classmethod
+    def _activity_key(cls, audit_run_id: str, stage: str, finding: dict[str, Any], round_index: int | None = None) -> str:
+        finding_id = str(finding.get("finding_id") or finding.get("id") or "inline")
+        return cls._activity_key_from_id(audit_run_id, stage, finding_id, round_index)
+
+    @staticmethod
+    def _activity_key_from_id(audit_run_id: str, stage: str, finding_id: str, round_index: int | None = None) -> str:
+        parts = ["dieaudit", audit_run_id, stage, finding_id]
+        if round_index is not None:
+            parts.append(f"round-{round_index}")
+        raw = "-".join(parts)
+        return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw)[:255]
 
     async def finalize_temporal_pipeline(
         self,

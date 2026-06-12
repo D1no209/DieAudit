@@ -269,9 +269,11 @@ PoC Writer, and PoC Verifier run one activity per Finding, bounded by their
 `max_parallel_*` settings. Validators run one activity per Finding/round,
 bounded by `max_parallel_validators`.
 
-Current limitation: these fan-outs are Temporal activities, not child
-workflows. A future hardening pass can add per-agent retry policies,
-idempotency keys, and stronger activity heartbeat semantics.
+Fan-out activities use stable activity IDs derived from AuditRun, stage,
+Finding, and Validator round, and use bounded Temporal retry policies. Current
+limitation: these fan-outs are activities, not child workflows. A future
+hardening pass can add deeper idempotent write guards and stronger activity
+heartbeat semantics inside each Agent adapter.
 
 ## Demo Profile
 
