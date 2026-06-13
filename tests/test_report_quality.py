@@ -237,6 +237,46 @@ def test_report_summary_ignores_missing_json_when_markdown_handoff_exists() -> N
     assert summary["parse_warnings"] == []
 
 
+def test_report_summary_ignores_missing_json_when_validator_evidence_exists() -> None:
+    summary = _report_summary(
+        findings=[{"finding_id": "finding-1", "status": "confirmed"}],
+        evidence=[
+            {
+                "kind": "validator-agent-run",
+                "finding_id": "finding-1",
+                "payload": {
+                    "agent_run_id": "validator-agent-1",
+                    "attempt_id": "attempt-1",
+                },
+            }
+        ],
+        attempts=[
+            {
+                "attempt_id": "attempt-1",
+                "finding_id": "finding-1",
+                "status": "completed",
+                "agent_run_id": "validator-agent-1",
+            }
+        ],
+        agent_runs=[
+            {
+                "agent_run_id": "validator-agent-1",
+                "agent_name": "opencode-validator",
+                "output_summary": {
+                    "structured_ingest": {
+                        "structured_parse_status": "not_found",
+                        "structured_parse_warnings": [{"kind": "structured_output_not_found"}],
+                    }
+                },
+            }
+        ],
+        audit_events=[],
+    )
+
+    assert summary["parse_warning_count"] == 0
+    assert summary["parse_warnings"] == []
+
+
 def test_finding_artifact_contract_uses_independent_finding_directory() -> None:
     contract = _finding_artifact_contract("run-1", "finding-1", "source-sink")
 

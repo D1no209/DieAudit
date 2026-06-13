@@ -4,6 +4,7 @@ param(
     [string]$ApiKeyHeader = $(if ($env:API_KEY_HEADER) { $env:API_KEY_HEADER } else { "X-DieAudit-Api-Key" }),
     [switch]$StartCompose,
     [switch]$RunPipeline,
+    [switch]$UseTemporal,
     [switch]$SkipCleanup,
     [int]$TimeoutSeconds = 900
 )
@@ -50,13 +51,23 @@ function Wait-DieAuditHealth {
 }
 
 if ($StartCompose) {
+    if ($UseTemporal) {
+        $env:PIPELINE_EXECUTION_BACKEND = "temporal"
+    }
     docker compose --profile core up -d
+    if ($UseTemporal) {
+        docker compose --profile core up -d --force-recreate web-api workflow-worker
+    }
 }
 
 Wait-DieAuditHealth
 $status = Invoke-DieAuditJson -Path "/runtime/e2e/status"
 $modelConfigured = [bool]($status.checks.model_configured)
-$shouldRunPipeline = [bool]($RunPipeline -or $modelConfigured)
+$shouldRunPipeline = [bool]($RunPipeline -or $modelConfigured -or $UseTemporal)
+$pipelineBackend = [string]($status.pipeline_backend)
+if ($UseTemporal -and $pipelineBackend -ne "temporal") {
+    throw "UseTemporal was requested, but runtime pipeline_backend is '$($status.pipeline_backend)'. Recreate web-api and workflow-worker with PIPELINE_EXECUTION_BACKEND=temporal."
+}
 
 $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dieaudit-e2e-" + [Guid]::NewGuid().ToString("N"))
 $projectDir = Join-Path $workRoot "project"
@@ -111,6 +122,20 @@ if ($shouldRunPipeline) {
     if ($runStatus -notin @("completed", "completed_with_warnings")) {
         throw "pipeline did not complete successfully: $runStatus"
     }
+    if ($UseTemporal) {
+        $events = Invoke-DieAuditJson -Path "/audit-runs/$auditRunId/events"
+        $temporalObserved = $false
+        foreach ($event in $events) {
+            $payloadJson = $event.payload | ConvertTo-Json -Depth 20
+            if ($event.event_type -like "temporal_*" -or $payloadJson -match '"backend"\s*:\s*"temporal"') {
+                $temporalObserved = $true
+                break
+            }
+        }
+        if (-not $temporalObserved) {
+            throw "UseTemporal was requested, but no Temporal backend audit event was observed for $auditRunId"
+        }
+    }
 } else {
     Invoke-DieAuditJson -Method POST -Path "/audit-runs/$auditRunId/findings" -Body @{
         title = "E2E control-plane smoke finding"
@@ -131,6 +156,7 @@ $evidence = Invoke-DieAuditJson -Path "/audit-runs/$auditRunId/evidence"
 $attempts = Invoke-DieAuditJson -Path "/audit-runs/$auditRunId/validation-attempts"
 $reports = Invoke-DieAuditJson -Path "/audit-runs/$auditRunId/reports"
 $containers = Invoke-DieAuditJson -Path "/audit-runs/$auditRunId/containers"
+$finalPipeline = Invoke-DieAuditJson -Path "/audit-runs/$auditRunId/pipeline-status"
 
 if (-not $reports -or $reports.Count -lt 1) {
     throw "expected at least one report artifact"
@@ -144,6 +170,9 @@ if (-not $SkipCleanup) {
 [pscustomobject]@{
     ok = $true
     mode = $(if ($shouldRunPipeline) { "pipeline" } else { "control-plane" })
+    pipeline_backend = $pipelineBackend
+    temporal_required = [bool]$UseTemporal
+    pipeline_status = $finalPipeline.audit_run.status
     audit_run_id = $auditRunId
     project_id = $projectId
     model_configured = $modelConfigured

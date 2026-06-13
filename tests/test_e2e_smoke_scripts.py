@@ -35,3 +35,18 @@ def test_e2e_smoke_scripts_use_gateway_and_skip_pipeline_without_model_key() -> 
         assert "model_configured" in source
         assert "control-plane" in source
         assert "http://127.0.0.1:7897" in source
+
+
+def test_e2e_smoke_scripts_can_require_temporal_backend() -> None:
+    ps1 = read_source("scripts/e2e-smoke.ps1")
+    sh = read_source("scripts/e2e-smoke.sh")
+
+    assert "[switch]$UseTemporal" in ps1
+    assert "PIPELINE_EXECUTION_BACKEND = \"temporal\"" in ps1
+    assert "runtime pipeline_backend" in ps1
+    assert "Temporal backend audit event" in ps1
+
+    assert "USE_TEMPORAL" in sh
+    assert "PIPELINE_EXECUTION_BACKEND=temporal" in sh
+    assert "pipeline_backend" in sh
+    assert "Temporal backend audit event" in sh

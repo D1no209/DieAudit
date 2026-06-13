@@ -29,3 +29,24 @@ def test_parse_status_marks_structured_warnings() -> None:
     ingestor = AgentOutputIngestor()
 
     assert ingestor._parse_status({"findings": []}, [{"kind": "finding_missing_fields"}]) == "parsed_with_warnings"
+
+
+def test_normalize_finding_item_defaults_missing_confidence() -> None:
+    ingestor = AgentOutputIngestor()
+    warnings = []
+
+    item = ingestor._normalize_finding_item(
+        {
+            "title": "Path traversal",
+            "severity": "high",
+            "file_path": "app.py",
+            "line_start": 7,
+            "description": "Untrusted path reaches open().",
+            "source": "agent",
+        },
+        index=0,
+        warnings=warnings,
+    )
+
+    assert item["confidence"] == "medium"
+    assert warnings == [{"kind": "finding_defaulted_confidence", "index": 0, "value": "medium", "reason": "agent omitted confidence"}]

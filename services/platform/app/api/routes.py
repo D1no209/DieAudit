@@ -4077,19 +4077,34 @@ async def _persist_poc_artifacts(
     finding_id = str(finding.get("finding_id") or "")
     if not pocs:
         markdown = finding.get("finding_markdown") or _finding_markdown_reference(audit_run_id, finding_id)
+        poc = {
+            "finding_id": finding_id,
+            "title": f"Markdown-tracked PoC for {finding.get('title') or finding_id}",
+            "language": "manual",
+            "artifact_name": "finding-markdown-poc",
+            "content": "The PoC Writer produced markdown-first output. Use the linked finding.md and PoC Writer stage report as the authoritative PoC draft.",
+            "commands": [],
+            "expected_result": "Review the PoC Writer Update section in finding.md and the preserved PoC Writer report.",
+            "cleanup_steps": [],
+            "safety_notes": "Markdown-first PoC artifact registered by the platform because no structured pocs[] payload was emitted.",
+        }
         async with SessionLocal() as session:
             session.add(
                 Evidence(
                     evidence_id=str(uuid.uuid4()),
                     finding_id=finding_id,
                     audit_run_id=audit_run_id,
-                    kind="poc-markdown-reference",
+                    kind="poc-artifact",
                     summary="PoC writer output is tracked in finding.md",
                     artifact_path=markdown.get("path"),
                     payload={
+                        "poc": poc,
                         "finding_markdown": markdown,
                         "agent_run_id": agent_run_id,
+                        "artifact_id": markdown.get("artifact_id"),
+                        "artifact_uri": markdown.get("artifact_uri"),
                         "markdown_first": True,
+                        "registration_source": "finding_markdown",
                     },
                 )
             )
@@ -4108,6 +4123,7 @@ async def _persist_poc_artifacts(
                 "artifact_id": markdown.get("artifact_id"),
                 "artifact_uri": markdown.get("artifact_uri"),
                 "path": markdown.get("path"),
+                "kind": "poc-artifact",
                 "markdown_first": True,
             }
         ]
@@ -4184,19 +4200,32 @@ async def _persist_poc_verifications(
 ) -> int:
     if not verifications:
         markdown = _finding_markdown_reference(audit_run_id, finding_id)
+        verification = {
+            "finding_id": finding_id,
+            "status": "not_executed",
+            "reason": "PoC verifier produced markdown-first output or no structured verifications[] payload. Review finding.md and the PoC Verifier report.",
+            "required_changes": [],
+            "expected_execution": {},
+            "safety_notes": "Registered as platform evidence so the Finding report reflects that verification was attempted.",
+            "markdown_first": True,
+        }
         async with SessionLocal() as session:
             session.add(
                 Evidence(
                     evidence_id=str(uuid.uuid4()),
                     finding_id=finding_id,
                     audit_run_id=audit_run_id,
-                    kind="poc-verification-markdown-reference",
+                    kind="poc-verification",
                     summary="PoC verifier output is tracked in finding.md",
                     artifact_path=markdown.get("path"),
                     payload={
+                        **verification,
                         "finding_markdown": markdown,
                         "agent_run_id": agent_run_id,
+                        "artifact_id": markdown.get("artifact_id"),
+                        "artifact_uri": markdown.get("artifact_uri"),
                         "markdown_first": True,
+                        "registration_source": "finding_markdown",
                     },
                 )
             )
@@ -4687,7 +4716,11 @@ def _markdown_backed_agent_run_ids(evidence: list[dict[str, Any]]) -> set[str]:
         if not agent_run_id:
             continue
         kind = str(item.get("kind") or "")
-        if kind.endswith("-agent-report") or kind in {"poc-markdown-reference", "poc-verification-markdown-reference"}:
+        if (
+            kind.endswith("-agent-report")
+            or kind == "validator-agent-run"
+            or (payload.get("markdown_first") and kind in {"poc-artifact", "poc-verification"})
+        ):
             backed.add(agent_run_id)
     return backed
 

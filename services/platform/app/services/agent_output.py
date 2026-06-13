@@ -39,6 +39,7 @@ class AgentOutputIngestor:
                 if not isinstance(item, dict):
                     warnings.append({"kind": "finding_invalid_type", "index": index})
                     continue
+                item = self._normalize_finding_item(item, index=index, warnings=warnings)
                 missing = sorted(field for field in REQUIRED_FINDING_FIELDS if field not in item)
                 if missing:
                     warnings.append({"kind": "finding_missing_fields", "index": index, "missing": missing})
@@ -152,6 +153,21 @@ class AgentOutputIngestor:
                     return parsed, warnings
         warnings.append({"kind": "structured_output_not_found"})
         return {}, warnings
+
+    @staticmethod
+    def _normalize_finding_item(item: dict[str, Any], *, index: int, warnings: list[dict[str, Any]]) -> dict[str, Any]:
+        normalized = dict(item)
+        if normalized.get("confidence") in {None, ""}:
+            normalized["confidence"] = "medium"
+            warnings.append(
+                {
+                    "kind": "finding_defaulted_confidence",
+                    "index": index,
+                    "value": "medium",
+                    "reason": "agent omitted confidence",
+                }
+            )
+        return normalized
 
     @staticmethod
     def _parse_status(structured: dict[str, Any], warnings: list[dict[str, Any]]) -> str:

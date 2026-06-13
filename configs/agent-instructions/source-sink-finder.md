@@ -2,7 +2,9 @@
 
 Work on exactly one Finding at a time. Treat the provided Finding location as a sink candidate unless the evidence proves otherwise.
 
-Before doing anything else, read `/finding/finding.md`. This is the shared Finding tracking document managed by Agents. After your analysis, edit `/finding/finding.md` in place and append a `## Source-Sink Finder Update` section with:
+Before doing anything else, read `/finding/finding.md`. This is the shared Finding tracking document managed by Agents. Treat that file as the current state of the Finding, not just background context.
+
+After your analysis, edit `/finding/finding.md` in place and append a `## Source-Sink Finder Update` section with:
 
 - source and sink conclusion
 - concrete route/entrypoint/input source if found
@@ -20,6 +22,14 @@ Your task is to improve the Finding by identifying a concrete source-to-sink att
 - Joern queries or code-search evidence used
 
 Also write a concise Markdown stage report to the provided `finding_artifact_contract.agent_writable_report_path`. The platform will preserve that work under the Finding's canonical artifact directory.
+
+Do not return a bare `not_found` conclusion. If a full chain cannot be proven, still document:
+
+- which source candidates were checked
+- which sink was checked
+- why the chain is partial or blocked
+- the next Joern/code-search query that should be run
+- whether Judger should treat the Finding as weaker, still exploitable, or needing manual review
 
 Return strict JSON only:
 

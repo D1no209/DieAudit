@@ -6,17 +6,6 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
-
-from app.domain.models import AuditRun, AuditRunEvent
-from app.repositories import SessionLocal
-from app.services.pipeline_executor import (
-    TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY,
-    TEMPORAL_PIPELINE_STAGES,
-    TEMPORAL_SWARM_AGENT_ACTIVITY,
-    TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY,
-)
-
 try:  # pragma: no cover - import availability is tested through helpers.
     from temporalio.common import RetryPolicy
     from temporalio import activity, workflow
@@ -32,14 +21,31 @@ except Exception:  # pragma: no cover
 
 TERMINAL_AUDIT_STATUSES = {"completed", "completed_with_warnings", "failed", "cancelled"}
 TEMPORAL_PIPELINE_WORKFLOW = "DieAuditPipelineWorkflow"
+TEMPORAL_PIPELINE_STAGES = [
+    "joern-cpg",
+    "agent-audit",
+    "code-analysis",
+    "sca",
+    "semgrep",
+    "source-sink-analysis",
+    "validators",
+    "judgement",
+    "poc-writing",
+    "poc-verification",
+    "report",
+]
 PREPARE_PIPELINE_ACTIVITY = "dieaudit.prepare_pipeline"
 RUN_PIPELINE_STAGE_ACTIVITY = "dieaudit.run_pipeline_stage"
 FINALIZE_PIPELINE_ACTIVITY = "dieaudit.finalize_pipeline"
 FAIL_PIPELINE_ACTIVITY = "dieaudit.fail_pipeline"
 COMPLETE_VALIDATOR_STAGE_ACTIVITY = "dieaudit.complete_validator_stage"
+TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY = "dieaudit.validator_attempt"
+TEMPORAL_SWARM_AGENT_ACTIVITY = "dieaudit.swarm_agent"
+TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY = "dieaudit.complete_swarm_stage"
 SHORT_ACTIVITY_RETRY_POLICY = RetryPolicy(maximum_attempts=3) if RetryPolicy is not None else None
 AGENT_ACTIVITY_RETRY_POLICY = RetryPolicy(maximum_attempts=2) if RetryPolicy is not None else None
 ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 10.0
+SessionLocal = None
 
 
 @dataclass(frozen=True)
@@ -403,7 +409,12 @@ else:
 
 
 async def enqueue_pipeline_for_worker(audit_run_id: str) -> dict[str, Any]:
-    async with SessionLocal() as session:
+    from sqlalchemy import select
+
+    from app.domain.models import AuditRun, AuditRunEvent
+
+    session_factory = _session_local()
+    async with session_factory() as session:
         async with session.begin():
             audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
             if not audit_run:
@@ -427,8 +438,13 @@ async def enqueue_pipeline_for_worker(audit_run_id: str) -> dict[str, Any]:
 
 
 async def wait_for_pipeline_completion(audit_run_id: str, *, poll_seconds: float = 2.0) -> dict[str, Any]:
+    from sqlalchemy import select
+
+    from app.domain.models import AuditRun
+
+    session_factory = _session_local()
     while True:
-        async with SessionLocal() as session:
+        async with session_factory() as session:
             audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
             if not audit_run:
                 raise RuntimeError(f"audit run not found: {audit_run_id}")
@@ -443,6 +459,14 @@ async def wait_for_pipeline_completion(audit_run_id: str, *, poll_seconds: float
         if activity is not None:
             activity.heartbeat({"audit_run_id": audit_run_id, "status": status})
         await asyncio.sleep(max(0.2, poll_seconds))
+
+
+def _session_local() -> Any:
+    if SessionLocal is not None:
+        return SessionLocal
+    from app.repositories import SessionLocal as imported_session_local
+
+    return imported_session_local
 
 
 def _agent_activity_heartbeat_payload(payload: dict[str, Any], activity_name: str) -> dict[str, Any]:
