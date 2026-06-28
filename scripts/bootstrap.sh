@@ -33,5 +33,4 @@ DieAudit is starting:
   Web:          http://localhost:8080
   API:          http://localhost:18000/health
   AgentGateway: http://localhost:18001/health
-  Temporal UI:  http://localhost:18088
 EOF

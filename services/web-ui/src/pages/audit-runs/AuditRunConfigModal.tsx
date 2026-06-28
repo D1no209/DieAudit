@@ -1,13 +1,12 @@
 import { CheckSquareOutlined, SettingOutlined } from "@ant-design/icons";
-import { Checkbox, Collapse, Form, Input, InputNumber, Modal, Select, Space, Switch, Typography } from "antd";
+import { Checkbox, Collapse, Form, Input, InputNumber, Modal, Space, Switch, Typography } from "antd";
 import type { CreateAuditRunPayload } from "../../types";
 
 const agentOptions = [
   { label: "Orchestrator", value: "orchestrator" },
   { label: "Code Auditor", value: "code-auditor" },
-  { label: "Source-Sink Finder", value: "source-sink-finder" },
-  { label: "Validator", value: "validator" },
-  { label: "Judger", value: "judger" },
+  { label: "Trace Worker", value: "source-sink-finder" },
+  { label: "Validation-Judgement", value: "validator" },
   { label: "PoC Writer", value: "poc-writer" },
   { label: "PoC Verifier", value: "poc-verifier" },
 ];
@@ -22,17 +21,23 @@ const defaultPayload: Omit<CreateAuditRunPayload, "input_payload"> = {
   validator_rounds: 1,
   max_parallel_validators: 2,
   validator_agent_name: "opencode-validator",
+  enable_validation_judgement: true,
+  validation_judgement_agent_name: "opencode-validator",
+  enable_feedback_loop: true,
+  max_feedback_rounds: 2,
   enable_code_batch_analysis: true,
+  enable_batch_internal_semgrep: true,
+  enable_batch_internal_sca: true,
   max_code_audit_tasks: 8,
   max_files_per_code_audit_task: 25,
   max_parallel_code_auditors: 2,
   code_auditor_agent_name: "opencode-code-auditor",
-  enable_source_sink_analysis: true,
+  enable_source_sink_analysis: false,
   source_sink_finder_agent_name: "opencode-source-sink-finder",
   max_parallel_source_sink_finders: 2,
   max_source_sink_findings: 50,
   enable_validators: true,
-  enable_judgement: true,
+  enable_judgement: false,
   judger_agent_name: "opencode-judger",
   max_parallel_judgers: 2,
   enable_poc_writing: true,
@@ -42,11 +47,11 @@ const defaultPayload: Omit<CreateAuditRunPayload, "input_payload"> = {
   enable_poc_verification: true,
   poc_verifier_agent_name: "opencode-poc-verifier",
   max_parallel_poc_verifiers: 2,
-  enable_joern: true,
-  joern_required: true,
-  allow_joern_unavailable: false,
-  joern_timeout_seconds: 900,
-  joern_query_packs: ["entrypoints", "authz", "injection", "file-io", "network", "secrets"],
+  enable_decompilation: true,
+  decompiled_source_dir: ".dieaudit/decompiled",
+  decompile_max_artifact_size_mb: 200,
+  decompile_timeout_seconds: 300,
+  decompile_max_artifacts: 50,
   allow_external_network: false,
   retain_runtime_on_failure: false,
   start_agent: false,
@@ -122,13 +127,10 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
                     <Form.Item name="code_auditor_agent_name" label="Code Auditor 模板">
                       <Input />
                     </Form.Item>
-                    <Form.Item name="source_sink_finder_agent_name" label="Source-Sink Finder 模板">
+                    <Form.Item name="source_sink_finder_agent_name" label="Trace Worker 模板">
                       <Input />
                     </Form.Item>
-                    <Form.Item name="validator_agent_name" label="Validator 模板">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name="judger_agent_name" label="Judger 模板">
+                    <Form.Item name="validation_judgement_agent_name" label="Validation-Judgement 模板">
                       <Input />
                     </Form.Item>
                     <Form.Item name="poc_writer_agent_name" label="PoC Writer 模板">
@@ -146,20 +148,20 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
               label: "并发与轮次",
               children: (
                 <div className="form-grid">
-                  <Form.Item name="validator_rounds" label="Validator 轮次">
+                  <Form.Item name="validator_rounds" label="确认轮次">
                     <InputNumber min={1} max={20} />
                   </Form.Item>
-                  <Form.Item name="max_parallel_validators" label="Validator 并发">
+                  <Form.Item name="max_parallel_validators" label="确认并发">
                     <InputNumber min={1} max={20} />
                   </Form.Item>
                   <Form.Item name="max_parallel_code_auditors" label="Code Auditor 并发">
                     <InputNumber min={1} max={20} />
                   </Form.Item>
-                  <Form.Item name="max_parallel_source_sink_finders" label="Source-Sink 并发">
+                  <Form.Item name="max_parallel_source_sink_finders" label="Trace Worker 并发">
                     <InputNumber min={1} max={20} />
                   </Form.Item>
-                  <Form.Item name="max_parallel_judgers" label="Judger 并发">
-                    <InputNumber min={1} max={20} />
+                  <Form.Item name="max_feedback_rounds" label="反馈轮数">
+                    <InputNumber min={0} max={10} />
                   </Form.Item>
                   <Form.Item name="max_parallel_poc_writers" label="PoC Writer 并发">
                     <InputNumber min={1} max={20} />
@@ -173,7 +175,7 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
                   <Form.Item name="max_files_per_code_audit_task" label="每任务文件数">
                     <InputNumber min={1} max={200} />
                   </Form.Item>
-                  <Form.Item name="max_source_sink_findings" label="Source-Sink Finding 上限">
+                  <Form.Item name="max_source_sink_findings" label="Trace Candidate 上限">
                     <InputNumber min={1} max={500} />
                   </Form.Item>
                   <Form.Item name="max_poc_findings" label="PoC Finding 上限">
@@ -190,13 +192,16 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
                   <Form.Item name="enable_code_batch_analysis" label="代码批量分析" valuePropName="checked">
                     <Switch />
                   </Form.Item>
-                  <Form.Item name="enable_source_sink_analysis" label="Source-Sink 链路分析" valuePropName="checked">
+                  <Form.Item name="enable_batch_internal_semgrep" label="Batch 内置 Semgrep" valuePropName="checked">
                     <Switch />
                   </Form.Item>
-                  <Form.Item name="enable_validators" label="Validator" valuePropName="checked">
+                  <Form.Item name="enable_batch_internal_sca" label="Batch 内置 SCA" valuePropName="checked">
                     <Switch />
                   </Form.Item>
-                  <Form.Item name="enable_judgement" label="Judger" valuePropName="checked">
+                  <Form.Item name="enable_validation_judgement" label="Validation-Judgement" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                  <Form.Item name="enable_feedback_loop" label="反馈调节" valuePropName="checked">
                     <Switch />
                   </Form.Item>
                   <Form.Item name="enable_poc_writing" label="PoC Writer" valuePropName="checked">
@@ -212,18 +217,12 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
               ),
             },
             {
-              key: "joern",
-              label: "Joern 与运行策略",
+              key: "runtime",
+              label: "源码准备与运行策略",
               children: (
                 <>
                   <div className="switch-grid">
-                    <Form.Item name="enable_joern" label="启用 Joern CPG" valuePropName="checked">
-                      <Switch />
-                    </Form.Item>
-                    <Form.Item name="joern_required" label="Joern 必需" valuePropName="checked">
-                      <Switch />
-                    </Form.Item>
-                    <Form.Item name="allow_joern_unavailable" label="允许 Joern 降级" valuePropName="checked">
+                    <Form.Item name="enable_decompilation" label="自动反编译" valuePropName="checked">
                       <Switch />
                     </Form.Item>
                     <Form.Item name="allow_external_network" label="允许外网" valuePropName="checked">
@@ -234,11 +233,17 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
                     </Form.Item>
                   </div>
                   <div className="form-grid">
-                    <Form.Item name="joern_timeout_seconds" label="Joern 超时秒数">
-                      <InputNumber min={30} max={7200} />
+                    <Form.Item name="decompiled_source_dir" label="反编译输出目录">
+                      <Input />
                     </Form.Item>
-                    <Form.Item name="joern_query_packs" label="Joern Query Packs">
-                      <Select mode="tags" tokenSeparators={[","]} />
+                    <Form.Item name="decompile_max_artifact_size_mb" label="单包大小 MB">
+                      <InputNumber min={1} max={4096} />
+                    </Form.Item>
+                    <Form.Item name="decompile_timeout_seconds" label="反编译超时秒数">
+                      <InputNumber min={1} max={7200} />
+                    </Form.Item>
+                    <Form.Item name="decompile_max_artifacts" label="反编译包数量">
+                      <InputNumber min={1} max={500} />
                     </Form.Item>
                   </div>
                 </>

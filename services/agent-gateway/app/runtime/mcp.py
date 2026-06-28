@@ -1,0 +1,2 @@
+class McpRuntime:
+    protocol = "mcp"

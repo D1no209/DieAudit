@@ -5,6 +5,7 @@ ARG HTTPS_PROXY=
 ARG NO_PROXY=localhost,127.0.0.1
 ARG OPENCODE_VERSION=1.15.11
 ARG OPENCODE_TARGET=linux-x64
+ARG CODEBASE_MEMORY_MCP_VERSION=0.8.1
 
 ENV HTTP_PROXY=${HTTP_PROXY}
 ENV HTTPS_PROXY=${HTTPS_PROXY}
@@ -26,6 +27,18 @@ urllib.request.urlretrieve(url, archive); \
 tarfile.open(archive, 'r:gz').extract('opencode', '/usr/local/bin')" \
     && chmod 755 /usr/local/bin/opencode \
     && opencode --version
+
+RUN python -c "import os, shutil, tarfile, tempfile, urllib.request; \
+version=os.environ.get('CODEBASE_MEMORY_MCP_VERSION', '${CODEBASE_MEMORY_MCP_VERSION}'); \
+url=f'https://github.com/DeusData/codebase-memory-mcp/releases/download/v{version}/codebase-memory-mcp-linux-amd64.tar.gz'; \
+archive='/tmp/codebase-memory-mcp.tar.gz'; \
+urllib.request.urlretrieve(url, archive); \
+tmp=tempfile.mkdtemp(prefix='cbm-'); \
+tarfile.open(archive, 'r:gz').extractall(tmp); \
+matches=[path for path in __import__('pathlib').Path(tmp).rglob('codebase-memory-mcp') if path.is_file()]; \
+shutil.copyfile(str(matches[0]), '/usr/local/bin/codebase-memory-mcp')" \
+    && chmod 755 /usr/local/bin/codebase-memory-mcp \
+    && codebase-memory-mcp --version
 
 COPY services/agents/opencode-agent/opencode_acp_runner.py /app/opencode_acp_runner.py
 

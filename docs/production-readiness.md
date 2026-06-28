@@ -12,23 +12,30 @@ but cannot install safely by itself.
     internal network.
 - Use the workflow worker execution backend:
   - Set `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable
-    queue, or `PIPELINE_EXECUTION_BACKEND=temporal` to start AuditRuns through
-    Temporal stage activities.
+    queue.
   - Keep `workflow-worker` running in the `core` Compose profile.
   - Verify `/runtime/workers` reports a fresh running worker heartbeat.
-  - When using `temporal`, verify `/runtime/temporal/health` and set
-    `TEMPORAL_TASK_QUEUE` consistently for API and worker services.
-  - Temporal mode runs the main pipeline stages as activities. Source-Sink
-    Finder, Judger, PoC Writer, and PoC Verifier run one activity per Finding,
-    while Validators run one activity per Finding/round.
-  - Fan-out activities use stable activity IDs derived from AuditRun, stage,
-    Finding, and Validator round, with bounded retry policies. Completed
-    AgentRuns with the same activity key are reused on retry to avoid duplicate
-    Agent containers. Long-running stage, Validator, and Agent fan-out
-    activities emit Temporal heartbeats, while AgentRun events record container
-    start, OpenCode wait, log capture, result parsing, and terminal status. A
-    later hardening pass should add finer-grained streaming progress from inside
-    the ACP/OpenCode adapter.
+  - Keep Whiteboard Swarm enabled only with explicit round/task budgets. The
+    controller Agent schedules follow-up Agents through platform MCP tools, so
+    `max_whiteboard_rounds` and `max_whiteboard_tasks_per_round` are production
+    guard rails, not tuning niceties.
+  - Verify AgentRun events record container start, OpenCode wait, log capture,
+    result parsing, and terminal status. A later hardening pass should add
+    finer-grained streaming progress from inside the ACP/OpenCode adapter.
+- Keep ACP agent images current:
+  - Build and publish both `dieaudit/opencode-agent:local` and
+    `dieaudit/kimi-code-agent:local` when those templates are enabled.
+  - Verify the agent images include the shared ACP runner and
+    `codebase-memory-mcp`.
+  - Confirm agent templates use ACP protocol metadata and do not rely on
+    runtime-specific local MCP configuration for stdio MCPs.
+- Keep code graph context agent-driven:
+  - Treat `codebase-memory-mcp` as the production graph provider.
+  - Verify `/runtime/readiness` reports the `codebase-memory-mcp` template as
+    available with `transport=stdio`.
+  - Confirm graph cache artifacts are written under
+    `/artifacts/codebase-memory` and retained according to artifact policy.
+  - Do not add a required pre-agent graph build stage to production readiness.
 - Keep HTTP guard rails enabled:
   - Set `MAX_REQUEST_BODY_BYTES` to a size appropriate for source zip uploads.
   - Set `MAX_UPLOAD_BYTES` to bound streamed uploads even when
@@ -59,6 +66,14 @@ but cannot install safely by itself.
   - Keep `ALLOW_RUNC_SANDBOX=true` when using the default Docker runtime.
   - Keep `ALLOW_SANDBOX_EXTERNAL_NETWORK=false` unless a specific validation
     target requires outbound network access.
+- Keep split-service boundaries explicit:
+  - Route user-facing API traffic through `web-api`.
+  - Route dynamic agent and MCP runtime actions through `agent-gateway`.
+  - Route project import and snapshot work through `workspace-engine`.
+  - Route PoC and target execution through `sandbox-runner`.
+  - Route knowledge document indexing and search through `kb-indexer`.
+  - Keep platform-common code shared as a library; do not let services reach
+    into each other's private application packages.
 - Optionally configure semantic knowledge embeddings:
   - Set `KNOWLEDGE_EMBEDDING_PROVIDER=openai-compatible`.
   - Set `KNOWLEDGE_EMBEDDING_BASE_URL` to an endpoint that exposes

@@ -63,8 +63,9 @@ async def main() -> int:
     }
     try:
         env = dict(os.environ)
-        command = os.environ.get("OPENCODE_ACP_COMMAND", "opencode")
-        args = os.environ.get("OPENCODE_ACP_ARGS", "acp").split()
+        runtime_name = os.environ.get("ACP_RUNTIME_NAME") or os.environ.get("OPENCODE_RUNTIME_NAME") or "opencode"
+        command = os.environ.get("ACP_COMMAND") or os.environ.get("OPENCODE_ACP_COMMAND", "opencode")
+        args = (os.environ.get("ACP_ARGS") or os.environ.get("OPENCODE_ACP_ARGS", "acp")).split()
         async with acp.spawn_agent_process(client, command, *args, env=env, cwd="/workspace") as (agent, process):
             initialize = await _maybe_await(
                 agent.initialize(
@@ -88,6 +89,8 @@ async def main() -> int:
                     "response": _dump(response),
                     "events": client.events,
                     "process_returncode": getattr(process, "returncode", None),
+                    "runtime_name": runtime_name,
+                    "acp_command": [command, *args],
                 }
             )
             _append_finding_markdown(input_payload, result)
@@ -135,6 +138,19 @@ def _load_mcp_servers() -> list[Any]:
             result.append(schema.SseMcpServer(name=name, url=server["url"], headers=[], type="sse"))
         elif transport == "http":
             result.append(schema.HttpMcpServer(name=name, url=server["url"], headers=[], type="http"))
+        elif transport == "stdio":
+            env = [
+                schema.EnvVariable(name=str(key), value=str(value))
+                for key, value in (server.get("env") or {}).items()
+            ]
+            result.append(
+                schema.McpServerStdio(
+                    name=name,
+                    command=str(server["command"]),
+                    args=[str(item) for item in server.get("args", [])],
+                    env=env,
+                )
+            )
     return result
 
 

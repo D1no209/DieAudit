@@ -104,7 +104,6 @@ def test_codeql_tool_image_is_experimental_not_default_tools_profile() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     services = compose["services"]
 
-    assert "tools" in services["tool-mcp-joern-image"]["profiles"]
     assert "tools" not in services["tool-mcp-codeql-image"]["profiles"]
     assert set(services["tool-mcp-codeql-image"]["profiles"]) == {"experimental", "codeql"}
 
@@ -115,3 +114,12 @@ def test_mock_images_are_demo_only_not_default_tools_profile() -> None:
 
     assert services["mock-agent-image"]["profiles"] == ["demo"]
     assert services["mock-mcp-image"]["profiles"] == ["demo"]
+
+
+def test_kimi_code_agent_image_is_in_tools_profile() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    service = compose["services"]["kimi-code-agent-image"]
+
+    assert service["image"] == "dieaudit/kimi-code-agent:local"
+    assert "tools" in service["profiles"]
+    assert service["build"]["dockerfile"] == "services/agents/kimi-code-agent/Dockerfile"

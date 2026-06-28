@@ -158,8 +158,8 @@ def test_run_tool_command_does_not_overwrite_existing_artifact_with_stdout(
     monkeypatch.setattr(tool_mcp.subprocess, "run", fake_run)
 
     result = tool_mcp._run_tool_command(
-        "joern",
-        ["joern", "--script", "query.sc"],
+        "custom-tool",
+        ["custom-tool", "--write-result"],
         output_path,
         5,
         stdout_path=log_path,
@@ -169,99 +169,6 @@ def test_run_tool_command_does_not_overwrite_existing_artifact_with_stdout(
     assert result["ok"] is True
     assert output_path.read_text(encoding="utf-8") == "actual result"
     assert log_path.read_text(encoding="utf-8") == "tool log"
-
-
-def test_joern_build_cpg_rejects_workspace_path_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tool_mcp, "WORKSPACE_ROOT", tmp_path.resolve())
-    monkeypatch.setattr(tool_mcp, "ARTIFACT_ROOT", (tmp_path / "artifacts").resolve())
-    monkeypatch.setattr(tool_mcp.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool == "joern" else None)
-
-    with pytest.raises(ValueError, match="escapes workspace"):
-        tool_mcp.joern_build_cpg("../outside")
-
-
-def test_joern_query_rejects_empty_query(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tool_mcp.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool == "joern" else None)
-
-    with pytest.raises(ValueError, match="query is required"):
-        tool_mcp.joern_query("")
-
-
-def test_joern_common_queries_runs_pack_and_records_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    artifact_root = (tmp_path / "artifacts").resolve()
-    cpg_path = artifact_root / "joern-mcp" / "joern" / "cpg.bin.zip"
-    cpg_path.parent.mkdir(parents=True, exist_ok=True)
-    cpg_path.write_text("fake cpg", encoding="utf-8")
-    monkeypatch.setattr(tool_mcp, "WORKSPACE_ROOT", tmp_path.resolve())
-    monkeypatch.setattr(tool_mcp, "ARTIFACT_ROOT", artifact_root)
-    monkeypatch.setattr(tool_mcp, "MCP_NAME", "joern-mcp")
-    monkeypatch.setattr(tool_mcp.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool == "joern" else None)
-
-    def fake_run(command, **_kwargs):
-        return subprocess.CompletedProcess(command, 0, stdout="entrypoint result", stderr="")
-
-    monkeypatch.setattr(tool_mcp.subprocess, "run", fake_run)
-
-    result = tool_mcp.joern_common_queries(str(cpg_path), "entrypoints", timeout_seconds=15)
-
-    assert result["ok"] is True
-    assert result["tool"] == "joern"
-    assert result["query_pack"] == "entrypoints"
-    assert result["artifact"]["exists"] is True
-    assert result["artifact_path"].endswith("joern-query-entrypoints.txt")
-
-
-def test_joern_query_imports_cpg_from_artifact_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    workspace_root = (tmp_path / "workspace").resolve()
-    artifact_root = (tmp_path / "artifacts").resolve()
-    cpg_path = artifact_root / "joern-mcp" / "joern" / "cpg.bin.zip"
-    workspace_root.mkdir(parents=True)
-    cpg_path.parent.mkdir(parents=True)
-    cpg_path.write_text("fake cpg", encoding="utf-8")
-    monkeypatch.setattr(tool_mcp, "WORKSPACE_ROOT", workspace_root)
-    monkeypatch.setattr(tool_mcp, "ARTIFACT_ROOT", artifact_root)
-    monkeypatch.setattr(tool_mcp, "MCP_NAME", "joern-mcp")
-    monkeypatch.setattr(tool_mcp.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool == "joern" else None)
-
-    captured: dict[str, str] = {}
-
-    def fake_run(command, **_kwargs):
-        script_path = Path(command[command.index("--script") + 1])
-        captured["script"] = script_path.read_text(encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, stdout="query result", stderr="")
-
-    monkeypatch.setattr(tool_mcp.subprocess, "run", fake_run)
-
-    result = tool_mcp.joern_query("cpg.method.take(1).size", cpg_path=str(cpg_path), timeout_seconds=15)
-
-    assert result["ok"] is True
-    assert f'importCpg("{cpg_path.as_posix()}")' in captured["script"]
-
-
-def test_joern_build_cpg_runs_query_packs_after_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tool_mcp, "WORKSPACE_ROOT", tmp_path.resolve())
-    monkeypatch.setattr(tool_mcp, "ARTIFACT_ROOT", (tmp_path / "artifacts").resolve())
-    monkeypatch.setattr(tool_mcp, "MCP_NAME", "joern-mcp")
-    monkeypatch.setattr(tool_mcp.shutil, "which", lambda tool: f"/usr/bin/{tool}" if tool in {"joern", "joern-parse"} else None)
-
-    def fake_run(command, **_kwargs):
-        if "joern-parse" in str(command[0]):
-            Path(command[command.index("--output") + 1]).write_text("fake cpg", encoding="utf-8")
-            return subprocess.CompletedProcess(command, 0, stdout="parse log that must not overwrite cpg", stderr="")
-        return subprocess.CompletedProcess(command, 0, stdout="query result", stderr="")
-
-    monkeypatch.setattr(tool_mcp.subprocess, "run", fake_run)
-
-    result = tool_mcp.joern_build_cpg(".", timeout_seconds=30, query_packs=["entrypoints", "secrets"])
-
-    assert result["ok"] is True
-    assert result["artifact"]["exists"] is True
-    assert Path(result["artifact_path"]).read_text(encoding="utf-8") == "fake cpg"
-    assert result["stdout_artifact"]["exists"] is True
-    assert Path(result["stdout_artifact_path"]).read_text(encoding="utf-8") == "parse log that must not overwrite cpg"
-    assert [item["query_pack"] for item in result["query_packs"]] == ["entrypoints", "secrets"]
-    assert result["query_packs"][0]["artifact_path"].endswith("joern-query-entrypoints.txt")
-    assert result["query_packs"][1]["artifact_path"].endswith("joern-query-secrets.txt")
 
 
 def test_detect_dependencies_covers_common_manifests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

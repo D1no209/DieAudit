@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 ROOT = Path(__file__).resolve().parents[1]
 

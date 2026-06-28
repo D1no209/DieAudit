@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -11,6 +12,10 @@ def _load_runner_module():
         RequestPermissionResponse=lambda **kwargs: kwargs,
         AllowedOutcome=lambda **kwargs: kwargs,
         DeniedOutcome=lambda **kwargs: kwargs,
+        EnvVariable=lambda **kwargs: {"kind": "env", **kwargs},
+        HttpMcpServer=lambda **kwargs: {"kind": "http", **kwargs},
+        SseMcpServer=lambda **kwargs: {"kind": "sse", **kwargs},
+        McpServerStdio=lambda **kwargs: {"kind": "stdio", **kwargs},
     )
     acp = types.ModuleType("acp")
     acp.Client = object
@@ -107,3 +112,34 @@ def test_event_transcript_joins_agent_chunks_in_order() -> None:
     )
 
     assert transcript == "Source-Sink"
+
+
+def test_load_mcp_servers_supports_http_sse_and_stdio(monkeypatch) -> None:
+    runner = _load_runner_module()
+    monkeypatch.setenv(
+        "MCP_SERVERS_JSON",
+        json.dumps(
+            {
+                "filesystem-mcp": {"transport": "http", "url": "http://filesystem:8001/mcp"},
+                "events-mcp": {"transport": "sse", "url": "http://events:8001/sse"},
+                "codebase-memory-mcp": {
+                    "transport": "stdio",
+                    "command": "codebase-memory-mcp",
+                    "args": [],
+                    "env": {"CBM_CACHE_DIR": "/artifacts/codebase-memory"},
+                },
+            }
+        ),
+    )
+
+    servers = runner._load_mcp_servers()
+
+    assert servers[0]["kind"] == "http"
+    assert servers[1]["kind"] == "sse"
+    assert servers[2] == {
+        "kind": "stdio",
+        "name": "codebase-memory-mcp",
+        "command": "codebase-memory-mcp",
+        "args": [],
+        "env": [{"kind": "env", "name": "CBM_CACHE_DIR", "value": "/artifacts/codebase-memory"}],
+    }

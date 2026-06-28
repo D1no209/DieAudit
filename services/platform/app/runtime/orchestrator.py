@@ -253,6 +253,56 @@ class RuntimeOrchestrator:
             "before": state["summary"],
         }
 
+    async def _shared_agent_input_payload(self, audit_run_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(input_payload or {})
+        async with SessionLocal() as session:
+            audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
+        payload.setdefault(
+            "structure",
+            {
+                "path": "/artifacts/common/STRUCTURE.md",
+                "artifact_path": str(self.settings.artifact_root / "common" / audit_run_id / "STRUCTURE.md"),
+                "instruction": "Read STRUCTURE.md before analysis and use it as shared architecture context.",
+            },
+        )
+        payload.setdefault(
+            "codebase_memory",
+            {
+                "mcp": "codebase-memory-mcp",
+                "repo_path": "/workspace",
+                "cache_dir": "/artifacts/codebase-memory",
+                "instruction": (
+                    "Use codebase-memory-mcp for code graph discovery. Call index_repository for /workspace when graph context "
+                    "is needed or missing; use get_architecture before broad planning, then search_graph, trace_path, "
+                    "query_graph, get_code_snippet, detect_changes, and search_code for focused analysis."
+                ),
+            },
+        )
+        payload.setdefault(
+            "agent_collaboration",
+            {
+                "whiteboard_mcp": "whiteboard-mcp",
+                "codebase_memory_mcp": "codebase-memory-mcp",
+                "lifecycle": "long-running-container",
+                "instruction": (
+                    "Use whiteboard-mcp for cards, subscriptions, notifications, and help requests. "
+                    "Use codebase-memory-mcp for architecture, entrypoint, source/sink, route, call-chain, and graph queries whenever available."
+                ),
+            },
+        )
+        return payload
+
+    @staticmethod
+    def _stdio_mcp_server_config(template: dict[str, Any]) -> dict[str, Any]:
+        env = {str(key): str(value) for key, value in (template.get("env") or {}).items()}
+        env.setdefault("CBM_CACHE_DIR", "/artifacts/codebase-memory")
+        return {
+            "transport": "stdio",
+            "command": str(template.get("command") or template.get("name")),
+            "args": [str(item) for item in template.get("args", [])],
+            "env": env,
+        }
+
     async def start_agent_run(
         self,
         *,
@@ -265,6 +315,7 @@ class RuntimeOrchestrator:
         input_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run_id = str(uuid.uuid4())
+        input_payload = await self._shared_agent_input_payload(audit_run_id, input_payload or {})
         network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}"
         labels = self._labels(audit_run_id, project_id, role="runtime", ttl=utc_ttl())
 
@@ -282,7 +333,7 @@ class RuntimeOrchestrator:
             template_name=agent.get("name", agent_name),
             protocol_kind=protocol_kind,
             status="starting",
-            input_summary=input_payload or {},
+            input_summary=input_payload,
         )
         await self._record_agent_event(
             run_id,
@@ -296,12 +347,22 @@ class RuntimeOrchestrator:
             },
         )
         mcp_results: list[dict[str, Any]] = []
-        mcp_servers: dict[str, dict[str, str]] = {}
+        mcp_servers: dict[str, dict[str, Any]] = {}
 
         try:
-            for mcp_name in agent.get("required_mcp", []):
-                await self._record_agent_event(run_id, "mcp_sidecar_starting", {"mcp_name": mcp_name})
+            for mcp_name in self._agent_required_mcp(agent, input_payload or {}):
                 mcp = self.mcp_templates.get(mcp_name)
+                transport = str(mcp.get("transport", "http"))
+                if transport == "stdio":
+                    mcp_servers[mcp["name"]] = self._stdio_mcp_server_config(mcp)
+                    await self._record_agent_event(
+                        run_id,
+                        "mcp_stdio_configured",
+                        {"mcp_name": mcp_name, "command": mcp.get("command")},
+                    )
+                    continue
+
+                await self._record_agent_event(run_id, "mcp_sidecar_starting", {"mcp_name": mcp_name})
                 mcp_container = await self._start_mcp(
                     audit_run_id=audit_run_id,
                     project_id=project_id,
@@ -320,15 +381,16 @@ class RuntimeOrchestrator:
                     },
                 )
                 mcp_results.append(mcp_container)
-                if mcp.get("transport", "http") in {"http", "sse"}:
+                if transport in {"http", "sse"}:
                     endpoint = mcp.get("mcp_endpoint", "")
                     mcp_servers[mcp["name"]] = {
-                        "transport": mcp.get("transport", "http"),
+                        "transport": transport,
                         "url": f"{self._mcp_base_url(mcp_container, mcp)}{endpoint}",
                     }
 
             runtime_package: dict[str, Any] | None = None
-            if self._is_opencode_agent(agent):
+            acp_runtime_name = self._acp_runtime_name(agent)
+            if acp_runtime_name:
                 runtime_package = await self.opencode_packages.build(
                     audit_run_id=audit_run_id,
                     project_id=project_id,
@@ -368,32 +430,44 @@ class RuntimeOrchestrator:
                     "image": agent_container.get("image"),
                 },
             )
-            opencode_result: dict[str, Any] | None = None
+            acp_result: dict[str, Any] | None = None
             structured_ingest: dict[str, Any] | None = None
-            if runtime_package:
-                opencode_result = await self._wait_for_opencode_agent(
+            long_running = bool((input_payload or {}).get("long_running") or (input_payload or {}).get("agent_lifecycle") == "long-running")
+            if runtime_package and not long_running:
+                acp_result = await self._wait_for_acp_agent(
                     audit_run_id=audit_run_id,
                     agent_run_id=run_id,
                     container_id=agent_container["id"],
                     artifact_dir=self._agent_artifact_dir(audit_run_id, run_id),
+                    runtime_name=acp_runtime_name or "acp",
                 )
                 structured_ingest = await self.agent_output_ingestor.ingest(
                     agent_run_id=run_id,
                     audit_run_id=audit_run_id,
                     project_id=project_id,
-                    payload=opencode_result,
+                    payload=acp_result,
                 )
                 await self._record_agent_event(
                     run_id,
                     "structured_output_ingest_completed",
                     {
-                        "status": opencode_result.get("status") if opencode_result else None,
+                        "status": acp_result.get("status") if acp_result else None,
                         "structured_ingest": structured_ingest,
                     },
                 )
+            elif long_running:
+                await self._record_agent_event(
+                    run_id,
+                    "agent_run_listening",
+                    {
+                        "container_id": agent_container.get("id"),
+                        "mcp_servers": mcp_servers,
+                        "lifecycle": "long-running-container",
+                    },
+                )
             final_status = "running"
-            if opencode_result:
-                final_status = "completed" if opencode_result.get("status") == "completed" else "failed"
+            if acp_result:
+                final_status = "completed" if acp_result.get("status") == "completed" else "failed"
             await self._record_agent_run(
                 agent_run_id=run_id,
                 audit_run_id=audit_run_id,
@@ -407,20 +481,24 @@ class RuntimeOrchestrator:
                     "container_id": agent_container["id"],
                     "mcp_servers": mcp_servers,
                     "runtime_package": runtime_package,
-                    "opencode_result": opencode_result,
+                    "acp_runtime": acp_runtime_name,
+                    "acp_result": acp_result,
+                    "opencode_result": acp_result,
                     "structured_ingest": structured_ingest,
                 },
-                artifact_path=opencode_result.get("artifact") if opencode_result else None,
-                error=opencode_result.get("error") if opencode_result and opencode_result.get("status") == "failed" else None,
+                artifact_path=acp_result.get("artifact") if acp_result else None,
+                error=acp_result.get("error") if acp_result and acp_result.get("status") == "failed" else None,
             )
             await self._record_agent_event(
                 run_id,
-                "agent_run_finished",
+                "agent_run_listening" if long_running else "agent_run_finished",
                 {
                     "status": final_status,
-                    "opencode_status": opencode_result.get("status") if opencode_result else None,
-                    "artifact": opencode_result.get("artifact") if opencode_result else None,
-                    "error": opencode_result.get("error") if opencode_result else None,
+                    "acp_runtime": acp_runtime_name,
+                    "acp_status": acp_result.get("status") if acp_result else None,
+                    "opencode_status": acp_result.get("status") if acp_result else None,
+                    "artifact": acp_result.get("artifact") if acp_result else None,
+                    "error": acp_result.get("error") if acp_result else None,
                 },
             )
             return {
@@ -433,7 +511,9 @@ class RuntimeOrchestrator:
                 "mcp": mcp_results,
                 "mcp_servers": mcp_servers,
                 "structured_ingest": structured_ingest,
-                "opencode_status": opencode_result.get("status") if opencode_result else None,
+                "acp_runtime": acp_runtime_name,
+                "acp_status": acp_result.get("status") if acp_result else None,
+                "opencode_status": acp_result.get("status") if acp_result else None,
             }
         except Exception as exc:
             await self._record_agent_event(
@@ -1165,10 +1245,7 @@ class RuntimeOrchestrator:
         labels["dieaudit.mcp"] = template["name"]
         labels["dieaudit.agent_run_id"] = agent_run_id
 
-        if template["name"] == "joern-mcp":
-            mcp_artifact_path = self.settings.artifact_root / "joern" / audit_run_id
-        else:
-            mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / agent_run_id / template["name"]
+        mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / agent_run_id / template["name"]
         mcp_artifact_path.mkdir(parents=True, exist_ok=True)
         mounts = await self._mounts(workspace_host_path, template, artifact_host_path=mcp_artifact_path)
         env = await self._mcp_env(
@@ -1201,6 +1278,7 @@ class RuntimeOrchestrator:
             **template.get("env", {}),
             "AUDIT_RUN_ID": audit_run_id,
             "PROJECT_ID": project_id,
+            "AGENT_RUN_ID": agent_run_id,
         }
         if template.get("permissions", {}).get("platform_api"):
             env.setdefault("PLATFORM_API_URL", "http://agent-gateway:8000")
@@ -1268,7 +1346,7 @@ class RuntimeOrchestrator:
         runtime_host_path: str | None,
         runtime_config_path: str | None,
         template: dict[str, Any],
-        mcp_servers: dict[str, dict[str, str]],
+        mcp_servers: dict[str, dict[str, Any]],
         input_payload: dict[str, Any],
     ) -> dict[str, Any]:
         image = template["image"]
@@ -1296,14 +1374,18 @@ class RuntimeOrchestrator:
         if runtime_config_path:
             env["OPENCODE_CONFIG"] = runtime_config_path
             env["DIEAUDIT_RUNTIME_DIR"] = str(Path(runtime_config_path).parent)
-            env.update(self.opencode_client.command_env())
+            env.update(self.opencode_client.command_env(template))
             env.update(self.opencode_packages.runtime_env(template))
         mounts = await self._mounts(workspace_host_path, template)
         artifact_host_path = self._agent_artifact_dir(audit_run_id, agent_run_id)
         artifact_target = template.get("artifact_mount", {}).get("target", "/artifacts")
         artifact_host_path.mkdir(parents=True, exist_ok=True)
         mounts.append(self._bind_mount(await self._host_path_for(artifact_host_path), artifact_target, read_only=False))
+        common_artifact_path = self.settings.artifact_root / "common" / audit_run_id
+        common_artifact_path.mkdir(parents=True, exist_ok=True)
+        mounts.append(self._bind_mount(await self._host_path_for(common_artifact_path), f"{artifact_target.rstrip('/')}/common", read_only=False))
         env["ARTIFACT_DIR"] = artifact_target
+        env["DIEAUDIT_COMMON_ARTIFACT_DIR"] = f"{artifact_target.rstrip('/')}/common"
         finding_mount = self._finding_mount_from_input(input_payload)
         if finding_mount:
             self._ensure_finding_workspace_files(finding_mount, audit_run_id, input_payload)
@@ -1330,40 +1412,71 @@ class RuntimeOrchestrator:
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "agent", labels, "running")
         return {"id": created["Id"], "name": name, "image": image, "role": "agent", "template": template["name"]}
 
-    async def _wait_for_opencode_agent(
+    def _agent_required_mcp(self, agent: dict[str, Any], input_payload: dict[str, Any]) -> list[str]:
+        names = [str(item) for item in agent.get("required_mcp", []) if str(item).strip()]
+        auto = agent.get("auto_mcp")
+        if auto is not False:
+            for name in ("whiteboard-mcp", "codebase-memory-mcp"):
+                if name in names:
+                    continue
+                try:
+                    self.mcp_templates.get(name)
+                except Exception:
+                    continue
+                names.append(name)
+        return names
+
+    async def _wait_for_acp_agent(
         self,
         *,
         audit_run_id: str,
         agent_run_id: str,
         container_id: str,
         artifact_dir: Path,
+        runtime_name: str,
     ) -> dict[str, Any]:
         wait_error: str | None = None
         await self._record_agent_event(
             agent_run_id,
-            "opencode_wait_started",
-            {"container_id": container_id, "timeout_seconds": getattr(self.settings, "opencode_agent_timeout_seconds", 600)},
+            "acp_wait_started",
+            {
+                "container_id": container_id,
+                "runtime": runtime_name,
+                "timeout_seconds": getattr(self.settings, "opencode_agent_timeout_seconds", 600),
+            },
         )
+        if runtime_name == "opencode":
+            await self._record_agent_event(
+                agent_run_id,
+                "opencode_wait_started",
+                {"container_id": container_id, "timeout_seconds": getattr(self.settings, "opencode_agent_timeout_seconds", 600)},
+            )
         try:
             wait_result = await asyncio.wait_for(
                 self.docker.wait_container(container_id),
                 timeout=getattr(self.settings, "opencode_agent_timeout_seconds", 600),
             )
         except asyncio.TimeoutError:
-            wait_error = f"OpenCode agent timed out after {getattr(self.settings, 'opencode_agent_timeout_seconds', 600)}s"
-            await self._record_agent_event(agent_run_id, "opencode_wait_timeout", {"container_id": container_id, "error": wait_error})
+            wait_error = f"{runtime_name} ACP agent timed out after {getattr(self.settings, 'opencode_agent_timeout_seconds', 600)}s"
+            await self._record_agent_event(agent_run_id, "acp_wait_timeout", {"container_id": container_id, "runtime": runtime_name, "error": wait_error})
             await self.docker.stop_container(container_id, timeout_seconds=3)
             wait_result = {"StatusCode": 124, "error": wait_error}
         except Exception as exc:
             wait_error = str(exc)
-            await self._record_agent_event(agent_run_id, "opencode_wait_failed", {"container_id": container_id, "error": wait_error})
+            await self._record_agent_event(agent_run_id, "acp_wait_failed", {"container_id": container_id, "runtime": runtime_name, "error": wait_error})
             wait_result = {"StatusCode": 1, "error": wait_error}
         status_code = int(wait_result.get("StatusCode") or 0)
         await self._record_agent_event(
             agent_run_id,
-            "opencode_container_exited",
-            {"container_id": container_id, "exit_code": status_code, "wait_result": wait_result},
+            "acp_container_exited",
+            {"container_id": container_id, "runtime": runtime_name, "exit_code": status_code, "wait_result": wait_result},
         )
+        if runtime_name == "opencode":
+            await self._record_agent_event(
+                agent_run_id,
+                "opencode_container_exited",
+                {"container_id": container_id, "exit_code": status_code, "wait_result": wait_result},
+            )
         log_artifact = await self._capture_container_logs(
             audit_run_id=audit_run_id,
             container_id=container_id,
@@ -1378,11 +1491,18 @@ class RuntimeOrchestrator:
         result_file = artifact_dir / "agent_result.json"
         await self._record_agent_event(
             agent_run_id,
-            "opencode_logs_captured",
-            {"container_id": container_id, "log_artifact": log_artifact, "result_file": str(result_file)},
+            "acp_logs_captured",
+            {"container_id": container_id, "runtime": runtime_name, "log_artifact": log_artifact, "result_file": str(result_file)},
         )
+        if runtime_name == "opencode":
+            await self._record_agent_event(
+                agent_run_id,
+                "opencode_logs_captured",
+                {"container_id": container_id, "log_artifact": log_artifact, "result_file": str(result_file)},
+            )
         payload: dict[str, Any] = {
             "status": "failed",
+            "runtime_name": runtime_name,
             "wait_result": wait_result,
             "artifact": str(result_file),
             "log_artifact": log_artifact,
@@ -1392,25 +1512,34 @@ class RuntimeOrchestrator:
         if result_file.exists():
             try:
                 payload.update(json.loads(result_file.read_text(encoding="utf-8")))
+                payload.setdefault("runtime_name", runtime_name)
                 await self._record_agent_event(
                     agent_run_id,
-                    "opencode_result_file_loaded",
-                    {"artifact": str(result_file), "status": payload.get("status")},
+                    "acp_result_file_loaded",
+                    {"artifact": str(result_file), "runtime": runtime_name, "status": payload.get("status")},
                 )
+                if runtime_name == "opencode":
+                    await self._record_agent_event(
+                        agent_run_id,
+                        "opencode_result_file_loaded",
+                        {"artifact": str(result_file), "status": payload.get("status")},
+                    )
             except json.JSONDecodeError as exc:
                 payload["error"] = f"invalid agent_result.json: {exc}"
                 await self._record_agent_event(
                     agent_run_id,
-                    "opencode_result_file_invalid",
-                    {"artifact": str(result_file), "error": payload["error"]},
+                    "acp_result_file_invalid",
+                    {"artifact": str(result_file), "runtime": runtime_name, "error": payload["error"]},
                 )
         elif not wait_error:
             payload["error"] = "agent_result.json not found"
-            await self._record_agent_event(agent_run_id, "opencode_result_file_missing", {"artifact": str(result_file)})
+            await self._record_agent_event(agent_run_id, "acp_result_file_missing", {"artifact": str(result_file), "runtime": runtime_name})
 
         for event in payload.get("events", []):
             await self._record_agent_event(agent_run_id, event.get("event_type", "acp_event"), event)
-        await self._record_agent_event(agent_run_id, "opencode_result", payload)
+        await self._record_agent_event(agent_run_id, "acp_result", payload)
+        if runtime_name == "opencode":
+            await self._record_agent_event(agent_run_id, "opencode_result", payload)
         return payload
 
     async def _capture_and_remove_container(
@@ -1954,10 +2083,12 @@ class RuntimeOrchestrator:
         return {"Type": "bind", "Source": source, "Target": target, "ReadOnly": read_only}
 
     @staticmethod
-    def _inject_no_proxy(env: dict[str, Any], mcp_servers: dict[str, dict[str, str]]) -> None:
+    def _inject_no_proxy(env: dict[str, Any], mcp_servers: dict[str, dict[str, Any]]) -> None:
         internal_hosts = ["localhost", "127.0.0.1", "agent-gateway", "host.docker.internal"]
         for server in mcp_servers.values():
-            hostname = urlparse(server["url"]).hostname
+            if "url" not in server:
+                continue
+            hostname = urlparse(str(server["url"])).hostname
             if hostname:
                 internal_hosts.append(hostname)
         RuntimeOrchestrator._inject_internal_no_proxy(env, internal_hosts)
@@ -2072,6 +2203,14 @@ class RuntimeOrchestrator:
     def _is_opencode_agent(template: dict[str, Any]) -> bool:
         protocol = template.get("protocol", {})
         return protocol.get("kind") == "agent-client-protocol" and protocol.get("runtime") == "opencode"
+
+    @staticmethod
+    def _acp_runtime_name(template: dict[str, Any]) -> str | None:
+        protocol = template.get("protocol", {})
+        if protocol.get("kind") != "agent-client-protocol":
+            return None
+        runtime = str(protocol.get("runtime") or "").strip()
+        return runtime or "acp"
 
     def _resource_host_config(self, resources: dict[str, Any] | None) -> dict[str, Any]:
         resources = resources or {}

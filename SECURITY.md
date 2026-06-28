@@ -33,9 +33,11 @@ provider keys, or exploit payloads that target third-party systems.
 
 - Keep API authentication enabled.
 - Keep `ENABLE_DEMO_TEMPLATES=false` in production.
-- Do not expose Docker, Postgres, Redis, NATS, Temporal, or Qdrant ports to
+- Do not expose Docker, Postgres, Redis, NATS, or Qdrant ports to
   untrusted networks.
 - Keep Agent and MCP containers away from the raw Docker socket.
+- Treat ACP stdio MCPs as part of the agent trust boundary; install them only
+  from pinned, reviewed image build inputs.
 - Keep PoC external network access disabled unless explicitly required.
 - Use dedicated hosts or VMs for high-risk audits.
 - Rotate model/API keys that may have been exposed to Agent prompts, logs, or

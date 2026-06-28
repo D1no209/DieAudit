@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from app.services.pipeline_executor import TEMPORAL_PIPELINE_STAGES, PipelineExecutor
+from app.services.pipeline_executor import PipelineExecutor
 
 
 class FakeRuntime:
@@ -56,51 +56,6 @@ class FailingRuntime(FakeRuntime):
     async def start_agent_run(self, **kwargs: Any) -> dict[str, Any]:
         self.agent_runs.append(kwargs)
         raise RuntimeError("agent crashed")
-
-
-class _ScalarRows:
-    def __init__(self, rows: list[Any]) -> None:
-        self.rows = rows
-
-    def scalars(self) -> "_ScalarRows":
-        return self
-
-    def __iter__(self):
-        return iter(self.rows)
-
-
-class _AgentRunRow:
-    def __init__(self, *, agent_run_id: str, input_summary: dict[str, Any]) -> None:
-        self.agent_run_id = agent_run_id
-        self.audit_run_id = "run-1"
-        self.status = "completed"
-        self.input_summary = input_summary
-        self.updated_at = None
-
-
-class _AgentRunSession:
-    def __init__(self, rows: list[_AgentRunRow]) -> None:
-        self.rows = rows
-
-    async def __aenter__(self) -> "_AgentRunSession":
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    async def execute(self, query: Any) -> _ScalarRows:
-        return _ScalarRows(self.rows)
-
-    async def scalar(self, query: Any) -> _AgentRunRow | None:
-        return self.rows[0] if self.rows else None
-
-    async def commit(self) -> None:
-        return None
-
-
-@pytest.fixture(autouse=True)
-def _isolate_pipeline_executor_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.services.pipeline_executor.SessionLocal", lambda: _AgentRunSession([]))
 
 
 class CallbackRecorder:
@@ -218,14 +173,8 @@ class CallbackRecorder:
     async def run_semgrep(self, *args: Any) -> dict[str, Any]:
         return {"ok": True, "findings_created": 0}
 
-    async def run_joern(self, *args: Any) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "available": True,
-            "status": "completed",
-            "cpg_path": "/artifacts/joern/cpg.bin.zip",
-            "artifact_id": "joern-artifact",
-        }
+    async def run_whiteboard_swarm(self, audit_run_id: str, runtime: Any) -> dict[str, Any]:
+        return {"ok": True, "scheduled": 0, "controller_agent_run_id": "whiteboard-controller-1"}
 
     async def judge(self, audit_run_id: str, runtime: Any) -> dict[str, Any]:
         return {"ok": True, "decisions": []}
@@ -255,11 +204,11 @@ def build_executor(recorder: CallbackRecorder, runtime: FakeRuntime | None = Non
         cancel_reason=recorder.cancel_reason,
         list_findings=recorder.list_findings,
         list_evidence=recorder.list_evidence,
-        run_joern=recorder.run_joern,
         run_code_batch_analysis=recorder.run_code_batch_analysis,
         run_source_sink_analysis=recorder.run_source_sink_analysis,
         run_source_sink_finding=recorder.run_source_sink_finding,
         complete_source_sink_analysis=recorder.complete_source_sink_analysis,
+        run_whiteboard_swarm=recorder.run_whiteboard_swarm,
         run_judger_finding=recorder.run_judger_finding,
         complete_judgement=recorder.complete_judgement,
         run_poc_writer_finding=recorder.run_poc_writer_finding,
@@ -306,14 +255,12 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
 
     assert recorder.statuses == ["running", "completed"]
     assert [item["stage"] for item in recorder.pipeline_states] == [
-        "joern-cpg",
+        "structure-discovery",
         "agent-audit",
         "code-analysis",
-        "sca",
-        "semgrep",
-        "source-sink-analysis",
-        "validators",
-        "judgement",
+        "whiteboard-swarm",
+        "validation-judgement",
+        "feedback-loop",
         "poc-writing",
         "poc-verification",
         "report",
@@ -321,11 +268,10 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     ]
     assert runtime.agent_runs[0]["agent_name"] == "opencode-orchestrator"
     assert runtime.agent_runs[0]["allow_external_network"] is True
-    joern_input = runtime.agent_runs[0]["input_payload"]["joern"]
-    assert joern_input["mcp"] == "joern-mcp"
-    assert joern_input["cpg_path"] == "/artifacts/joern/cpg.bin.zip"
-    assert joern_input["cpg_artifact_id"] == "joern-artifact"
-    assert joern_input["recommended_query_packs"] == ["entrypoints", "authz", "injection", "file-io", "network", "secrets"]
+    graph_input = runtime.agent_runs[0]["input_payload"]["codebase_memory"]
+    assert graph_input["mcp"] == "codebase-memory-mcp"
+    assert graph_input["repo_path"] == "/workspace"
+    assert "index_repository" in graph_input["instruction"]
     assert runtime.validator_runs[0]["validator_rounds"] == 2
     assert runtime.validator_runs[0]["max_parallel_validators"] == 3
     assert runtime.validator_runs[0]["allow_external_network"] is True
@@ -335,473 +281,6 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
     assert recorder.summary is not None
     assert recorder.events[-1]["event_type"] == "pipeline_completed"
     assert recorder.pipeline_events[-1]["event_type"] == "runtime_cleanup_completed"
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_stage_methods_run_fixed_pipeline_to_completion() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 2,
-            "max_parallel_validators": 3,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-    steps: list[dict[str, Any]] = []
-    judge_result: dict[str, Any] = {}
-    report_result: dict[str, Any] = {}
-
-    prepare = await executor.prepare_temporal_pipeline("run-1")
-    for stage in TEMPORAL_PIPELINE_STAGES:
-        result = await executor.execute_temporal_stage("run-1", stage, steps)
-        if result.get("append_to_steps", True) and result.get("step"):
-            steps.append({"step": result["step"], "result": result.get("result")})
-        fanout = result.get("temporal_fanout") if isinstance(result.get("temporal_fanout"), dict) else {}
-        if fanout.get("kind") == "source-sink-findings":
-            attempt_results = [
-                await executor.execute_temporal_swarm_agent({"kind": "source-sink-finding", **attempt})
-                for attempt in fanout["attempts"]
-            ]
-            result = await executor.complete_temporal_swarm_stage(
-                {"audit_run_id": "run-1", "stage": "source-sink-analysis", "kind": fanout["kind"], "results": attempt_results}
-            )
-            steps.append({"step": result["step"], "result": result.get("result")})
-        if fanout.get("kind") == "judger-findings":
-            attempt_results = [
-                await executor.execute_temporal_swarm_agent({"kind": "judger-finding", **attempt})
-                for attempt in fanout["attempts"]
-            ]
-            result = await executor.complete_temporal_swarm_stage(
-                {"audit_run_id": "run-1", "stage": "judgement", "kind": fanout["kind"], "results": attempt_results}
-            )
-            steps.append({"step": result["step"], "result": result.get("result")})
-        if fanout.get("kind") == "poc-writer-findings":
-            attempt_results = [
-                await executor.execute_temporal_swarm_agent({"kind": "poc-writer-finding", **attempt})
-                for attempt in fanout["attempts"]
-            ]
-            result = await executor.complete_temporal_swarm_stage(
-                {"audit_run_id": "run-1", "stage": "poc-writing", "kind": fanout["kind"], "results": attempt_results}
-            )
-            steps.append({"step": result["step"], "result": result.get("result")})
-        if fanout.get("kind") == "poc-verifier-findings":
-            attempt_results = [
-                await executor.execute_temporal_swarm_agent({"kind": "poc-verifier-finding", **attempt})
-                for attempt in fanout["attempts"]
-            ]
-            result = await executor.complete_temporal_swarm_stage(
-                {"audit_run_id": "run-1", "stage": "poc-verification", "kind": fanout["kind"], "results": attempt_results}
-            )
-            steps.append({"step": result["step"], "result": result.get("result")})
-        if fanout.get("kind") == "validator-attempts":
-            attempt_results = [
-                await executor.execute_temporal_validator_attempt(attempt)
-                for attempt in fanout["attempts"]
-            ]
-            result = await executor.complete_temporal_validator_stage(
-                "run-1",
-                project_id="project-1",
-                validator_rounds=2,
-                max_parallel_validators=3,
-                validator_agent_name="opencode-validator",
-                results=attempt_results,
-            )
-            steps.append({"step": result["step"], "result": result.get("result")})
-        if isinstance(result.get("judge_result"), dict):
-            judge_result = result["judge_result"]
-        if isinstance(result.get("report_result"), dict):
-            report_result = result["report_result"]
-    final = await executor.finalize_temporal_pipeline(
-        "run-1",
-        steps=steps,
-        judge_result=judge_result,
-        report_result=report_result,
-    )
-
-    assert prepare["status"] == "running"
-    assert final["status"] == "completed"
-    assert recorder.statuses == ["running", "completed"]
-    assert [item["stage"] for item in recorder.pipeline_states] == [
-        "joern-cpg",
-        "agent-audit",
-        "code-analysis",
-        "sca",
-        "semgrep",
-        "source-sink-analysis",
-        "validators",
-        "judgement",
-        "poc-writing",
-        "poc-verification",
-        "report",
-        "completed",
-    ]
-    assert runtime.agent_runs[0]["input_payload"]["joern"]["cpg_artifact_id"] == "joern-artifact"
-    assert recorder.events[-1]["event_type"] == "pipeline_completed"
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_validators_return_fanout_plan() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 2,
-            "max_parallel_validators": 3,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    result = await executor.execute_temporal_stage("run-1", "validators", [])
-
-    fanout = result["temporal_fanout"]
-    assert fanout["kind"] == "validator-attempts"
-    assert fanout["max_parallel"] == 3
-    assert len(fanout["attempts"]) == 2
-    assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
-    assert fanout["attempts"][0]["round_index"] == 1
-    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-validator-finding-1-round-1"
-    assert fanout["attempts"][1]["round_index"] == 2
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_source_sink_returns_finding_fanout_plan() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {
-                "workspace_host_path": "/workspace/project",
-                "max_parallel_source_sink_finders": 4,
-                "max_source_sink_findings": 1,
-            },
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    result = await executor.execute_temporal_stage("run-1", "source-sink-analysis", [])
-
-    fanout = result["temporal_fanout"]
-    assert fanout["kind"] == "source-sink-findings"
-    assert fanout["stage"] == "source-sink-analysis"
-    assert fanout["max_parallel"] == 4
-    assert len(fanout["attempts"]) == 1
-    assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
-    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-source-sink-finding-1"
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_source_sink_runs_single_finding_and_completes_stage() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    attempt = await executor.execute_temporal_swarm_agent(
-        {
-            "kind": "source-sink-finding",
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "workspace_host_path": "/workspace/project",
-            "audit_run": recorder.audit_run,
-            "finding": {"finding_id": "finding-1", "title": "test"},
-        }
-    )
-    result = await executor.complete_temporal_swarm_stage(
-        {"audit_run_id": "run-1", "stage": "source-sink-analysis", "kind": "source-sink-findings", "results": [attempt]}
-    )
-
-    assert attempt == {"finding_id": "finding-1", "status": "completed", "chains_created": 1}
-    assert result["step"] == "source-sink-analysis"
-    assert result["result"]["scheduled"] == 1
-    assert result["result"]["chains_created"] == 1
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_judgement_returns_finding_fanout_plan() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project", "max_parallel_judgers": 5},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    result = await executor.execute_temporal_stage("run-1", "judgement", [])
-
-    fanout = result["temporal_fanout"]
-    assert fanout["kind"] == "judger-findings"
-    assert fanout["stage"] == "judgement"
-    assert fanout["max_parallel"] == 5
-    assert len(fanout["attempts"]) == 1
-    assert fanout["attempts"][0]["finding"]["finding_id"] == "finding-1"
-    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-judger-finding-1"
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_judgement_runs_single_finding_and_completes_stage() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    attempt = await executor.execute_temporal_swarm_agent(
-        {
-            "kind": "judger-finding",
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "workspace_host_path": "/workspace/project",
-            "audit_run": recorder.audit_run,
-            "finding": {"finding_id": "finding-1", "title": "test"},
-        }
-    )
-    result = await executor.complete_temporal_swarm_stage(
-        {"audit_run_id": "run-1", "stage": "judgement", "kind": "judger-findings", "results": [attempt]}
-    )
-
-    assert attempt["status"] == "completed"
-    assert attempt["decisions"][0]["status"] == "needs_review"
-    assert result["step"] == "judgement"
-    assert result["judge_result"]["decisions"][0]["finding_id"] == "finding-1"
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_poc_writer_returns_finding_fanout_plan() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project", "max_parallel_poc_writers": 3, "max_poc_findings": 1},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    result = await executor.execute_temporal_stage("run-1", "poc-writing", [])
-
-    fanout = result["temporal_fanout"]
-    assert fanout["kind"] == "poc-writer-findings"
-    assert fanout["stage"] == "poc-writing"
-    assert fanout["max_parallel"] == 3
-    assert len(fanout["attempts"]) == 1
-    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-poc-writer-finding-1"
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_poc_writer_runs_single_finding_and_completes_stage() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    attempt = await executor.execute_temporal_swarm_agent(
-        {
-            "kind": "poc-writer-finding",
-            "audit_run_id": "run-1",
-            "audit_run": recorder.audit_run,
-            "finding": {"finding_id": "finding-1", "status": "confirmed"},
-        }
-    )
-    result = await executor.complete_temporal_swarm_stage(
-        {"audit_run_id": "run-1", "stage": "poc-writing", "kind": "poc-writer-findings", "results": [attempt]}
-    )
-
-    assert attempt["status"] == "completed"
-    assert result["step"] == "poc-writing"
-    assert result["result"]["poc_artifact_count"] == 1
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_poc_verifier_returns_finding_fanout_plan() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project", "max_parallel_poc_verifiers": 4},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    result = await executor.execute_temporal_stage("run-1", "poc-verification", [])
-
-    fanout = result["temporal_fanout"]
-    assert fanout["kind"] == "poc-verifier-findings"
-    assert fanout["stage"] == "poc-verification"
-    assert fanout["max_parallel"] == 4
-    assert len(fanout["attempts"]) == 1
-    assert fanout["attempts"][0]["poc_evidence"][0]["kind"] == "poc-artifact"
-    assert fanout["attempts"][0]["activity_key"] == "dieaudit-run-1-poc-verifier-finding-1"
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_poc_verifier_runs_single_finding_and_completes_stage() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    attempt = await executor.execute_temporal_swarm_agent(
-        {
-            "kind": "poc-verifier-finding",
-            "audit_run_id": "run-1",
-            "audit_run": recorder.audit_run,
-            "finding": {"finding_id": "finding-1", "status": "confirmed"},
-            "poc_evidence": [{"finding_id": "finding-1", "kind": "poc-artifact"}],
-        }
-    )
-    result = await executor.complete_temporal_swarm_stage(
-        {"audit_run_id": "run-1", "stage": "poc-verification", "kind": "poc-verifier-findings", "results": [attempt]}
-    )
-
-    assert attempt["status"] == "completed"
-    assert result["step"] == "poc-verification"
-    assert result["result"]["verification_evidence_created"] == 1
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_reuses_completed_temporal_agent_activity(monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    cached = {
-        "finding_id": "finding-1",
-        "status": "completed",
-        "chains_created": 1,
-    }
-    row = _AgentRunRow(
-        agent_run_id="agent-cached",
-        input_summary={
-            "activity_key": "dieaudit-run-1-source-sink-finding-1",
-            "activity_result": cached,
-        },
-    )
-    monkeypatch.setattr("app.services.pipeline_executor.SessionLocal", lambda: _AgentRunSession([row]))
-    executor = build_executor(recorder, runtime)
-
-    result = await executor.execute_temporal_swarm_agent(
-        {
-            "kind": "source-sink-finding",
-            "activity_key": "dieaudit-run-1-source-sink-finding-1",
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "workspace_host_path": "/workspace/project",
-            "audit_run": recorder.audit_run,
-            "finding": {"finding_id": "finding-1", "title": "test"},
-        }
-    )
-
-    assert result["agent_run_id"] == "agent-cached"
-    assert result["reused_activity_key"] == "dieaudit-run-1-source-sink-finding-1"
-    assert runtime.agent_runs == []
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_temporal_validator_attempt_runs_single_agent() -> None:
-    runtime = FakeRuntime()
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project"},
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-    executor = build_executor(recorder, runtime)
-
-    result = await executor.execute_temporal_validator_attempt(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "finding": {"finding_id": "finding-1", "title": "test"},
-            "workspace_host_path": "/workspace/project",
-            "round_index": 1,
-            "validator_rounds": 1,
-            "validator_agent_name": "opencode-validator",
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-        }
-    )
-
-    assert result["status"] == "completed"
-    assert result["finding_id"] == "finding-1"
-    assert len(runtime.agent_runs) == 1
-    assert runtime.agent_runs[0]["input_payload"]["finding_artifact_contract"]["finding_markdown_path"] == "/finding/finding.md"
 
 
 @pytest.mark.asyncio
@@ -860,9 +339,7 @@ async def test_pipeline_executor_respects_disabled_swarm_agents() -> None:
     skipped = [event for event in recorder.events if event["event_type"] == "pipeline_step_skipped"]
     assert {event["payload"]["step"] for event in skipped} == {
         "code-analysis",
-        "source-sink-analysis",
-        "validators",
-        "judgement",
+        "validation-judgement",
         "poc-writing",
         "poc-verification",
     }
@@ -878,7 +355,7 @@ async def test_pipeline_executor_uses_configured_validator_agent_name() -> None:
             "project_id": "project-1",
             "config": {
                 "workspace_host_path": "/workspace/project",
-                "validator_agent_name": "opencode-custom-validator",
+                "validation_judgement_agent_name": "opencode-custom-validator",
             },
             "allow_external_network": False,
             "retain_runtime_on_failure": False,
@@ -950,7 +427,7 @@ async def test_pipeline_executor_fails_fast_when_agent_audit_fails() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pipeline_executor_marks_completed_with_warnings_for_tool_failure() -> None:
+async def test_pipeline_executor_ignores_legacy_sca_stage_as_batch_internal_tool() -> None:
     recorder = CallbackRecorder(
         {
             "audit_run_id": "run-1",
@@ -970,18 +447,18 @@ async def test_pipeline_executor_marks_completed_with_warnings_for_tool_failure(
 
     await build_executor(recorder).execute("run-1")
 
-    assert recorder.statuses == ["running", "completed_with_warnings"]
+    assert recorder.statuses == ["running", "completed"]
     assert recorder.summary is not None
-    assert recorder.summary["result_quality"]["metrics"]["tool_failures"] == 1
+    assert recorder.summary["result_quality"]["metrics"]["tool_failures"] == 0
 
 
 @pytest.mark.asyncio
-async def test_pipeline_executor_fails_when_required_joern_fails() -> None:
+async def test_pipeline_executor_uses_codebase_memory_without_graph_prebuild() -> None:
     recorder = CallbackRecorder(
         {
             "audit_run_id": "run-1",
             "project_id": "project-1",
-            "config": {"workspace_host_path": "/workspace/project", "enable_joern": True, "joern_required": True},
+            "config": {"workspace_host_path": "/workspace/project"},
             "allow_external_network": False,
             "retain_runtime_on_failure": False,
             "validator_rounds": 1,
@@ -989,47 +466,11 @@ async def test_pipeline_executor_fails_when_required_joern_fails() -> None:
         }
     )
 
-    async def failing_joern(*args: Any) -> dict[str, Any]:
-        return {"ok": False, "available": False, "error": "joern missing"}
-
-    recorder.run_joern = failing_joern  # type: ignore[method-assign]
-
     await build_executor(recorder).execute("run-1")
 
-    assert recorder.statuses == ["running", "failed"]
-    assert recorder.pipeline_states[-1]["stage"] == "failed"
-    assert "joern missing" in recorder.pipeline_states[-1]["error"]
-
-
-@pytest.mark.asyncio
-async def test_pipeline_executor_continues_when_joern_unavailable_is_allowed() -> None:
-    recorder = CallbackRecorder(
-        {
-            "audit_run_id": "run-1",
-            "project_id": "project-1",
-            "config": {
-                "workspace_host_path": "/workspace/project",
-                "enable_joern": True,
-                "joern_required": True,
-                "allow_joern_unavailable": True,
-            },
-            "allow_external_network": False,
-            "retain_runtime_on_failure": False,
-            "validator_rounds": 1,
-            "max_parallel_validators": 1,
-        }
-    )
-
-    async def failing_joern(*args: Any) -> dict[str, Any]:
-        return {"ok": False, "available": False, "error": "joern missing"}
-
-    recorder.run_joern = failing_joern  # type: ignore[method-assign]
-
-    await build_executor(recorder).execute("run-1")
-
-    assert recorder.statuses == ["running", "completed_with_warnings"]
+    assert recorder.statuses == ["running", "completed"]
     assert recorder.summary is not None
-    assert recorder.summary["result_quality"]["metrics"]["tool_failures"] == 1
+    assert recorder.summary["result_quality"]["metrics"]["tool_failures"] == 0
 
 
 @pytest.mark.asyncio

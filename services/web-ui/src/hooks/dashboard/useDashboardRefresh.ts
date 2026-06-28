@@ -16,6 +16,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setCodeAnalysisTasks,
     setContainers,
     setDependencies,
+    setExecutionGraph,
     setDockerHealth,
     setError,
     setFindings,
@@ -32,6 +33,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setSandboxCapabilities,
     setSelectedProjectId,
     setStorageSummary,
+    setWhiteboard,
     setWorkerHeartbeats,
   } = dashboardState;
 
@@ -42,9 +44,11 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setCodeAnalysisTasks(bundle.codeAnalysisTasks);
     setFindings(bundle.findings);
     setDependencies(bundle.dependencies);
+    setExecutionGraph(bundle.executionGraph);
     setContainers(bundle.containers);
     setReports(bundle.reports);
     setPipelineStatus(bundle.pipeline);
+    setWhiteboard(bundle.whiteboard);
   }
 
   async function refreshBootstrap() {
@@ -168,6 +172,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
         case "finding-review":
         case "dependencies":
         case "reports":
+        case "whiteboard":
           await refreshAuditWorkspace();
           return;
         default:

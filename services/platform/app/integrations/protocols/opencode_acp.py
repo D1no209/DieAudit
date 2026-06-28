@@ -18,8 +18,22 @@ class OpenCodeAcpClient:
     protocol_kind = "agent-client-protocol"
     transport = "stdio"
 
-    def command_env(self) -> dict[str, str]:
+    def command_env(self, template: dict[str, Any] | None = None) -> dict[str, str]:
+        protocol = (template or {}).get("protocol") if isinstance((template or {}).get("protocol"), dict) else {}
+        command = protocol.get("stdio_command") if isinstance(protocol, dict) else None
+        runtime = str(protocol.get("runtime") or self.runtime_name) if isinstance(protocol, dict) else self.runtime_name
+        if isinstance(command, list) and command:
+            return {
+                "ACP_RUNTIME_NAME": runtime,
+                "ACP_COMMAND": str(command[0]),
+                "ACP_ARGS": " ".join(str(item) for item in command[1:]) or "acp",
+                "OPENCODE_ACP_COMMAND": str(command[0]),
+                "OPENCODE_ACP_ARGS": " ".join(str(item) for item in command[1:]) or "acp",
+            }
         return {
+            "ACP_RUNTIME_NAME": "opencode",
+            "ACP_COMMAND": "opencode",
+            "ACP_ARGS": "acp",
             "OPENCODE_ACP_COMMAND": "opencode",
             "OPENCODE_ACP_ARGS": "acp",
         }

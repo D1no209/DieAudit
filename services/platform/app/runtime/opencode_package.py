@@ -26,7 +26,7 @@ class OpenCodeRuntimePackageBuilder:
         project_id: str,
         agent_run_id: str,
         template: dict[str, Any],
-        mcp_servers: dict[str, dict[str, str]],
+        mcp_servers: dict[str, dict[str, Any]],
         input_payload: dict[str, Any],
     ) -> dict[str, Any]:
         package_dir = self._package_dir(audit_run_id, agent_run_id)
@@ -131,6 +131,7 @@ class OpenCodeRuntimePackageBuilder:
         return {
             "provider_name": provider_name,
             "model_ref": f"{provider_name}/{model}",
+            "raw_model": model,
             "api_key_env": api_key_env,
             "providers": {provider_name: provider_entry},
         }
@@ -146,21 +147,57 @@ class OpenCodeRuntimePackageBuilder:
     def runtime_env(self, template: dict[str, Any]) -> dict[str, str]:
         profile_name = template.get("model_profile", "orchestrator-long-context")
         model_config = self._model_config(profile_name)
+        protocol = template.get("protocol") if isinstance(template.get("protocol"), dict) else {}
+        if protocol.get("runtime") == "kimi":
+            provider = next(iter((model_config.get("providers") or {}).values()), {})
+            provider_name = str(model_config.get("provider_name") or "kimi")
+            model = str(model_config.get("raw_model") or model_config["model_ref"].split("/", 1)[-1])
+            env = {
+                "KIMI_MODEL_NAME": model,
+                "KIMI_MODEL_PROVIDER_TYPE": self._kimi_provider_type(provider_name, provider),
+                "KIMI_MODEL_API_KEY": "",
+                "KIMI_MODEL_DISPLAY_NAME": str(model_config.get("model_ref") or model),
+                "KIMI_DISABLE_TELEMETRY": "1",
+                "KIMI_CODE_NO_AUTO_UPDATE": "1",
+            }
+            api_key_env = model_config.get("api_key_env")
+            if api_key_env:
+                env["KIMI_MODEL_API_KEY"] = os.environ.get(api_key_env, "")
+            base_url = (provider.get("options") or {}).get("baseURL")
+            if base_url:
+                env["KIMI_MODEL_BASE_URL"] = str(base_url)
+            limits = ((provider.get("models") or {}).get(model) or {}).get("limit") or {}
+            if limits.get("context"):
+                env["KIMI_MODEL_MAX_CONTEXT_SIZE"] = str(limits["context"])
+            return env
         api_key_env = model_config.get("api_key_env")
         if not api_key_env:
             return {}
         return {api_key_env: os.environ.get(api_key_env, "")}
 
     @staticmethod
-    def _mcp_config(mcp_servers: dict[str, dict[str, str]]) -> dict[str, dict[str, Any]]:
+    def _kimi_provider_type(provider_name: str, provider: dict[str, Any]) -> str:
+        provider_type = str(provider.get("type") or provider_name).lower()
+        npm = str(provider.get("npm") or "").lower()
+        if "anthropic" in provider_type or "anthropic" in npm:
+            return "anthropic"
+        if "kimi" in provider_type or "moonshot" in provider_type or "kimi" in provider_name:
+            return "kimi"
+        return "openai"
+
+    @staticmethod
+    def _mcp_config(mcp_servers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
         for name, server in mcp_servers.items():
-            result[name] = {
-                "type": "remote",
-                "url": server["url"],
-                "enabled": True,
-                "timeout": 5000,
-            }
+            if server.get("transport") == "stdio":
+                continue
+            else:
+                result[name] = {
+                    "type": "remote",
+                    "url": server["url"],
+                    "enabled": True,
+                    "timeout": 5000,
+                }
         return result
 
     def _package_dir(self, audit_run_id: str, agent_run_id: str) -> Path:

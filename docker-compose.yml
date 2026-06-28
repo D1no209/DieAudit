@@ -15,9 +15,6 @@ x-platform-env: &platform-env
   KNOWLEDGE_EMBEDDING_MODEL: ${KNOWLEDGE_EMBEDDING_MODEL:-text-embedding-3-small}
   KNOWLEDGE_EMBEDDING_TIMEOUT_SECONDS: ${KNOWLEDGE_EMBEDDING_TIMEOUT_SECONDS:-60}
   KNOWLEDGE_EMBEDDING_PROBE_ON_READINESS: ${KNOWLEDGE_EMBEDDING_PROBE_ON_READINESS:-true}
-  TEMPORAL_ADDRESS: temporal:7233
-  TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
-  TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-dieaudit-audit-pipeline}
   DOCKER_HOST: ${DOCKER_HOST:-tcp://docker-socket-proxy:2375}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -39,6 +36,7 @@ x-platform-env: &platform-env
   ENABLE_GVISOR: ${ENABLE_GVISOR:-false}
   ALLOW_RUNC_SANDBOX: ${ALLOW_RUNC_SANDBOX:-true}
   ALLOW_SANDBOX_EXTERNAL_NETWORK: ${ALLOW_SANDBOX_EXTERNAL_NETWORK:-false}
+  ALLOW_AGENT_EXTERNAL_NETWORK: ${ALLOW_AGENT_EXTERNAL_NETWORK:-true}
   PLATFORM_AUDIT_EVENT_RETENTION_DAYS: ${PLATFORM_AUDIT_EVENT_RETENTION_DAYS:-30}
   PLATFORM_AUDIT_EVENT_MAX_ROWS: ${PLATFORM_AUDIT_EVENT_MAX_ROWS:-10000}
   RUNTIME_PACKAGE_RETENTION_DAYS: ${RUNTIME_PACKAGE_RETENTION_DAYS:-7}
@@ -52,23 +50,21 @@ x-platform-env: &platform-env
   PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS:-30}
   PIPELINE_WORKER_HEARTBEAT_RETENTION_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_RETENTION_SECONDS:-3600}
   ENABLE_DEMO_TEMPLATES: ${ENABLE_DEMO_TEMPLATES:-false}
-  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
-  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,temporal,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
+  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
   CONFIG_ROOT: /app/configs
   WORKSPACE_ROOT: /dieaudit/workspaces
   ARTIFACT_ROOT: /dieaudit/artifacts
   ARTIFACT_STORAGE_BACKEND: ${ARTIFACT_STORAGE_BACKEND:-local}
   DYNAMIC_CONTAINER_PREFIX: dieaudit
   AGENT_GATEWAY_CONTAINER_NAME: dieaudit-agent-gateway
+  WORKSPACE_ENGINE_URL: http://workspace-engine:8000
+  WORKFLOW_WORKER_URL: http://workflow-worker:8000
+  AGENT_GATEWAY_URL: http://agent-gateway:8000
+  SANDBOX_RUNNER_URL: http://sandbox-runner:8000
+  KB_INDEXER_URL: http://kb-indexer:8000
 
 x-platform-service: &platform-service
-  build:
-    context: .
-    dockerfile: services/platform/Dockerfile
-    args:
-      HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
-      HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
   restart: unless-stopped
   networks:
     - platform
@@ -113,6 +109,14 @@ services:
 
   web-api:
     <<: *platform-service
+    image: dieaudit/web-api:local
+    build:
+      context: .
+      dockerfile: services/web-api/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     container_name: dieaudit-web-api
     environment:
@@ -120,6 +124,8 @@ services:
       SERVICE_NAME: web-api
       AGENT_GATEWAY_URL: http://agent-gateway:8000
     depends_on:
+      database-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -138,28 +144,50 @@ services:
 
   workflow-worker:
     <<: *platform-service
+    image: dieaudit/workflow-worker:local
+    build:
+      context: .
+      dockerfile: services/workflow-worker/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     container_name: dieaudit-workflow-worker
-    command: ["python", "-m", "app.worker"]
     environment:
       <<: *platform-env
       SERVICE_NAME: workflow-worker
     depends_on:
+      database-migrate:
+        condition: service_completed_successfully
       docker-socket-proxy:
-        condition: service_started
-      temporal:
         condition: service_started
       web-api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
 
   agent-gateway:
     <<: *platform-service
+    image: dieaudit/agent-gateway:local
+    build:
+      context: .
+      dockerfile: services/agent-gateway/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     container_name: dieaudit-agent-gateway
     environment:
       <<: *platform-env
       SERVICE_NAME: agent-gateway
     depends_on:
+      database-migrate:
+        condition: service_completed_successfully
       docker-socket-proxy:
         condition: service_started
       postgres:
@@ -180,13 +208,37 @@ services:
 
   workspace-engine:
     <<: *platform-service
+    image: dieaudit/workspace-engine:local
+    build:
+      context: .
+      dockerfile: services/workspace-engine/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     container_name: dieaudit-workspace-engine
     environment:
       <<: *platform-env
       SERVICE_NAME: workspace-engine
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
   sandbox-runner:
     <<: *platform-service
+    image: dieaudit/sandbox-runner:local
+    build:
+      context: .
+      dockerfile: services/sandbox-runner/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     container_name: dieaudit-sandbox-runner
     environment:
@@ -195,16 +247,57 @@ services:
     depends_on:
       docker-socket-proxy:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
 
   kb-indexer:
     <<: *platform-service
+    image: dieaudit/kb-indexer:local
+    build:
+      context: .
+      dockerfile: services/kb-indexer/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     container_name: dieaudit-kb-indexer
     environment:
       <<: *platform-env
       SERVICE_NAME: kb-indexer
     depends_on:
+      database-migrate:
+        condition: service_completed_successfully
       qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  database-migrate:
+    <<: *platform-service
+    image: dieaudit/web-api:local
+    build:
+      context: .
+      dockerfile: services/web-api/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    profiles: ["core", "demo"]
+    container_name: dieaudit-database-migrate
+    restart: "no"
+    command: ["alembic", "-c", "services/database/alembic.ini", "upgrade", "head"]
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: database-migrate
+    depends_on:
+      postgres:
         condition: service_healthy
 
   postgres:
@@ -268,40 +361,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
-    networks:
-      - platform
-
-  temporal:
-    image: temporalio/auto-setup:1.25.2
-    profiles: ["core", "demo"]
-    restart: unless-stopped
-    environment:
-      DB: postgres12
-      DB_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-dieaudit}
-      POSTGRES_PWD: ${POSTGRES_PASSWORD:-dieaudit}
-      POSTGRES_SEEDS: postgres
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
-    volumes:
-      - ./configs/temporal/development-sql.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - platform
-
-  temporal-ui:
-    image: temporalio/ui:2.34.0
-    profiles: ["core", "demo"]
-    restart: unless-stopped
-    environment:
-      TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_CORS_ORIGINS: http://localhost:${API_PORT:-8080}
-    ports:
-      - "${TEMPORAL_UI_PORT:-18088}:8080"
-    depends_on:
-      temporal:
-        condition: service_started
     networks:
       - platform
 
@@ -380,20 +439,6 @@ services:
     networks:
       - platform
 
-  tool-mcp-joern-image:
-    build:
-      context: .
-      dockerfile: services/mcp-tools/Dockerfile.joern
-      args:
-        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
-        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-    image: dieaudit/tool-mcp-joern:local
-    profiles: ["tools"]
-    command: ["python3.12", "/app/tool_mcp.py"]
-    networks:
-      - platform
-
   opencode-agent-image:
     build:
       context: .
@@ -405,6 +450,20 @@ services:
     image: dieaudit/opencode-agent:local
     profiles: ["demo", "tools"]
     command: ["opencode", "--version"]
+    networks:
+      - platform
+
+  kimi-code-agent-image:
+    build:
+      context: .
+      dockerfile: services/agents/kimi-code-agent/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    image: dieaudit/kimi-code-agent:local
+    profiles: ["demo", "tools"]
+    command: ["bunx", "@moonshot-ai/kimi-code", "--version"]
     networks:
       - platform
 

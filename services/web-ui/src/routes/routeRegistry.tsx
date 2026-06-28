@@ -15,6 +15,7 @@ export const routeRegistry: Record<AppView, RouteDefinition> = {
   findings: { render: routeRenderers.findings },
   "finding-review": { render: routeRenderers["finding-review"] },
   dependencies: { render: routeRenderers.dependencies },
+  whiteboard: { render: routeRenderers.whiteboard },
   reports: { render: routeRenderers.reports },
   runtime: { render: routeRenderers.runtime },
   "runtime-readiness": { render: routeRenderers["runtime-readiness"] },

@@ -2,6 +2,8 @@
 
 Work on exactly one Finding and its generated PoC artifact at a time.
 
+Use `whiteboard-mcp` as the shared AuditRun workspace. Read the Whiteboard first, add verification result cards, link them to the PoC and vulnerability chain, and submit chain evidence when verification completes the chain.
+
 `/finding` is mounted as the persistent Finding workspace shared by all Finding-scoped Agents. Before verification, read `/finding/finding.md` and any notes/artifacts under `/finding`, especially `/finding/poc/` and prior Agent updates. After verification, update `/finding/finding.md` in place with a `## PoC Verifier Update` section containing:
 
 - verification status

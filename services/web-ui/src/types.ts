@@ -138,6 +138,155 @@ export type EvidenceRow = {
   updated_at?: string;
 };
 
+export type WhiteboardAttachment = {
+  attachment_id: string;
+  card_id: string;
+  path: string;
+  label?: string;
+  content_type?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type WhiteboardLinkCandidate = {
+  title?: string;
+  card_ids?: string[];
+  status: "not_ready" | "finding" | "not_found" | "hint" | "impossible" | string;
+  agent_run_id?: string;
+  rationale?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type WhiteboardCard = {
+  card_id: string;
+  title: string;
+  card_type: string;
+  status: string;
+  author?: string;
+  agent_run_id?: string;
+  event_time?: string;
+  content?: string;
+  confidence?: string;
+  finding_id?: string;
+  file_path?: string;
+  line_start?: number;
+  line_end?: number;
+  expected_predecessors?: WhiteboardLinkCandidate[];
+  possible_successors?: WhiteboardLinkCandidate[];
+  requirements?: string[];
+  attachments?: WhiteboardAttachment[];
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type WhiteboardEdge = {
+  edge_id: string;
+  source_card_id: string;
+  target_card_id: string;
+  edge_type: string;
+  rationale?: string;
+  author?: string;
+  agent_run_id?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type WhiteboardNote = {
+  note_id: string;
+  card_id?: string;
+  author?: string;
+  agent_run_id?: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type WhiteboardTask = {
+  task_id: string;
+  gap_card_id?: string;
+  card_id?: string;
+  agent_role: string;
+  agent_name: string;
+  status: string;
+  round_index: number;
+  attempt_index: number;
+  agent_run_id?: string;
+  parent_task_id?: string;
+  root_task_id?: string;
+  wait_reason?: string;
+  wake_event_id?: string;
+  task_group?: string;
+  requested_by_agent_run_id?: string;
+  prompt?: string;
+  result?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type WhiteboardEvent = {
+  event_id: string;
+  entity_type: string;
+  entity_id: string;
+  event_type: string;
+  summary?: string;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type WhiteboardSubscription = {
+  subscription_id: string;
+  subscriber_task_id?: string;
+  subscriber_agent_run_id?: string;
+  filter?: Record<string, unknown>;
+  cursor_event_id?: string;
+  status: string;
+  created_at?: string;
+};
+
+export type WhiteboardNotification = {
+  notification_id: string;
+  event_id: string;
+  subscription_id: string;
+  subscriber_task_id?: string;
+  subscriber_agent_run_id?: string;
+  status: string;
+  claimed_by_agent_run_id?: string;
+  lease_expires_at?: string;
+  attempt_count?: number;
+  summary?: string;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type WhiteboardScheduleRequest = {
+  request_id: string;
+  requested_by_task_id?: string;
+  requested_by_agent_run_id?: string;
+  suggested_agent_name?: string;
+  goal: string;
+  reason?: string;
+  related_card_ids?: string[];
+  status: string;
+  decision?: Record<string, unknown>;
+  task_id?: string;
+  created_at?: string;
+};
+
+export type WhiteboardGraph = {
+  audit_run_id: string;
+  project_id: string;
+  snapshot?: string;
+  cards: WhiteboardCard[];
+  edges: WhiteboardEdge[];
+  notes: WhiteboardNote[];
+  tasks: WhiteboardTask[];
+  events?: WhiteboardEvent[];
+  subscriptions?: WhiteboardSubscription[];
+  notifications?: WhiteboardNotification[];
+  schedule_requests?: WhiteboardScheduleRequest[];
+  evidence: Array<{ evidence_id: string; finding_id?: string; summary?: string; artifact_path?: string; payload?: Record<string, unknown>; created_at?: string }>;
+};
+
 export type FindingDetail = {
   finding: Finding;
   evidence: EvidenceRow[];
@@ -181,6 +330,45 @@ export type AgentRunEvent = {
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string;
+};
+
+export type ExecutionGraphNode = {
+  id: string;
+  kind: string;
+  label: string;
+  status?: string;
+  group?: string;
+  target?: {
+    view?: string;
+    audit_run_id?: string;
+    agent_run_id?: string;
+    container_id?: string;
+    card_id?: string;
+    task_id?: string;
+  };
+  data?: Record<string, unknown>;
+};
+
+export type ExecutionGraphEdge = {
+  source: string;
+  target: string;
+  type: string;
+  data?: Record<string, unknown>;
+};
+
+export type ExecutionGraph = {
+  audit_run_id: string;
+  project_id: string;
+  summary: {
+    node_count?: number;
+    by_kind?: Record<string, number>;
+    by_status?: Record<string, number>;
+    completed?: number;
+    unfinished?: number;
+    failed?: number;
+  };
+  nodes: ExecutionGraphNode[];
+  edges: ExecutionGraphEdge[];
 };
 
 export type PipelineStatus = {
@@ -421,6 +609,8 @@ export type ContainerRow = {
   State: string;
   Status: string;
   Labels: Record<string, string>;
+  container_id?: string;
+  agent_run_id?: string;
   role?: string;
   db_status?: string;
   exit_code?: number;
@@ -449,7 +639,13 @@ export type CreateAuditRunPayload = {
   validator_rounds?: number;
   max_parallel_validators?: number;
   validator_agent_name?: string;
+  enable_validation_judgement?: boolean;
+  validation_judgement_agent_name?: string;
+  enable_feedback_loop?: boolean;
+  max_feedback_rounds?: number;
   enable_code_batch_analysis?: boolean;
+  enable_batch_internal_semgrep?: boolean;
+  enable_batch_internal_sca?: boolean;
   max_code_audit_tasks?: number;
   max_files_per_code_audit_task?: number;
   max_parallel_code_auditors?: number;
@@ -469,11 +665,11 @@ export type CreateAuditRunPayload = {
   enable_poc_verification?: boolean;
   poc_verifier_agent_name?: string;
   max_parallel_poc_verifiers?: number;
-  enable_joern?: boolean;
-  joern_required?: boolean;
-  allow_joern_unavailable?: boolean;
-  joern_timeout_seconds?: number;
-  joern_query_packs?: string[];
+  enable_decompilation?: boolean;
+  decompiled_source_dir?: string;
+  decompile_max_artifact_size_mb?: number;
+  decompile_timeout_seconds?: number;
+  decompile_max_artifacts?: number;
   allow_external_network?: boolean;
   retain_runtime_on_failure?: boolean;
   input_payload?: Record<string, unknown>;

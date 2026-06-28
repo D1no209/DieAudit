@@ -22,9 +22,10 @@ PRODUCTION_AGENT_TEMPLATES = {
 PRODUCTION_MCP_TEMPLATES = {
     "filesystem-mcp",
     "code-search-mcp",
+    "whiteboard-mcp",
     "semgrep-mcp",
     "sca-mcp",
-    "joern-mcp",
+    "codebase-memory-mcp",
     "kb-mcp",
     "http-test-mcp",
     "sandbox-mcp",
@@ -294,8 +295,8 @@ def template_readiness_checks(
                 "tool_capabilities": tool_capabilities,
             },
             "remediation": [] if not production_unavailable_tools and not production_probe_error else [
-                "Build required production MCP tool images before production readiness, especially dieaudit/tool-mcp-joern:local.",
-                "Verify Joern is available in the joern-mcp image and rerun /runtime/readiness.",
+                "Build required production MCP and ACP agent images before production readiness.",
+                "Verify required MCP tools are available and rerun /runtime/readiness.",
             ],
         },
     ]
@@ -400,18 +401,15 @@ def summarize_readiness_checks(checks: list[dict[str, Any]]) -> dict[str, Any]:
 
 def pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = normalized_pipeline_backend(settings)
-    supported_backends = {"background-tasks", "workflow-worker", "temporal"}
-    production_backends = {"workflow-worker", "temporal"}
+    supported_backends = {"background-tasks", "workflow-worker"}
+    production_backends = {"workflow-worker"}
     if backend not in supported_backends:
         status = "fail"
         message = f"Unsupported pipeline execution backend '{backend}'. Supported backends: {sorted(supported_backends)}."
     elif backend in production_backends:
         if worker_health and worker_health.get("ok"):
             status = "pass"
-            if backend == "temporal":
-                message = "Audit pipelines are started through Temporal and at least one fresh workflow-worker heartbeat is available."
-            else:
-                message = "Audit pipelines are claimed by at least one fresh workflow-worker heartbeat."
+            message = "Audit pipelines are claimed by at least one fresh workflow-worker heartbeat."
         elif worker_health is None:
             status = "fail"
             message = "Workflow-worker backend is configured, but worker heartbeat health was not checked."
@@ -437,7 +435,7 @@ def pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str
             "message": message,
         },
         "remediation": [] if status == "pass" else [
-            "Set PIPELINE_EXECUTION_BACKEND=workflow-worker or temporal and keep workflow-worker enabled in the core Compose profile.",
+            "Set PIPELINE_EXECUTION_BACKEND=workflow-worker and keep workflow-worker enabled in the core Compose profile.",
             "Verify /runtime/workers reports at least one fresh running worker heartbeat.",
         ],
     }

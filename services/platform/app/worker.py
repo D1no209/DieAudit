@@ -23,10 +23,11 @@ from app.api.routes import (
     _record_pipeline_event,
     _record_pipeline_summary,
     _run_code_batch_analysis,
-    _run_joern_mcp,
+    _run_structure_discovery,
     _run_sca_mcp,
     _run_semgrep_mcp,
     _run_source_sink_analysis,
+    _run_whiteboard_swarm,
     _run_source_sink_finding_internal,
     _complete_source_sink_analysis_internal,
     _run_judger_finding_internal,
@@ -43,7 +44,6 @@ from app.runtime import RuntimeOrchestrator
 from app.services.pipeline_executor import PipelineExecutor
 from app.services.pipeline_queue import claim_next_queued_pipeline
 from app.services.pipeline_recovery import recover_interrupted_pipelines
-from app.services.temporal_pipeline import TemporalPipelineConfig, run_temporal_worker
 from app.services.worker_heartbeat import record_worker_heartbeat
 from app.settings import get_settings
 
@@ -66,9 +66,10 @@ def build_pipeline_executor(settings, runtime: RuntimeOrchestrator) -> PipelineE
         cancel_reason=_cancel_reason,
         list_findings=_list_findings,
         list_evidence=_list_evidence,
-        run_joern=_run_joern_mcp,
+        run_structure_discovery=_run_structure_discovery,
         run_code_batch_analysis=_run_code_batch_analysis,
         run_source_sink_analysis=_run_source_sink_analysis,
+        run_whiteboard_swarm=_run_whiteboard_swarm,
         run_source_sink_finding=_run_source_sink_finding_internal,
         complete_source_sink_analysis=_complete_source_sink_analysis_internal,
         run_judger_finding=_run_judger_finding_internal,
@@ -138,29 +139,10 @@ async def run_worker() -> None:
                 await asyncio.wait_for(stop_event.wait(), timeout=heartbeat_interval)
 
     heartbeat_task = asyncio.create_task(heartbeat_loop())
-    temporal_task: asyncio.Task | None = None
-    if (settings.pipeline_execution_backend or "").strip().lower() == "temporal":
-        temporal_task = asyncio.create_task(
-            run_temporal_worker(
-                TemporalPipelineConfig(
-                    address=settings.temporal_address,
-                    namespace=settings.temporal_namespace,
-                    task_queue=settings.temporal_task_queue,
-                ),
-                executor=executor,
-                stop_event=stop_event,
-            )
-        )
     logger.info("workflow worker started worker_id=%s backend=%s", worker_id, settings.pipeline_execution_backend)
     try:
         worker_status = "idle"
         while not stop_event.is_set():
-            if temporal_task is not None:
-                if temporal_task.done():
-                    temporal_task.result()
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(stop_event.wait(), timeout=settings.pipeline_worker_poll_interval_seconds)
-                continue
             claimed = await claim_next_queued_pipeline(worker_id=worker_id)
             if not claimed:
                 with contextlib.suppress(asyncio.TimeoutError):
@@ -194,13 +176,8 @@ async def run_worker() -> None:
                 retention_seconds=settings.pipeline_worker_heartbeat_retention_seconds,
             )
         heartbeat_task.cancel()
-        if temporal_task is not None:
-            temporal_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat_task
-        if temporal_task is not None:
-            with contextlib.suppress(asyncio.CancelledError):
-                await temporal_task
         await runtime.close()
         logger.info("workflow worker stopped worker_id=%s", worker_id)
 

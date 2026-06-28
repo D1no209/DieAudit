@@ -13,6 +13,7 @@ import type {
   ContainerRow,
   DependencyInventory,
   DockerHealth,
+  ExecutionGraph,
   Finding,
   FindingDetail,
   KnowledgeDocument,
@@ -27,6 +28,7 @@ import type {
   RuntimeReadiness,
   SandboxCapabilities,
   StorageSummary,
+  WhiteboardGraph,
   WorkerHeartbeat,
 } from "../types";
 
@@ -53,9 +55,11 @@ export function useDashboardState() {
   const [codeAnalysisTasks, setCodeAnalysisTasks] = useState<CodeAnalysisTask[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [dependencies, setDependencies] = useState<DependencyInventory>();
+  const [executionGraph, setExecutionGraph] = useState<ExecutionGraph>();
   const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [reports, setReports] = useState<ReportArtifact[]>([]);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>();
+  const [whiteboard, setWhiteboard] = useState<WhiteboardGraph>();
   const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
   const [agentEvents, setAgentEvents] = useState<AgentRunEvent[]>();
   const [containerLogs, setContainerLogs] = useState<{ title: string; body: string }>();
@@ -97,9 +101,11 @@ export function useDashboardState() {
     setCodeAnalysisTasks([]);
     setFindings([]);
     setDependencies(undefined);
+    setExecutionGraph(undefined);
     setContainers([]);
     setReports([]);
     setPipelineStatus(undefined);
+    setWhiteboard(undefined);
     setSelectedFinding(undefined);
     setAgentEvents(undefined);
     setContainerLogs(undefined);
@@ -122,6 +128,7 @@ export function useDashboardState() {
     containerLogs,
     containers,
     dependencies,
+    executionGraph,
     dockerHealth,
     error,
     findings,
@@ -158,6 +165,7 @@ export function useDashboardState() {
     setContainerLogs,
     setContainers,
     setDependencies,
+    setExecutionGraph,
     setDockerHealth,
     setError,
     setFindings,
@@ -169,6 +177,7 @@ export function useDashboardState() {
     setLoading,
     setManagedRuntime,
     setPipelineStatus,
+    setWhiteboard,
     setPlatformAuditEvents,
     setProjects,
     setReports,
@@ -182,6 +191,7 @@ export function useDashboardState() {
     setWorkerHeartbeats,
     setZipFiles,
     storageSummary,
+    whiteboard,
     workerHeartbeats,
     zipFiles,
     zipForm,

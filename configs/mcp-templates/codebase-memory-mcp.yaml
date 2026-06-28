@@ -1,0 +1,25 @@
+name: codebase-memory-mcp
+transport: stdio
+command: codebase-memory-mcp
+args: []
+env:
+  CBM_CACHE_DIR: /artifacts/codebase-memory
+workspace_mount:
+  target: /workspace
+  read_only: true
+artifact_mount:
+  target: /artifacts
+  read_only: false
+tools:
+  - index_repository
+  - get_architecture
+  - search_graph
+  - trace_path
+  - query_graph
+  - get_code_snippet
+  - detect_changes
+  - search_code
+permissions:
+  workspace: read-only
+  docker_api: false
+read_only: false

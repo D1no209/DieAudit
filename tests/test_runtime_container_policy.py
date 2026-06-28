@@ -80,7 +80,7 @@ def test_runtime_container_name_is_short_dns_safe() -> None:
     name = _orchestrator()._runtime_container_name(
         audit_run_id="da1bfe9f-d7d2-490c-83b6-e321f4d16f11",
         role="mcp",
-        template_name="joern-mcp",
+        template_name="code-search-mcp",
         run_id="tool-f8568ce6-e6b6-48c2-beeb-a9ac169bf605",
     )
 
@@ -92,14 +92,14 @@ def test_runtime_container_name_is_short_dns_safe() -> None:
 
 def test_mcp_base_url_uses_dns_safe_runtime_host() -> None:
     container = {
-        "name": "dieaudit-da1bfe9f-d7d2-490c-83b6-e321f4d16f11-joern-mcp-tool-f85",
-        "host": "dieaudit-a1b2c3d4-mcp-joern-mcp-f8568ce6e6b6",
+        "name": "dieaudit-da1bfe9f-d7d2-490c-83b6-e321f4d16f11-code-search-mcp-tool-f85",
+        "host": "dieaudit-a1b2c3d4-mcp-code-search-mcp-f8568ce6e6b6",
     }
     template = {"port": 8001}
 
     url = _orchestrator()._mcp_base_url(container, template)
 
-    assert url == "http://dieaudit-a1b2c3d4-mcp-joern-mcp-f8568ce6e6b6:8001"
+    assert url == "http://dieaudit-a1b2c3d4-mcp-code-search-mcp-f8568ce6e6b6:8001"
 
 
 def test_runtime_controller_targets_include_current_worker() -> None:

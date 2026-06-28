@@ -126,6 +126,95 @@ async def run_poc_route(request):
     return JSONResponse(await run_poc(**body))
 
 
+@mcp.custom_route("/tools/whiteboard_create_card", methods=["POST"])
+async def whiteboard_create_card_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_create_card(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_update_card", methods=["POST"])
+async def whiteboard_update_card_route(request):
+    body = await request.json()
+    card_id = body.pop("card_id", "")
+    return JSONResponse(await whiteboard_update_card(card_id=card_id, **body))
+
+
+@mcp.custom_route("/tools/whiteboard_link_cards", methods=["POST"])
+async def whiteboard_link_cards_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_link_cards(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_add_note", methods=["POST"])
+async def whiteboard_add_note_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_add_note(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_list_graph", methods=["POST"])
+async def whiteboard_list_graph_route(request):
+    return JSONResponse(await whiteboard_list_graph())
+
+
+@mcp.custom_route("/tools/whiteboard_find_attach_points", methods=["POST"])
+async def whiteboard_find_attach_points_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_find_attach_points(query=body.get("query", ""), limit=int(body.get("limit", 10))))
+
+
+@mcp.custom_route("/tools/whiteboard_search_cards", methods=["POST"])
+async def whiteboard_search_cards_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_search_cards(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_declare_gap", methods=["POST"])
+async def whiteboard_declare_gap_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_declare_gap(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_submit_chain_evidence", methods=["POST"])
+async def whiteboard_submit_chain_evidence_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_submit_chain_evidence(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_schedule_agent", methods=["POST"])
+async def whiteboard_schedule_agent_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_schedule_agent(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_subscribe_changes", methods=["POST"])
+async def whiteboard_subscribe_changes_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_subscribe_changes(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_list_notifications", methods=["POST"])
+async def whiteboard_list_notifications_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_list_notifications(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_mark_notification", methods=["POST"])
+async def whiteboard_mark_notification_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_mark_notification(**body))
+
+
+@mcp.custom_route("/tools/whiteboard_request_agent_help", methods=["POST"])
+async def whiteboard_request_agent_help_route(request):
+    body = await request.json()
+    return JSONResponse(await whiteboard_request_agent_help(**body))
+
+
+@mcp.custom_route("/tools/read_common_structure", methods=["POST"])
+async def read_common_structure_route(request):
+    return JSONResponse(read_common_structure())
+
+
 @mcp.custom_route("/tools/start_sandbox_service", methods=["POST"])
 async def start_sandbox_service_route(request):
     body = await request.json()
@@ -139,61 +228,6 @@ async def codeql_query_route(request):
         codeql_query(
             database=body.get("database", ""),
             query=body.get("query", ""),
-            timeout_seconds=int(body.get("timeout_seconds", 300)),
-        )
-    )
-
-
-@mcp.custom_route("/tools/joern_query", methods=["POST"])
-async def joern_query_route(request):
-    body = await request.json()
-    return JSONResponse(
-        joern_query(
-            query=body.get("query", ""),
-            cpg_path=body.get("cpg_path"),
-            timeout_seconds=int(body.get("timeout_seconds", 300)),
-        )
-    )
-
-
-@mcp.custom_route("/tools/joern_build_cpg", methods=["POST"])
-async def joern_build_cpg_route(request):
-    body = await request.json()
-    return JSONResponse(
-        joern_build_cpg(
-            workspace_path=body.get("workspace_path", "."),
-            language=body.get("language"),
-            timeout_seconds=int(body.get("timeout_seconds", 900)),
-            query_packs=body.get("query_packs"),
-        )
-    )
-
-
-@mcp.custom_route("/tools/joern_list_cpgs", methods=["POST"])
-async def joern_list_cpgs_route(request):
-    body = await request.json()
-    return JSONResponse(joern_list_cpgs(audit_run_id=body.get("audit_run_id")))
-
-
-@mcp.custom_route("/tools/joern_run_script", methods=["POST"])
-async def joern_run_script_route(request):
-    body = await request.json()
-    return JSONResponse(
-        joern_run_script(
-            cpg_path=body.get("cpg_path", ""),
-            script=body.get("script", ""),
-            timeout_seconds=int(body.get("timeout_seconds", 300)),
-        )
-    )
-
-
-@mcp.custom_route("/tools/joern_common_queries", methods=["POST"])
-async def joern_common_queries_route(request):
-    body = await request.json()
-    return JSONResponse(
-        joern_common_queries(
-            cpg_path=body.get("cpg_path", ""),
-            query_pack=body.get("query_pack", "entrypoints"),
             timeout_seconds=int(body.get("timeout_seconds", 300)),
         )
     )
@@ -357,7 +391,7 @@ def semgrep_scan(
 
 
 def tool_capabilities(required: list[str] | None = None) -> dict[str, Any]:
-    tools = required or ["rg", "semgrep", "syft", "codeql", "joern"]
+    tools = required or ["rg", "semgrep", "syft", "codeql"]
     binaries: dict[str, dict[str, Any]] = {}
     for tool in tools:
         binaries[tool] = _tool_binary_info(tool)
@@ -617,6 +651,396 @@ async def run_poc(
 
 
 @mcp.tool()
+async def create_card(
+    title: str,
+    content: str = "",
+    card_type: str = "observation",
+    status: str = "open",
+    confidence: str | None = None,
+    finding_id: str | None = None,
+    file_path: str | None = None,
+    line_start: int | None = None,
+    line_end: int | None = None,
+    requirements: list[str] | None = None,
+    expected_predecessors: list[dict[str, Any]] | None = None,
+    possible_successors: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a shared audit-run Whiteboard card."""
+    return await whiteboard_create_card(
+        title=title,
+        content=content,
+        card_type=card_type,
+        status=status,
+        confidence=confidence,
+        finding_id=finding_id,
+        file_path=file_path,
+        line_start=line_start,
+        line_end=line_end,
+        requirements=requirements or [],
+        expected_predecessors=expected_predecessors or [],
+        possible_successors=possible_successors or [],
+        attachments=attachments or [],
+        metadata=metadata or {},
+    )
+
+
+@mcp.tool()
+async def update_card(card_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """Update a shared audit-run Whiteboard card."""
+    return await whiteboard_update_card(card_id=card_id, **(updates or {}))
+
+
+@mcp.tool()
+async def link_cards(
+    source_card_id: str,
+    target_card_id: str,
+    edge_type: str = "supports",
+    rationale: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Connect two Whiteboard cards with a typed edge."""
+    return await whiteboard_link_cards(
+        source_card_id=source_card_id,
+        target_card_id=target_card_id,
+        edge_type=edge_type,
+        rationale=rationale,
+        metadata=metadata or {},
+    )
+
+
+@mcp.tool()
+async def add_note(content: str, card_id: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Add a side note to the Whiteboard or one card."""
+    return await whiteboard_add_note(content=content, card_id=card_id, metadata=metadata or {})
+
+
+@mcp.tool()
+async def list_graph() -> dict[str, Any]:
+    """Read the current audit-run Whiteboard graph."""
+    return await whiteboard_list_graph()
+
+
+@mcp.tool()
+async def search_cards(
+    query: str = "",
+    card_type: str | None = None,
+    status: str | None = None,
+    finding_id: str | None = None,
+    file_path: str | None = None,
+    candidate_status: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Search Whiteboard cards by keyword and structured filters."""
+    return await whiteboard_search_cards(
+        query=query,
+        card_type=card_type,
+        status=status,
+        finding_id=finding_id,
+        file_path=file_path,
+        candidate_status=candidate_status,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+async def find_attach_points(query: str, limit: int = 10) -> dict[str, Any]:
+    """Find candidate cards that this new evidence may attach to."""
+    return await whiteboard_find_attach_points(query=query, limit=limit)
+
+
+@mcp.tool()
+async def declare_gap(
+    title: str,
+    content: str,
+    gap_kind: str = "source",
+    requirements: list[str] | None = None,
+    finding_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Declare a Whiteboard gap that the swarm can automatically schedule."""
+    merged_metadata = {"gap_kind": gap_kind, **(metadata or {})}
+    return await whiteboard_declare_gap(
+        title=title,
+        content=content,
+        requirements=requirements or [],
+        finding_id=finding_id,
+        metadata=merged_metadata,
+    )
+
+
+@mcp.tool()
+async def schedule_agent(
+    agent_name: str,
+    goal: str,
+    gap_card_id: str | None = None,
+    finding_id: str | None = None,
+    extra_input: dict[str, Any] | None = None,
+    allow_external_network: bool = False,
+) -> dict[str, Any]:
+    """Ask the platform to start another AgentRun for this AuditRun."""
+    return await whiteboard_schedule_agent(
+        agent_name=agent_name,
+        goal=goal,
+        gap_card_id=gap_card_id,
+        finding_id=finding_id,
+        extra_input=extra_input or {},
+        allow_external_network=allow_external_network,
+    )
+
+
+@mcp.tool()
+async def subscribe_changes(
+    filter: dict[str, Any],
+    subscriber_task_id: str | None = None,
+    subscriber_agent_run_id: str | None = None,
+) -> dict[str, Any]:
+    """Subscribe this long-running Agent to Whiteboard changes."""
+    return await whiteboard_subscribe_changes(
+        filter=filter,
+        subscriber_task_id=subscriber_task_id,
+        subscriber_agent_run_id=subscriber_agent_run_id,
+    )
+
+
+@mcp.tool()
+async def list_notifications(status: str | None = "pending") -> dict[str, Any]:
+    """List persisted Whiteboard notifications for this Agent."""
+    return await whiteboard_list_notifications(status=status)
+
+
+@mcp.tool()
+async def mark_notification(notification_id: str, status: str, lease_seconds: int | None = None) -> dict[str, Any]:
+    """Mark a Whiteboard notification as claimed, handled, or ignored."""
+    return await whiteboard_mark_notification(notification_id=notification_id, status=status, lease_seconds=lease_seconds)
+
+
+@mcp.tool()
+async def request_agent_help(
+    goal: str,
+    reason: str,
+    related_card_ids: list[str] | None = None,
+    suggested_agent_name: str | None = None,
+) -> dict[str, Any]:
+    """Request controller approval before adding more Agent capacity."""
+    return await whiteboard_request_agent_help(
+        goal=goal,
+        reason=reason,
+        related_card_ids=related_card_ids or [],
+        suggested_agent_name=suggested_agent_name,
+    )
+
+
+@mcp.tool()
+def read_structure() -> dict[str, Any]:
+    """Read the shared STRUCTURE.md generated for this AuditRun."""
+    return read_common_structure()
+
+
+@mcp.tool()
+async def submit_chain_evidence(
+    card_ids: list[str],
+    edge_ids: list[str] | None = None,
+    finding_id: str | None = None,
+    summary: str | None = None,
+) -> dict[str, Any]:
+    """Submit a complete Whiteboard card chain as platform Evidence."""
+    return await whiteboard_submit_chain_evidence(card_ids=card_ids, edge_ids=edge_ids or [], finding_id=finding_id, summary=summary)
+
+
+async def whiteboard_create_card(**body: Any) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    body.setdefault("author", MCP_NAME)
+    body.setdefault("agent_run_id", os.environ.get("AGENT_RUN_ID"))
+    return await _platform_post(f"/audit-runs/{audit_run_id}/whiteboard/cards", body)
+
+
+async def whiteboard_update_card(card_id: str, **body: Any) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    if not card_id:
+        raise ValueError("card_id is required")
+    return await _platform_request("PATCH", f"/audit-runs/{audit_run_id}/whiteboard/cards/{card_id}", body)
+
+
+async def whiteboard_link_cards(**body: Any) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    body.setdefault("author", MCP_NAME)
+    body.setdefault("agent_run_id", os.environ.get("AGENT_RUN_ID"))
+    return await _platform_post(f"/audit-runs/{audit_run_id}/whiteboard/edges", body)
+
+
+async def whiteboard_add_note(**body: Any) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    body.setdefault("author", MCP_NAME)
+    body.setdefault("agent_run_id", os.environ.get("AGENT_RUN_ID"))
+    return await _platform_post(f"/audit-runs/{audit_run_id}/whiteboard/notes", body)
+
+
+async def whiteboard_list_graph() -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    return await _platform_get(f"/audit-runs/{audit_run_id}/whiteboard")
+
+
+async def whiteboard_search_cards(**body: Any) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    return await _platform_post(f"/audit-runs/{audit_run_id}/whiteboard/search", body)
+
+
+async def whiteboard_find_attach_points(query: str, limit: int = 10) -> dict[str, Any]:
+    result = await whiteboard_search_cards(query=query, limit=limit)
+    return {"query": query, "matches": result.get("matches", [])}
+
+
+async def whiteboard_declare_gap(**body: Any) -> dict[str, Any]:
+    body["card_type"] = "gap"
+    body.setdefault("status", "open")
+    return await whiteboard_create_card(**body)
+
+
+async def whiteboard_submit_chain_evidence(**body: Any) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    return await _platform_post(f"/audit-runs/{audit_run_id}/whiteboard/evidence", body)
+
+
+async def whiteboard_schedule_agent(
+    agent_name: str,
+    goal: str,
+    gap_card_id: str | None = None,
+    finding_id: str | None = None,
+    extra_input: dict[str, Any] | None = None,
+    allow_external_network: bool = False,
+) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    if not agent_name.strip():
+        raise ValueError("agent_name is required")
+    if not goal.strip():
+        raise ValueError("goal is required")
+    audit_run = await _platform_get(f"/audit-runs/{audit_run_id}")
+    if not isinstance(audit_run, dict):
+        raise ValueError("audit run lookup returned an invalid response")
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    workspace_path = config.get("workspace_host_path")
+    project_id = str(audit_run.get("project_id") or PROJECT_ID or "")
+    if not project_id:
+        raise ValueError("project_id is required")
+    task_card = await whiteboard_create_card(
+        title=f"Scheduled Agent: {agent_name}",
+        card_type="agent-task",
+        status="scheduled",
+        content=goal,
+        finding_id=finding_id,
+        metadata={"gap_card_id": gap_card_id, "scheduled_by": MCP_NAME, "scheduler_agent_run_id": os.environ.get("AGENT_RUN_ID")},
+    )
+    payload = {
+        "audit_run_id": audit_run_id,
+        "project_id": project_id,
+        "agent_name": agent_name,
+        "workspace_host_path": workspace_path,
+        "allow_external_network": allow_external_network,
+        "retain_runtime_on_failure": bool(audit_run.get("retain_runtime_on_failure")),
+        "input_payload": {
+            "goal": goal,
+            "long_running": True,
+            "agent_lifecycle": "long-running",
+            "audit_phase": "whiteboard-swarm",
+            "whiteboard": {
+                "scheduled_by_card_id": task_card.get("card_id"),
+                "gap_card_id": gap_card_id,
+                "finding_id": finding_id,
+                "instruction": "Read the Whiteboard, subscribe to relevant card or keyword changes, add cards/edges/notes for findings, request help through the schedule-request flow, and submit chain evidence when complete.",
+            },
+            **(extra_input or {}),
+        },
+    }
+    result = await _platform_post(f"/audit-runs/{audit_run_id}/agent-runs", payload)
+    await whiteboard_update_card(
+        card_id=str(task_card.get("card_id") or ""),
+        status="running",
+        metadata={
+            "gap_card_id": gap_card_id,
+            "agent_result": result,
+            "scheduled_by": MCP_NAME,
+            "scheduler_agent_run_id": os.environ.get("AGENT_RUN_ID"),
+        },
+    )
+    return {"ok": True, "task_card": task_card, "agent_run": result}
+
+
+async def whiteboard_subscribe_changes(
+    filter: dict[str, Any],
+    subscriber_task_id: str | None = None,
+    subscriber_agent_run_id: str | None = None,
+) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    payload = {
+        "filter": filter or {},
+        "subscriber_task_id": subscriber_task_id or os.environ.get("WHITEBOARD_TASK_ID"),
+        "subscriber_agent_run_id": subscriber_agent_run_id or os.environ.get("AGENT_RUN_ID"),
+    }
+    return await _platform_post(f"/audit-runs/{audit_run_id}/whiteboard/subscriptions", payload)
+
+
+async def whiteboard_list_notifications(status: str | None = "pending") -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    params = []
+    if status:
+        params.append(f"status={status}")
+    agent_run_id = os.environ.get("AGENT_RUN_ID")
+    if agent_run_id:
+        params.append(f"subscriber_agent_run_id={agent_run_id}")
+    suffix = "?" + "&".join(params) if params else ""
+    notifications = await _platform_get(f"/audit-runs/{audit_run_id}/whiteboard/notifications{suffix}")
+    return {"notifications": notifications, "count": len(notifications) if isinstance(notifications, list) else 0}
+
+
+async def whiteboard_mark_notification(notification_id: str, status: str, lease_seconds: int | None = None) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    if not notification_id:
+        raise ValueError("notification_id is required")
+    return await _platform_post(
+        f"/audit-runs/{audit_run_id}/whiteboard/notifications/{notification_id}",
+        {
+            "status": status,
+            "claimed_by_agent_run_id": os.environ.get("AGENT_RUN_ID"),
+            **({"lease_seconds": lease_seconds} if lease_seconds else {}),
+        },
+    )
+
+
+async def whiteboard_request_agent_help(
+    goal: str,
+    reason: str,
+    related_card_ids: list[str] | None = None,
+    suggested_agent_name: str | None = None,
+) -> dict[str, Any]:
+    audit_run_id = _required_audit_run_id()
+    if not goal.strip():
+        raise ValueError("goal is required")
+    payload = {
+        "goal": goal,
+        "reason": reason,
+        "related_card_ids": related_card_ids or [],
+        "suggested_agent_name": suggested_agent_name,
+        "requested_by_task_id": os.environ.get("WHITEBOARD_TASK_ID"),
+        "requested_by_agent_run_id": os.environ.get("AGENT_RUN_ID"),
+    }
+    return await _platform_post(f"/audit-runs/{audit_run_id}/whiteboard/schedule-requests", payload)
+
+
+def read_common_structure() -> dict[str, Any]:
+    path = ARTIFACT_ROOT / "common" / _required_audit_run_id() / "STRUCTURE.md"
+    if not path.is_file():
+        return {
+            "ok": False,
+            "available": False,
+            "path": str(path),
+            "error": "STRUCTURE.md is not available for this AuditRun yet",
+        }
+    return {"ok": True, "available": True, "path": str(path), "content": path.read_text(encoding="utf-8", errors="replace")}
+
+
+@mcp.tool()
 async def start_sandbox_service(
     image: str,
     command: list[str],
@@ -669,174 +1093,6 @@ def codeql_query(database: str, query: str, timeout_seconds: int = 300) -> dict[
         str(output_path),
     ]
     return _run_tool_command("codeql", command, output_path, timeout_seconds)
-
-
-@mcp.tool()
-def joern_query(
-    query: str,
-    cpg_path: str | None = None,
-    timeout_seconds: int = 300,
-    output_name: str = "joern-query.txt",
-) -> dict[str, Any]:
-    """Run a Joern script/query when Joern is installed in this MCP image."""
-    joern = shutil.which("joern")
-    if not joern:
-        return _tool_unavailable("joern", "joern executable is not installed in this MCP image")
-    if not query.strip():
-        raise ValueError("query is required")
-    artifact_dir = _artifact_dir("joern")
-    safe_output_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", output_name).strip("-") or "joern-query.txt"
-    script_path = artifact_dir / f"{Path(safe_output_name).stem}.sc"
-    output_path = artifact_dir / safe_output_name
-    log_path = artifact_dir / f"{Path(safe_output_name).stem}.log"
-    script = query
-    if cpg_path:
-        script = f'importCpg("{_safe_artifact_path(cpg_path).as_posix()}")\n{query}'
-    script_path.write_text(script, encoding="utf-8")
-    command = [joern, "--script", str(script_path)]
-    return _run_tool_command(
-        "joern",
-        command,
-        output_path,
-        timeout_seconds,
-        stdout_path=log_path,
-        write_stdout=not output_path.exists(),
-    )
-
-
-@mcp.tool()
-def joern_build_cpg(
-    workspace_path: str = ".",
-    language: str | None = None,
-    timeout_seconds: int = 900,
-    query_packs: list[str] | None = None,
-) -> dict[str, Any]:
-    """Build a Joern CPG for the authorized workspace and persist it as an artifact."""
-    joern = shutil.which("joern")
-    joern_parse = shutil.which("joern-parse")
-    if not joern and not joern_parse:
-        return _tool_unavailable("joern", "neither joern nor joern-parse is installed in this MCP image")
-    source_root = _safe_path(workspace_path)
-    if not source_root.is_dir():
-        raise ValueError(f"workspace path is not a directory: {workspace_path}")
-    artifact_dir = _artifact_dir("joern")
-    cpg_path = artifact_dir / "cpg.bin.zip"
-    if joern_parse:
-        command = [joern_parse, str(source_root), "--output", str(cpg_path)]
-        if language:
-            command.extend(["--language", str(language)])
-        log_path = artifact_dir / "build-cpg.log"
-        result = _run_tool_command(
-            "joern",
-            command,
-            cpg_path,
-            timeout_seconds,
-            stdout_path=log_path,
-            write_stdout=False,
-        )
-    else:
-        script_path = artifact_dir / "build-cpg.sc"
-        script_path.write_text(
-            f'importCode("{source_root.as_posix()}")\nsave("{cpg_path.as_posix()}")\n',
-            encoding="utf-8",
-        )
-        log_path = artifact_dir / "build-cpg.log"
-        result = _run_tool_command(
-            "joern",
-            [joern, "--script", str(script_path)],
-            cpg_path,
-            timeout_seconds,
-            stdout_path=log_path,
-            write_stdout=False,
-        )
-    result["cpg_path"] = str(cpg_path)
-    result["language"] = language
-    result["workspace_path"] = str(source_root)
-    normalized_packs = _normalize_joern_query_packs(query_packs)
-    result["query_packs"] = []
-    if result.get("ok") and normalized_packs:
-        for pack in normalized_packs:
-            try:
-                pack_result = joern_common_queries(str(cpg_path), pack, timeout_seconds=min(int(timeout_seconds), 300))
-            except Exception as exc:
-                pack_result = {"ok": False, "available": True, "tool": "joern", "query_pack": pack, "error": str(exc)}
-            result["query_packs"].append(pack_result)
-    return result
-
-
-@mcp.tool()
-def joern_list_cpgs(audit_run_id: str | None = None) -> dict[str, Any]:
-    """List CPG artifacts produced by this Joern MCP."""
-    root = _artifact_dir("joern")
-    entries = []
-    for path in sorted(root.glob("**/*.bin.zip")):
-        artifact = _artifact_evidence(path)
-        if audit_run_id and audit_run_id not in str(path):
-            continue
-        entries.append({"cpg_path": str(path), "artifact": artifact})
-    return {"ok": True, "tool": "joern", "cpgs": entries, "count": len(entries)}
-
-
-@mcp.tool()
-def joern_run_script(cpg_path: str, script: str, timeout_seconds: int = 300) -> dict[str, Any]:
-    """Run an arbitrary Joern script after importing an authorized CPG artifact."""
-    if not script.strip():
-        raise ValueError("script is required")
-    cpg = _safe_artifact_path(cpg_path)
-    return joern_query(script, cpg_path=str(cpg), timeout_seconds=timeout_seconds)
-
-
-@mcp.tool()
-def joern_common_queries(cpg_path: str, query_pack: str = "entrypoints", timeout_seconds: int = 300) -> dict[str, Any]:
-    """Run a built-in Joern query pack against an authorized CPG artifact."""
-    cpg = _safe_artifact_path(cpg_path)
-    pack = str(query_pack or "entrypoints").strip().lower()
-    output_name = f"joern-query-{pack}.txt"
-    output_path = _artifact_dir("joern") / output_name
-    script = _joern_query_pack(pack, output_path)
-    result = joern_query(script, cpg_path=str(cpg), timeout_seconds=timeout_seconds, output_name=output_name)
-    result["query_pack"] = pack
-    return result
-
-
-def _joern_query_pack(query_pack: str, output_path: Path | None = None) -> str:
-    def emit(expr: str) -> str:
-        if output_path is None:
-            return expr
-        escaped_path = output_path.as_posix().replace("\\", "\\\\").replace('"', '\\"')
-        return f"""val dieAuditResult = {expr}
-import java.nio.file.{{Files, Paths}}
-Files.writeString(Paths.get("{escaped_path}"), dieAuditResult)
-"""
-
-    packs = {
-        "entrypoints": 'cpg.method.name("(?i).*(main|route|controller|handler|endpoint|server|app).*").take(200).map(m => s"${m.fullName}:${m.filename}:${m.lineNumber}").mkString("\\n")',
-        "authz": 'cpg.call.name("(?i).*(auth|login|session|jwt|oauth|permission|role|acl|policy).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
-        "injection": 'cpg.call.name("(?i).*(query|execute|exec|eval|render|template|sql|command|spawn|system).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
-        "file-io": 'cpg.call.name("(?i).*(open|read|write|upload|download|archive|extract|path|file).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
-        "network": 'cpg.call.name("(?i).*(http|request|fetch|url|uri|client|socket|connect).*").take(200).map(c => s"${c.name}:${c.method.fullName}:${c.location.filename}:${c.lineNumber}").mkString("\\n")',
-        "secrets": 'cpg.literal.code("(?i).*(secret|token|password|passwd|api[_-]?key|credential).*").take(200).map(l => s"${l.code}:${l.method.fullName}:${l.location.filename}:${l.lineNumber}").mkString("\\n")',
-    }
-    if query_pack not in packs:
-        raise ValueError(f"unknown Joern query pack: {query_pack}")
-    return emit(packs[query_pack])
-
-
-def _normalize_joern_query_packs(query_packs: list[str] | str | None) -> list[str]:
-    if not query_packs:
-        return []
-    if isinstance(query_packs, str):
-        values = query_packs.split(",")
-    else:
-        values = [str(item) for item in query_packs]
-    normalized: list[str] = []
-    for value in values:
-        pack = value.strip().lower()
-        if not pack or pack in normalized:
-            continue
-        _joern_query_pack(pack)
-        normalized.append(pack)
-    return normalized
 
 
 def _safe_path(path: str) -> Path:
@@ -1249,16 +1505,16 @@ def _platform_headers() -> dict[str, str]:
 
 
 async def _platform_get(path: str) -> dict[str, Any] | list[dict[str, Any]]:
-    async with httpx.AsyncClient(base_url=PLATFORM_API_URL, timeout=60, headers=_platform_headers()) as client:
-        response = await client.get(path)
-        if response.status_code >= 400:
-            raise RuntimeError(f"platform API {path} failed: {response.status_code} {response.text[-1000:]}")
-        return response.json()
+    return await _platform_request("GET", path)
 
 
 async def _platform_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return await _platform_request("POST", path, payload)
+
+
+async def _platform_request(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | list[dict[str, Any]]:
     async with httpx.AsyncClient(base_url=PLATFORM_API_URL, timeout=60, headers=_platform_headers()) as client:
-        response = await client.post(path, json=payload)
+        response = await client.request(method, path, json=payload)
         if response.status_code >= 400:
             raise RuntimeError(f"platform API {path} failed: {response.status_code} {response.text[-1000:]}")
         return response.json()

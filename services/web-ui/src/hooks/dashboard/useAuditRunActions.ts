@@ -68,6 +68,18 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     });
   }
 
+  async function runWhiteboardSwarm() {
+    if (!auditRun) {
+      message.error("请先创建 AuditRun");
+      return;
+    }
+    await runner.runAction(async () => {
+      const result = await dashboardApi.runWhiteboardSwarm(auditRun.audit_run_id);
+      setLastResponse(result);
+      await runner.refreshAuditRun(auditRun.audit_run_id);
+    });
+  }
+
   async function generateReport() {
     if (!auditRun) {
       message.error("请先创建 AuditRun");
@@ -176,5 +188,6 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     runJudge,
     runPipeline,
     runSca,
+    runWhiteboardSwarm,
   };
 }

@@ -12,6 +12,7 @@ import type {
   CreateAuditRunResponse,
   DependencyInventory,
   DockerHealth,
+  ExecutionGraph,
   Finding,
   FindingDetail,
   FindingPocResponse,
@@ -30,6 +31,7 @@ import type {
   SandboxCapabilities,
   SandboxServiceResponse,
   StorageSummary,
+  WhiteboardGraph,
   WorkerHeartbeatsResponse,
 } from "../types";
 
@@ -96,7 +98,7 @@ export function getKnowledgeStatus() {
 }
 
 export async function getAuditRunBundle(auditRunId: string) {
-  const [run, agents, findings, codeAnalysisTasks, dependencies, containers, reports, pipeline] = await Promise.all([
+  const [run, agents, findings, codeAnalysisTasks, dependencies, containers, reports, pipeline, whiteboard, executionGraph] = await Promise.all([
     readJson<AuditRun>(`/gateway/audit-runs/${auditRunId}`),
     readJson<AgentRun[]>(`/gateway/audit-runs/${auditRunId}/agent-runs`),
     readJson<Finding[]>(`/gateway/audit-runs/${auditRunId}/findings`),
@@ -105,8 +107,10 @@ export async function getAuditRunBundle(auditRunId: string) {
     readJson<ContainerRow[]>(`/gateway/audit-runs/${auditRunId}/containers`),
     readJson<ReportArtifact[]>(`/gateway/audit-runs/${auditRunId}/reports`),
     readJson<PipelineStatus>(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
+    readJson<WhiteboardGraph>(`/gateway/audit-runs/${auditRunId}/whiteboard`).catch(() => undefined),
+    readJson<ExecutionGraph>(`/gateway/audit-runs/${auditRunId}/execution-graph`).catch(() => undefined),
   ]);
-  return { agents, codeAnalysisTasks, containers, dependencies, findings, pipeline, reports, run };
+  return { agents, codeAnalysisTasks, containers, dependencies, executionGraph, findings, pipeline, reports, run, whiteboard };
 }
 
 export function createGitProject(values: { name: string; git_url: string; ref?: string }) {
@@ -140,6 +144,10 @@ export function runPipeline(auditRunId: string) {
 
 export function runJudge(auditRunId: string) {
   return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/judge`, { method: "POST" });
+}
+
+export function runWhiteboardSwarm(auditRunId: string) {
+  return postJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/whiteboard/tasks/run`, {});
 }
 
 export function generateReport(auditRunId: string) {

@@ -68,9 +68,11 @@ def test_audit_run_config_modal_exposes_swarm_controls() -> None:
         "max_parallel_poc_verifiers",
         "source_sink_finder_agent_name",
         "poc_verifier_agent_name",
-        "joern_query_packs",
+        "enable_decompilation",
     ):
         assert field in modal
+
+    assert "query_packs" not in modal
 
     assert "CreateAuditRunPayload" in api
     assert "createAuditRun(projectId: string, payload: CreateAuditRunPayload)" in api
@@ -328,6 +330,7 @@ def test_dashboard_api_client_uses_typed_json_boundaries() -> None:
         "readJson<Project[]>",
         "readJson<AuditRun>",
         "readJson<AgentRun[]>",
+        "readJson<ExecutionGraph>",
         "readJson<Finding[]>",
         "readJson<ContainerRow[]>",
         "readJson<PipelineStatus>",

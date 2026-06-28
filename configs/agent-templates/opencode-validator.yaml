@@ -20,9 +20,10 @@ runtime_mount:
   target: /dieaudit/runtime
   read_only: true
 required_mcp:
+  - whiteboard-mcp
   - filesystem-mcp
   - code-search-mcp
-  - joern-mcp
+  - codebase-memory-mcp
   - kb-mcp
   - http-test-mcp
   - sandbox-mcp

@@ -5,9 +5,9 @@
 
 DieAudit is a local-first, Docker-orchestrated multi-agent code audit platform.
 It is designed to run practical security review workflows against real source
-projects with OpenCode agents, MCP tool sidecars, Joern CPG analysis, Semgrep,
-SCA, finding-specific markdown workspaces, validator fan-out, PoC generation,
-verification, judgement, and report artifacts.
+projects with ACP agents, MCP tool sidecars, codebase-memory graph analysis,
+Semgrep, SCA, finding-specific markdown workspaces, validator fan-out, PoC
+generation, verification, judgement, and report artifacts.
 
 The project is still early, but the repository is intentionally structured as a
 runnable open-source platform rather than a one-off demo.
@@ -16,9 +16,9 @@ runnable open-source platform rather than a one-off demo.
 
 - Imports projects from Git URLs or zip uploads.
 - Creates isolated workspaces and local artifact directories.
-- Builds Joern CPG context for code structure, call-chain, and source-to-sink
-  analysis.
-- Runs OpenCode-based agents through Agent Client Protocol.
+- Injects `codebase-memory-mcp` into ACP sessions for architecture, symbol,
+  route, call-chain, and graph-backed source-to-sink analysis.
+- Runs OpenCode and Kimi Code agents through Agent Client Protocol.
 - Starts Agent containers and MCP sidecars through Docker orchestration.
 - Assigns each finding its own persistent folder and `finding.md` handoff file.
 - Lets Source-Sink Finder, Validator, Judger, PoC Writer, and PoC Verifier
@@ -31,6 +31,9 @@ runnable open-source platform rather than a one-off demo.
 
 ## Architecture
 
+For the detailed service and runtime design, see
+[docs/architecture.md](docs/architecture.md).
+
 ```mermaid
 flowchart LR
   UI["React / Ant Design Web UI"] --> API["FastAPI Web API"]
@@ -42,10 +45,11 @@ flowchart LR
   Gateway --> DockerProxy["docker-socket-proxy"]
   Sandbox --> DockerProxy
   DockerProxy --> Docker["Docker Engine"]
-  Docker --> Agents["OpenCode Agent Containers"]
+  Docker --> Agents["ACP Agent Containers"]
   Docker --> MCP["MCP Sidecar Containers"]
   Agents --> MCP
-  MCP --> Tools["Joern / Semgrep / SCA / Code Search / KB"]
+  Agents --> CBM["codebase-memory-mcp stdio"]
+  MCP --> Tools["Semgrep / SCA / Code Search / KB"]
   API --> Artifacts["Local Artifact Directory"]
   Worker --> Artifacts
   API --> Qdrant["Qdrant Knowledge Index"]
@@ -56,12 +60,12 @@ Core services in `docker-compose.yml`:
 - `nginx`: Web/API gateway.
 - `web-ui`: React frontend.
 - `web-api`: FastAPI backend.
-- `workflow-worker`: audit pipeline worker and optional Temporal worker.
+- `workflow-worker`: audit pipeline worker.
 - `agent-gateway`: Agent, ACP, MCP, and runtime package orchestration.
 - `workspace-engine`: project import, snapshots, and static workspace work.
 - `sandbox-runner`: controlled target/PoC Docker execution.
 - `kb-indexer`: document parsing and vector indexing.
-- `postgres`, `redis`, `nats`, `qdrant`, `temporal`.
+- `postgres`, `redis`, `nats`, `qdrant`.
 - `docker-socket-proxy`: limited Docker Engine API proxy.
 
 Default artifact storage is local directory mounts under `data/artifacts`.
@@ -74,11 +78,13 @@ The intended audit flow is:
 ```text
 project import
   -> snapshot
-  -> Joern CPG build
+  -> structure discovery
   -> recon / orchestrator
+  -> codebase-memory repository indexing inside ACP agents
   -> code-auditor fan-out
   -> Semgrep + SCA
   -> per-finding Source-Sink Finder
+  -> AuditRun Whiteboard Swarm
   -> per-finding Validator
   -> per-finding Judger
   -> per-finding PoC Writer
@@ -87,8 +93,21 @@ project import
   -> runtime cleanup
 ```
 
-CodeQL is not required by the default production path. Joern is the default CPG
-engine and should be available for real audits.
+CodeQL is not required by the default production path. Code graph context is
+provided by `codebase-memory-mcp` as an ACP stdio MCP server injected into agent
+sessions; no separate graph sidecar or pre-agent graph build is required.
+
+## Split-Service Architecture Baseline
+
+The current architecture is moving to independent service images for `web-api`,
+`workflow-worker`, `agent-gateway`, `workspace-engine`, `sandbox-runner`, and
+`kb-indexer`, with shared domain and persistence code in `services/platform-common`.
+New deployments use the Alembic baseline under `services/database/alembic`.
+
+This baseline intentionally does not migrate old development data from the
+earlier single-platform-image schema. Before starting the split-service stack
+against an existing local checkout, reset the Postgres volume or point
+`POSTGRES_DB` at a fresh database.
 
 ## Quick Start
 
@@ -121,7 +140,6 @@ Open:
 - Web UI: <http://localhost:8080>
 - Web API health: <http://localhost:18000/health>
 - Agent Gateway health: <http://localhost:18001/health>
-- Temporal UI: <http://localhost:18088>
 
 Create a persisted admin API key:
 
@@ -143,7 +161,7 @@ Build the default tool images before real audits:
 ```powershell
 $env:HTTP_PROXY = "http://127.0.0.1:7897"
 $env:HTTPS_PROXY = "http://127.0.0.1:7897"
-docker compose --profile tools build tool-mcp-image tool-mcp-joern-image opencode-agent-image
+docker compose --profile tools build tool-mcp-image opencode-agent-image kimi-code-agent-image
 ```
 
 Linux/macOS:
@@ -151,7 +169,7 @@ Linux/macOS:
 ```bash
 HTTP_PROXY=http://127.0.0.1:7897 \
 HTTPS_PROXY=http://127.0.0.1:7897 \
-docker compose --profile tools build tool-mcp-image tool-mcp-joern-image opencode-agent-image
+docker compose --profile tools build tool-mcp-image opencode-agent-image kimi-code-agent-image
 ```
 
 If you do not use a proxy, leave the proxy variables empty.
@@ -169,7 +187,6 @@ If you do not use a proxy, leave the proxy variables empty.
    - Validator rounds,
    - per-stage concurrency,
    - Agent template names,
-   - Joern query packs,
    - pre-guidance prompt,
    - runtime retention and network options.
 8. Create the AuditRun.
@@ -232,8 +249,7 @@ Important production settings:
 - `DIEAUDIT_API_KEY` or persisted API keys for authentication.
 - `PUBLIC_METRICS=false` unless metrics are separately protected.
 - `ENABLE_DEMO_TEMPLATES=false`.
-- `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable queue, or
-  `PIPELINE_EXECUTION_BACKEND=temporal` to start audit runs through Temporal.
+- `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable queue.
 - `DEFAULT_SANDBOX_RUNTIME=runc`.
 - `ALLOW_RUNC_SANDBOX=true`.
 - `ALLOW_SANDBOX_EXTERNAL_NETWORK=false`.
@@ -251,33 +267,18 @@ curl -s http://localhost:8080/gateway/runtime/readiness | jq .
 
 More details are in [docs/production-readiness.md](docs/production-readiness.md).
 
-## Temporal Status
+## Whiteboard Swarm
 
-Temporal is available as an execution backend. When
-`PIPELINE_EXECUTION_BACKEND=temporal`, `/run-pipeline` starts a Temporal
-workflow on `TEMPORAL_TASK_QUEUE`. The workflow runs the main audit pipeline as
-stage-level Temporal activities:
+Each AuditRun has a shared Whiteboard graph. Agents use `whiteboard-mcp` to
+create cards, attach files, connect evidence, declare predecessor/successor
+gaps, search all cards, and submit complete chain evidence. The
+`whiteboard-swarm` stage starts a controller Agent after source-sink analysis;
+that Agent inspects the graph and selectively schedules Source-Sink Finder,
+Validator, Judger, PoC Writer, or PoC Verifier runs through platform MCP tools.
 
-`joern-cpg -> agent-audit -> code-analysis -> sca -> semgrep -> source-sink-analysis -> validators -> judgement -> poc-writing -> poc-verification -> report -> cleanup`.
-
-The default `workflow-worker` backend still uses the existing durable database
-queue and `PipelineExecutor` path. Temporal mode does not enqueue into that
-database queue.
-
-Finding-level Swarm stages are also Temporal-aware. Source-Sink Finder, Judger,
-PoC Writer, and PoC Verifier run one activity per Finding, bounded by their
-`max_parallel_*` settings. Validators run one activity per Finding/round,
-bounded by `max_parallel_validators`.
-
-Fan-out activities use stable activity IDs derived from AuditRun, stage,
-Finding, and Validator round, and use bounded Temporal retry policies. On
-activity retry, completed AgentRuns with the same activity key are reused
-instead of starting duplicate Agent containers. Current limitation: these
-fan-outs are activities, not child workflows. Temporal activities emit periodic
-heartbeats while long-running Agent work is active, and AgentRun events record
-container start, OpenCode wait, log capture, result file parsing, and final
-status. A future hardening pass can add finer-grained streaming progress from
-inside the ACP/OpenCode adapter.
+The Whiteboard database records are the source of truth. JSON snapshots are
+written under `data/artifacts/whiteboards/{audit_run_id}/whiteboard.json` for
+audit trail and report download.
 
 ## Demo Profile
 
@@ -351,9 +352,16 @@ configs/                    Agent, MCP, model, nginx templates
 docs/                       operational documentation
 scripts/                    bootstrap, key creation, E2E, image pull helpers
 services/platform/          FastAPI backend, ORM, runtime orchestration
+services/platform-common/   shared split-service domain, schema, and persistence code
+services/web-api/           split-service API/BFF surface
+services/workflow-worker/   split-service audit pipeline worker
+services/agent-gateway/     split-service agent and MCP runtime controller
+services/workspace-engine/  split-service project import and snapshots
+services/sandbox-runner/    split-service PoC and target execution
+services/kb-indexer/        split-service knowledge ingestion and search
 services/web-ui/            React + Ant Design frontend
 services/mcp-tools/         MCP tool server implementation and tool images
-services/agents/            OpenCode agent image
+services/agents/            ACP agent images
 services/mock-*             opt-in demo fixtures
 tests/                      Python and repo-structure tests
 ```
@@ -363,7 +371,7 @@ tests/                      Python and repo-structure tests
 Near-term engineering work:
 
 - More real-world end-to-end fixture audits.
-- Stronger Joern query packs per language/framework.
+- Better codebase-memory graph workflows per language/framework.
 - Better sandbox target stack management.
 - More precise dependency vulnerability normalization.
 - Production-grade RAG embedding provider documentation.

@@ -6,6 +6,7 @@ import {
   DatabaseOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
+  NodeIndexOutlined,
   RobotOutlined,
   PlayCircleOutlined,
   SafetyCertificateOutlined,
@@ -20,6 +21,7 @@ export type AppView =
   | "findings"
   | "finding-review"
   | "dependencies"
+  | "whiteboard"
   | "reports"
   | "runtime"
   | "runtime-readiness"
@@ -38,6 +40,7 @@ export const APP_VIEW_PATHS: Record<AppView, string> = {
   findings: "/findings",
   "finding-review": "/findings/review",
   dependencies: "/dependencies",
+  whiteboard: "/whiteboard",
   reports: "/reports",
   runtime: "/runtime",
   "runtime-readiness": "/runtime/readiness",
@@ -94,6 +97,7 @@ export const navigationGroups: NavigationGroup[] = [
       { key: "findings", icon: <BugOutlined />, label: "Findings" },
       { key: "finding-review", icon: <SafetyCertificateOutlined />, label: "Finding Review" },
       { key: "dependencies", icon: <DatabaseOutlined />, label: "Dependencies" },
+      { key: "whiteboard", icon: <NodeIndexOutlined />, label: "Whiteboard" },
       { key: "reports", icon: <FileTextOutlined />, label: "Reports" },
     ],
   },

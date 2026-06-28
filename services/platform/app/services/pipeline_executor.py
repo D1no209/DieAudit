@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select
-
-from app.domain.models import AgentRun
-from app.repositories import SessionLocal
 from app.settings import Settings
 
 
@@ -14,24 +10,6 @@ class PipelineCancelled(RuntimeError):
 
 
 AsyncCallback = Callable[..., Awaitable[Any]]
-
-
-TEMPORAL_PIPELINE_STAGES = [
-    "joern-cpg",
-    "agent-audit",
-    "code-analysis",
-    "sca",
-    "semgrep",
-    "source-sink-analysis",
-    "validators",
-    "judgement",
-    "poc-writing",
-    "poc-verification",
-    "report",
-]
-TEMPORAL_VALIDATOR_ATTEMPT_ACTIVITY = "dieaudit.validator_attempt"
-TEMPORAL_SWARM_AGENT_ACTIVITY = "dieaudit.swarm_agent"
-TEMPORAL_COMPLETE_SWARM_STAGE_ACTIVITY = "dieaudit.complete_swarm_stage"
 
 
 class PipelineExecutor:
@@ -58,11 +36,12 @@ class PipelineExecutor:
         generate_report: AsyncCallback,
         compact_event_payload: Callable[[Any], Any],
         list_evidence: AsyncCallback | None = None,
-        run_joern: AsyncCallback | None = None,
+        run_structure_discovery: AsyncCallback | None = None,
         run_code_batch_analysis: AsyncCallback | None = None,
         run_source_sink_analysis: AsyncCallback | None = None,
         run_source_sink_finding: AsyncCallback | None = None,
         complete_source_sink_analysis: AsyncCallback | None = None,
+        run_whiteboard_swarm: AsyncCallback | None = None,
         run_judger_finding: AsyncCallback | None = None,
         complete_judgement: AsyncCallback | None = None,
         run_poc_writer_finding: AsyncCallback | None = None,
@@ -83,11 +62,12 @@ class PipelineExecutor:
         self.cancel_reason = cancel_reason
         self.list_findings = list_findings
         self.list_evidence = list_evidence
-        self.run_joern = run_joern
+        self.run_structure_discovery = run_structure_discovery
         self.run_code_batch_analysis = run_code_batch_analysis
         self.run_source_sink_analysis = run_source_sink_analysis
         self.run_source_sink_finding = run_source_sink_finding
         self.complete_source_sink_analysis = complete_source_sink_analysis
+        self.run_whiteboard_swarm = run_whiteboard_swarm
         self.run_judger_finding = run_judger_finding
         self.complete_judgement = complete_judgement
         self.run_poc_writer_finding = run_poc_writer_finding
@@ -114,21 +94,20 @@ class PipelineExecutor:
             await self._cleanup_terminal_runtime(audit_run_id, terminal_status="failed", audit_run=audit_run)
             return
         await self.mark_audit_run_status(audit_run_id, "running")
-        initial_stage = "joern-cpg" if self._joern_enabled(audit_run) else "agent-audit"
-        await self.record_audit_run_event(audit_run_id, "pipeline_started", {"stage": initial_stage})
+        await self.record_audit_run_event(audit_run_id, "pipeline_started", {"stage": "structure-discovery"})
         steps: list[dict[str, Any]] = []
         judge_result: dict[str, Any] = {}
         agent_external_network = self._agent_external_network(audit_run)
         try:
             await self.raise_if_cancelled(audit_run_id)
-            if self._joern_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage="joern-cpg", status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "joern-cpg"})
+            if self._structure_discovery_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="structure-discovery", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "structure-discovery"})
                 try:
-                    if self.run_joern is None:
-                        joern_result = {"ok": False, "available": False, "error": "Joern callback is not configured"}
+                    if self.run_structure_discovery is None:
+                        structure_result = {"ok": False, "available": False, "error": "structure discovery callback is not configured"}
                     else:
-                        joern_result = await self.run_joern(
+                        structure_result = await self.run_structure_discovery(
                             audit_run_id,
                             audit_run["project_id"],
                             workspace_path,
@@ -136,18 +115,16 @@ class PipelineExecutor:
                             audit_run,
                         )
                 except Exception as exc:
-                    joern_result = {"ok": False, "available": False, "error": str(exc)}
-                    await self.record_pipeline_event(audit_run_id, "joern_failed", joern_result)
-                steps.append({"step": "joern-cpg", "result": joern_result})
+                    structure_result = {"ok": False, "error": str(exc)}
+                    await self.record_pipeline_event(audit_run_id, "structure_discovery_failed", structure_result)
+                steps.append({"step": "structure-discovery", "result": structure_result})
                 if isinstance(audit_run.get("config"), dict):
-                    audit_run["config"] = {**audit_run["config"], "joern_context": joern_result}
+                    audit_run["config"] = {**audit_run["config"], "structure_context": structure_result}
                 await self.record_audit_run_event(
                     audit_run_id,
                     "pipeline_step_completed",
-                    {"step": "joern-cpg", "result": self.compact_event_payload(joern_result)},
+                    {"step": "structure-discovery", "result": self.compact_event_payload(structure_result)},
                 )
-                if self._joern_required(audit_run) and not joern_result.get("ok"):
-                    raise RuntimeError(str(joern_result.get("error") or joern_result.get("reason") or "Joern CPG build failed"))
                 await self.raise_if_cancelled(audit_run_id)
 
             if self._agent_audit_enabled(audit_run):
@@ -160,9 +137,7 @@ class PipelineExecutor:
                     )
                 }
                 if isinstance(agent_input_payload, dict):
-                    joern_context = self._agent_joern_context(audit_run)
-                    if joern_context["enabled"]:
-                        agent_input_payload = {**agent_input_payload, "joern": joern_context}
+                    agent_input_payload = {**agent_input_payload, "codebase_memory": self._agent_codebase_memory_context()}
                 agent_result = await self.runtime.start_agent_run(
                     audit_run_id=audit_run_id,
                     project_id=audit_run["project_id"],
@@ -172,11 +147,12 @@ class PipelineExecutor:
                     retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                     input_payload=agent_input_payload,
                 )
-                steps.append({"step": "agent-audit", "result": agent_result})
+                agent_step_result = agent_result
+                steps.append({"step": "agent-audit", "result": agent_step_result})
                 await self.record_audit_run_event(
                     audit_run_id,
                     "pipeline_step_completed",
-                    {"step": "agent-audit", "result": self.compact_event_payload(agent_result)},
+                    {"step": "agent-audit", "result": self.compact_event_payload(agent_step_result)},
                 )
                 if self._agent_run_failed(agent_result):
                     raise RuntimeError(self._agent_run_error(agent_result) or "agent-audit failed")
@@ -215,82 +191,36 @@ class PipelineExecutor:
                 steps.append({"step": "code-analysis", "result": code_result})
                 await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "code-analysis", "reason": code_result["reason"]})
 
-            await self.set_pipeline_state(audit_run_id, stage="sca", status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "sca"})
-            try:
-                sca_result = await self.run_sca(audit_run_id, audit_run["project_id"], workspace_path, self.runtime, audit_run)
-            except Exception as exc:
-                sca_result = {"ok": False, "error": str(exc)}
-                await self.record_pipeline_event(audit_run_id, "sca_failed", sca_result)
-            steps.append({"step": "sca", "result": sca_result})
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": "sca", "result": self.compact_event_payload(sca_result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-
-            await self.set_pipeline_state(audit_run_id, stage="semgrep", status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "semgrep"})
-            try:
-                semgrep_result = await self.run_semgrep(audit_run_id, audit_run["project_id"], workspace_path, self.runtime, audit_run)
-            except Exception as exc:
-                semgrep_result = {"ok": False, "error": str(exc)}
-                await self.record_pipeline_event(audit_run_id, "semgrep_failed", semgrep_result)
-            steps.append({"step": "semgrep", "result": semgrep_result})
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": "semgrep", "result": self.compact_event_payload(semgrep_result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-
-            findings = await self.list_findings(audit_run_id)
-            if self._source_sink_analysis_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage="source-sink-analysis", status="running")
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_started",
-                    {"step": "source-sink-analysis", "finding_count": len(findings)},
-                )
+            if self._whiteboard_swarm_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="whiteboard-swarm", status="running")
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "whiteboard-swarm"})
                 try:
-                    if self.run_source_sink_analysis is None:
-                        source_sink_result = {"ok": False, "available": False, "error": "source-to-sink callback is not configured"}
+                    if self.run_whiteboard_swarm is None:
+                        whiteboard_result = {"ok": False, "available": False, "error": "whiteboard swarm callback is not configured"}
                     else:
-                        source_sink_result = await self.run_source_sink_analysis(
-                            audit_run_id,
-                            audit_run["project_id"],
-                            workspace_path,
-                            self.runtime,
-                            audit_run,
-                            findings,
-                        )
+                        whiteboard_result = await self.run_whiteboard_swarm(audit_run_id, self.runtime)
                 except Exception as exc:
-                    source_sink_result = {"ok": False, "error": str(exc)}
-                    await self.record_pipeline_event(audit_run_id, "source_sink_analysis_failed", source_sink_result)
-                steps.append({"step": "source-sink-analysis", "result": source_sink_result})
+                    whiteboard_result = {"ok": False, "error": str(exc)}
+                    await self.record_pipeline_event(audit_run_id, "whiteboard_swarm_failed", whiteboard_result)
+                steps.append({"step": "whiteboard-swarm", "result": whiteboard_result})
                 await self.record_audit_run_event(
                     audit_run_id,
                     "pipeline_step_completed",
-                    {"step": "source-sink-analysis", "result": self.compact_event_payload(source_sink_result)},
+                    {"step": "whiteboard-swarm", "result": self.compact_event_payload(whiteboard_result)},
                 )
-                findings = await self.list_findings(audit_run_id)
                 await self.raise_if_cancelled(audit_run_id)
             else:
-                source_sink_result = self._skipped_result("source-sink-finder agent disabled")
-                steps.append({"step": "source-sink-analysis", "result": source_sink_result})
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_skipped",
-                    {"step": "source-sink-analysis", "reason": source_sink_result["reason"]},
-                )
+                whiteboard_result = self._skipped_result("whiteboard swarm disabled")
+                steps.append({"step": "whiteboard-swarm", "result": whiteboard_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "whiteboard-swarm", "reason": whiteboard_result["reason"]})
 
-            if self._validators_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage="validators", status="running")
+            findings = await self.list_findings(audit_run_id)
+            if self._validation_judgement_enabled(audit_run):
+                await self.set_pipeline_state(audit_run_id, stage="validation-judgement", status="running")
                 await self.record_audit_run_event(
                     audit_run_id,
                     "pipeline_step_started",
-                    {"step": "validators", "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"]},
+                    {"step": "validation-judgement", "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"]},
                 )
                 validator_result = await self.runtime.scale_validators(
                     audit_run_id=audit_run_id,
@@ -299,39 +229,47 @@ class PipelineExecutor:
                     workspace_host_path=workspace_path,
                     validator_rounds=audit_run["validator_rounds"],
                     max_parallel_validators=audit_run["max_parallel_validators"],
-                    validator_agent_name=self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
+                    validator_agent_name=self._config_str(audit_run, "validation_judgement_agent_name", self._config_str(audit_run, "validator_agent_name", "opencode-validator")),
                     allow_external_network=agent_external_network,
                     retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                     wait_for_completion=True,
                     cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
                     cancel_reason=lambda: self.cancel_reason(audit_run_id),
                 )
-                steps.append({"step": "validators", "result": validator_result})
+                judge_result = {"validation_judgement": validator_result}
+                steps.append({"step": "validation-judgement", "result": validator_result})
                 await self.record_audit_run_event(
                     audit_run_id,
                     "pipeline_step_completed",
-                    {"step": "validators", "result": self.compact_event_payload(validator_result)},
+                    {"step": "validation-judgement", "result": self.compact_event_payload(validator_result)},
                 )
                 await self.raise_if_cancelled(audit_run_id)
             else:
-                validator_result = self._skipped_result("validator agent disabled")
-                steps.append({"step": "validators", "result": validator_result})
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "validators", "reason": validator_result["reason"]})
+                validator_result = self._skipped_result("validation-judgement disabled")
+                judge_result = validator_result
+                steps.append({"step": "validation-judgement", "result": validator_result})
+                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "validation-judgement", "reason": validator_result["reason"]})
 
-            if self._judgement_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage="judgement", status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "judgement"})
-                judge_result = await self.judge_audit_run(audit_run_id, self.runtime)
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": "judgement", "result": self.compact_event_payload(judge_result)},
-                )
-                await self.raise_if_cancelled(audit_run_id)
-            else:
-                judge_result = self._skipped_result("judger agent disabled")
-                steps.append({"step": "judgement", "result": judge_result})
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "judgement", "reason": judge_result["reason"]})
+            await self.set_pipeline_state(audit_run_id, stage="feedback-loop", status="running")
+            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "feedback-loop"})
+            feedback_result = await self._run_feedback_loop(
+                audit_run_id=audit_run_id,
+                audit_run=audit_run,
+                workspace_path=workspace_path,
+                validation_result=validator_result,
+            )
+            steps.append({"step": "feedback-loop", "result": feedback_result})
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": "feedback-loop", "result": self.compact_event_payload(feedback_result)},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+
+            if self._legacy_judgement_enabled(audit_run):
+                await self.record_pipeline_event(audit_run_id, "legacy_judgement_skipped", {"reason": "validation-judgement replaces judgement"})
+            if self._legacy_source_sink_analysis_enabled(audit_run):
+                await self.record_pipeline_event(audit_run_id, "legacy_source_sink_skipped", {"reason": "whiteboard-swarm replaces source-sink-analysis"})
 
             if self._poc_writing_enabled(audit_run):
                 await self.set_pipeline_state(audit_run_id, stage="poc-writing", status="running")
@@ -431,817 +369,6 @@ class PipelineExecutor:
             await self.mark_audit_run_status(audit_run_id, "failed")
             await self._cleanup_terminal_runtime(audit_run_id, terminal_status="failed", audit_run=audit_run)
 
-    async def prepare_temporal_pipeline(self, audit_run_id: str) -> dict[str, Any]:
-        audit_run = await self.get_audit_run(audit_run_id)
-        if not audit_run:
-            raise RuntimeError(f"audit run not found: {audit_run_id}")
-        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
-        if not workspace_path:
-            await self.mark_audit_run_status(audit_run_id, "failed")
-            await self.set_pipeline_state(audit_run_id, stage="failed", status="failed", error="audit run has no workspace path")
-            await self.record_audit_run_event(audit_run_id, "pipeline_failed", {"error": "audit run has no workspace path", "backend": "temporal"})
-            await self._cleanup_terminal_runtime(audit_run_id, terminal_status="failed", audit_run=audit_run)
-            raise RuntimeError("audit run has no workspace path")
-        await self.mark_audit_run_status(audit_run_id, "running")
-        initial_stage = "joern-cpg" if self._joern_enabled(audit_run) else "agent-audit"
-        await self.record_audit_run_event(audit_run_id, "pipeline_started", {"stage": initial_stage, "backend": "temporal"})
-        return {"audit_run_id": audit_run_id, "status": "running", "initial_stage": initial_stage, "stages": TEMPORAL_PIPELINE_STAGES}
-
-    async def execute_temporal_stage(self, audit_run_id: str, stage: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
-        audit_run = await self._audit_run_for_temporal_stage(audit_run_id, steps)
-        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
-        if not workspace_path:
-            raise RuntimeError("audit run has no workspace path")
-        agent_external_network = self._agent_external_network(audit_run)
-        await self.raise_if_cancelled(audit_run_id)
-
-        if stage == "joern-cpg":
-            if not self._joern_enabled(audit_run):
-                return {"step": stage, "result": self._skipped_result("joern disabled"), "append_to_steps": False}
-            await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-            try:
-                if self.run_joern is None:
-                    result = {"ok": False, "available": False, "error": "Joern callback is not configured"}
-                else:
-                    result = await self.run_joern(audit_run_id, audit_run["project_id"], workspace_path, self.runtime, audit_run)
-            except Exception as exc:
-                result = {"ok": False, "available": False, "error": str(exc)}
-                await self.record_pipeline_event(audit_run_id, "joern_failed", result)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-            )
-            if self._joern_required(audit_run) and not result.get("ok"):
-                raise RuntimeError(str(result.get("error") or result.get("reason") or "Joern CPG build failed"))
-            await self.raise_if_cancelled(audit_run_id)
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "agent-audit":
-            if self._agent_audit_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-                agent_input_payload = audit_run.get("config", {}).get("input_payload") or {
-                    "goal": (
-                        "Run a structured security audit pass. Return JSON with summary, findings, and evidence. "
-                        "Every finding must include title, severity, file_path, line_start, description, confidence, and source."
-                    )
-                }
-                if isinstance(agent_input_payload, dict):
-                    joern_context = self._agent_joern_context(audit_run)
-                    if joern_context["enabled"]:
-                        agent_input_payload = {**agent_input_payload, "joern": joern_context}
-                result = await self.runtime.start_agent_run(
-                    audit_run_id=audit_run_id,
-                    project_id=audit_run["project_id"],
-                    agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
-                    workspace_host_path=workspace_path,
-                    allow_external_network=agent_external_network,
-                    retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                    input_payload=agent_input_payload,
-                )
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                )
-                if self._agent_run_failed(result):
-                    raise RuntimeError(self._agent_run_error(result) or "agent-audit failed")
-                await self.raise_if_cancelled(audit_run_id)
-                return {"step": stage, "result": result, "append_to_steps": True}
-            result = self._skipped_result("orchestrator agent disabled")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "code-analysis":
-            if self._code_batch_analysis_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-                try:
-                    if self.run_code_batch_analysis is None:
-                        result = {"ok": False, "available": False, "error": "code batch analysis callback is not configured"}
-                    else:
-                        result = await self.run_code_batch_analysis(audit_run_id, audit_run["project_id"], workspace_path, self.runtime, audit_run)
-                except Exception as exc:
-                    result = {"ok": False, "error": str(exc)}
-                    await self.record_pipeline_event(audit_run_id, "code_analysis_failed", result)
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                )
-                await self.raise_if_cancelled(audit_run_id)
-                return {"step": stage, "result": result, "append_to_steps": True}
-            result = self._skipped_result("code-auditor agent disabled")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "sca":
-            await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-            try:
-                result = await self.run_sca(audit_run_id, audit_run["project_id"], workspace_path, self.runtime, audit_run)
-            except Exception as exc:
-                result = {"ok": False, "error": str(exc)}
-                await self.record_pipeline_event(audit_run_id, "sca_failed", result)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "semgrep":
-            await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-            try:
-                result = await self.run_semgrep(audit_run_id, audit_run["project_id"], workspace_path, self.runtime, audit_run)
-            except Exception as exc:
-                result = {"ok": False, "error": str(exc)}
-                await self.record_pipeline_event(audit_run_id, "semgrep_failed", result)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "source-sink-analysis":
-            findings = await self.list_findings(audit_run_id)
-            if self._source_sink_analysis_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_started",
-                    {"step": stage, "finding_count": len(findings), "backend": "temporal"},
-                )
-                if self.run_source_sink_finding is not None and self.complete_source_sink_analysis is not None:
-                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-                    max_findings = max(1, int(config.get("max_source_sink_findings") or 50))
-                    selected = findings[:max_findings]
-                    if not selected:
-                        result = {"ok": True, "available": True, "scheduled": 0, "completed": 0, "failed": 0, "skipped": True}
-                        await self.record_pipeline_event(audit_run_id, "source_sink_analysis_skipped", result)
-                        await self.record_audit_run_event(
-                            audit_run_id,
-                            "pipeline_step_completed",
-                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                        )
-                        return {"step": stage, "result": result, "append_to_steps": True}
-                    attempts = [
-                        {
-                            "audit_run_id": audit_run_id,
-                            "project_id": audit_run["project_id"],
-                            "workspace_host_path": workspace_path,
-                            "audit_run": audit_run,
-                            "finding": finding,
-                            "activity_key": self._activity_key(audit_run_id, "source-sink", finding),
-                        }
-                        for finding in selected
-                    ]
-                    return {
-                        "step": stage,
-                        "append_to_steps": False,
-                        "temporal_fanout": {
-                            "kind": "source-sink-findings",
-                            "stage": stage,
-                            "max_parallel": max(1, int(config.get("max_parallel_source_sink_finders") or config.get("max_parallel_code_auditors") or 2)),
-                            "attempts": attempts,
-                        },
-                    }
-                try:
-                    if self.run_source_sink_analysis is None:
-                        result = {"ok": False, "available": False, "error": "source-to-sink callback is not configured"}
-                    else:
-                        result = await self.run_source_sink_analysis(audit_run_id, audit_run["project_id"], workspace_path, self.runtime, audit_run, findings)
-                except Exception as exc:
-                    result = {"ok": False, "error": str(exc)}
-                    await self.record_pipeline_event(audit_run_id, "source_sink_analysis_failed", result)
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                )
-                await self.raise_if_cancelled(audit_run_id)
-                return {"step": stage, "result": result, "append_to_steps": True}
-            result = self._skipped_result("source-sink-finder agent disabled")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "validators":
-            findings = await self.list_findings(audit_run_id)
-            if self._validators_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_started",
-                    {"step": stage, "finding_count": len(findings), "validator_rounds": audit_run["validator_rounds"], "backend": "temporal"},
-                )
-                await self._prepare_temporal_validator_attempts(
-                    audit_run_id=audit_run_id,
-                    project_id=audit_run["project_id"],
-                    findings=findings,
-                    validator_rounds=audit_run["validator_rounds"],
-                    max_parallel_validators=audit_run["max_parallel_validators"],
-                    validator_agent_name=self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
-                    allow_external_network=agent_external_network,
-                    retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-                )
-                attempts = []
-                for finding in findings:
-                    for round_index in range(1, int(audit_run["validator_rounds"]) + 1):
-                        attempts.append(
-                            {
-                                "audit_run_id": audit_run_id,
-                                "project_id": audit_run["project_id"],
-                                "finding": finding,
-                                "workspace_host_path": workspace_path,
-                                "round_index": round_index,
-                                "validator_rounds": audit_run["validator_rounds"],
-                                "validator_agent_name": self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
-                                "allow_external_network": agent_external_network,
-                                "retain_runtime_on_failure": audit_run["retain_runtime_on_failure"],
-                                "activity_key": self._activity_key(audit_run_id, "validator", finding, round_index),
-                            }
-                        )
-                if not attempts:
-                    result = {
-                        "audit_run_id": audit_run_id,
-                        "project_id": audit_run["project_id"],
-                        "status": "accepted",
-                        "scheduled": 0,
-                        "validator_rounds": audit_run["validator_rounds"],
-                        "max_parallel_validators": audit_run["max_parallel_validators"],
-                        "validator_agent_name": self._config_str(audit_run, "validator_agent_name", "opencode-validator"),
-                        "results": [],
-                        "status_counts": {},
-                        "note": "No findings were provided.",
-                    }
-                    await self.record_audit_run_event(
-                        audit_run_id,
-                        "pipeline_step_completed",
-                        {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                    )
-                    return {"step": stage, "result": result, "append_to_steps": True}
-                return {
-                    "step": stage,
-                    "append_to_steps": False,
-                    "temporal_fanout": {
-                        "kind": "validator-attempts",
-                        "max_parallel": int(audit_run["max_parallel_validators"]),
-                        "attempts": attempts,
-                    },
-                }
-            result = self._skipped_result("validator agent disabled")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "judgement":
-            if self._judgement_enabled(audit_run):
-                findings = await self.list_findings(audit_run_id)
-                await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal", "finding_count": len(findings)})
-                if self.run_judger_finding is not None and self.complete_judgement is not None:
-                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-                    if not findings:
-                        result = await self.complete_judgement(audit_run_id, [])
-                        await self.record_audit_run_event(
-                            audit_run_id,
-                            "pipeline_step_completed",
-                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                        )
-                        return {"step": stage, "result": result, "judge_result": result, "append_to_steps": True}
-                    attempts = [
-                        {
-                            "audit_run_id": audit_run_id,
-                            "project_id": audit_run["project_id"],
-                            "workspace_host_path": workspace_path,
-                            "audit_run": audit_run,
-                            "finding": finding,
-                            "activity_key": self._activity_key(audit_run_id, "judger", finding),
-                        }
-                        for finding in findings
-                    ]
-                    return {
-                        "step": stage,
-                        "append_to_steps": False,
-                        "temporal_fanout": {
-                            "kind": "judger-findings",
-                            "stage": stage,
-                            "max_parallel": max(1, int(config.get("max_parallel_judgers") or 2)),
-                            "attempts": attempts,
-                        },
-                    }
-                result = await self.judge_audit_run(audit_run_id, self.runtime)
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                )
-                await self.raise_if_cancelled(audit_run_id)
-                return {"step": stage, "result": result, "judge_result": result, "append_to_steps": False}
-            result = self._skipped_result("judger agent disabled")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
-            return {"step": stage, "result": result, "judge_result": result, "append_to_steps": True}
-
-        if stage == "poc-writing":
-            if self._poc_writing_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-                if self.run_poc_writer_finding is not None and self.complete_poc_writing is not None:
-                    findings = await self.list_findings(audit_run_id)
-                    selected = [finding for finding in findings if str(finding.get("status") or "").lower() == "confirmed"]
-                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-                    selected = selected[: max(1, int(config.get("max_poc_findings") or 25))]
-                    if not selected:
-                        result = {"ok": True, "scheduled": 0, "completed": 0, "failed": 0, "skipped": True, "reason": "no confirmed findings"}
-                        await self.record_pipeline_event(audit_run_id, "poc_writing_skipped", result)
-                        await self.record_audit_run_event(
-                            audit_run_id,
-                            "pipeline_step_completed",
-                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                        )
-                        return {"step": stage, "result": result, "append_to_steps": True}
-                    return {
-                        "step": stage,
-                        "append_to_steps": False,
-                        "temporal_fanout": {
-                            "kind": "poc-writer-findings",
-                            "stage": stage,
-                            "max_parallel": max(1, int(config.get("max_parallel_poc_writers") or 2)),
-                            "attempts": [
-                                {
-                                    "audit_run_id": audit_run_id,
-                                    "project_id": audit_run["project_id"],
-                                    "workspace_host_path": workspace_path,
-                                    "audit_run": audit_run,
-                                    "finding": finding,
-                                    "activity_key": self._activity_key(audit_run_id, "poc-writer", finding),
-                                }
-                                for finding in selected
-                            ],
-                        },
-                    }
-                try:
-                    result = await self.generate_pocs(audit_run_id, self.runtime)
-                except Exception as exc:
-                    result = {"ok": False, "error": str(exc)}
-                    await self.record_pipeline_event(audit_run_id, "poc_writing_failed", result)
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                )
-                await self.raise_if_cancelled(audit_run_id)
-                return {"step": stage, "result": result, "append_to_steps": True}
-            result = self._skipped_result("poc-writer agent disabled")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "poc-verification":
-            if self._poc_verification_enabled(audit_run):
-                await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-                await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-                if self.run_poc_verifier_finding is not None and self.complete_poc_verification is not None and self.list_evidence is not None:
-                    findings = await self.list_findings(audit_run_id)
-                    evidence = await self.list_evidence(audit_run_id)
-                    findings_by_id = {str(item.get("finding_id")): item for item in findings}
-                    grouped: dict[str, list[dict[str, Any]]] = {}
-                    for item in evidence:
-                        if str(item.get("kind") or "") in {"poc-artifact", "poc-plan"}:
-                            grouped.setdefault(str(item.get("finding_id") or ""), []).append(item)
-                    if not grouped:
-                        result = {
-                            "ok": True,
-                            "scheduled": 0,
-                            "completed": 0,
-                            "failed": 0,
-                            "skipped": True,
-                            "reason": "no PoC artifacts or workspace unavailable",
-                        }
-                        await self.record_pipeline_event(audit_run_id, "poc_verification_skipped", result)
-                        await self.record_audit_run_event(
-                            audit_run_id,
-                            "pipeline_step_completed",
-                            {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                        )
-                        return {"step": stage, "result": result, "append_to_steps": True}
-                    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-                    attempts = []
-                    for finding_id, items in grouped.items():
-                        finding = findings_by_id.get(finding_id)
-                        if finding is None:
-                            attempts.append(
-                                {
-                                    "audit_run_id": audit_run_id,
-                                    "finding_id": finding_id,
-                                    "poc_evidence": items,
-                                    "missing_finding": True,
-                                    "activity_key": self._activity_key_from_id(audit_run_id, "poc-verifier", finding_id),
-                                }
-                            )
-                            continue
-                        attempts.append(
-                            {
-                                "audit_run_id": audit_run_id,
-                                "project_id": audit_run["project_id"],
-                                "workspace_host_path": workspace_path,
-                                "audit_run": audit_run,
-                                "finding": finding,
-                                "poc_evidence": items,
-                                "activity_key": self._activity_key(audit_run_id, "poc-verifier", finding),
-                            }
-                        )
-                    return {
-                        "step": stage,
-                        "append_to_steps": False,
-                        "temporal_fanout": {
-                            "kind": "poc-verifier-findings",
-                            "stage": stage,
-                            "max_parallel": max(1, int(config.get("max_parallel_poc_verifiers") or 2)),
-                            "attempts": attempts,
-                        },
-                    }
-                try:
-                    result = await self.verify_pocs(audit_run_id, self.runtime)
-                except Exception as exc:
-                    result = {"ok": False, "error": str(exc)}
-                    await self.record_pipeline_event(audit_run_id, "poc_verification_failed", result)
-                await self.record_audit_run_event(
-                    audit_run_id,
-                    "pipeline_step_completed",
-                    {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-                )
-                await self.raise_if_cancelled(audit_run_id)
-                return {"step": stage, "result": result, "append_to_steps": True}
-            result = self._skipped_result("poc-verifier agent disabled")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": stage, "reason": result["reason"], "backend": "temporal"})
-            return {"step": stage, "result": result, "append_to_steps": True}
-
-        if stage == "report":
-            await self.set_pipeline_state(audit_run_id, stage=stage, status="running")
-            await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": stage, "backend": "temporal"})
-            result = await self.generate_report(audit_run_id, self.settings)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(result)},
-            )
-            return {"step": stage, "result": result, "report_result": result, "append_to_steps": False}
-
-        raise RuntimeError(f"unknown temporal pipeline stage: {stage}")
-
-    async def execute_temporal_validator_attempt(self, payload: dict[str, Any]) -> dict[str, Any]:
-        audit_run_id = str(payload["audit_run_id"])
-        await self.raise_if_cancelled(audit_run_id)
-        cached = await self._reuse_completed_agent_activity(audit_run_id, payload)
-        if cached is not None:
-            return cached
-        result = await self.runtime.run_validator_attempt(
-            audit_run_id=audit_run_id,
-            project_id=str(payload["project_id"]),
-            finding=dict(payload.get("finding") or {}),
-            workspace_host_path=payload.get("workspace_host_path"),
-            round_index=int(payload["round_index"]),
-            validator_rounds=int(payload["validator_rounds"]),
-            validator_agent_name=str(payload["validator_agent_name"]),
-            allow_external_network=bool(payload.get("allow_external_network")),
-            retain_runtime_on_failure=bool(payload.get("retain_runtime_on_failure")),
-            cancel_requested=lambda: self.is_cancel_requested(audit_run_id),
-            cancel_reason=lambda: self.cancel_reason(audit_run_id),
-        )
-        await self._mark_agent_activity_key(audit_run_id, payload, result)
-        await self.raise_if_cancelled(audit_run_id)
-        return result
-
-    async def complete_temporal_validator_stage(
-        self,
-        audit_run_id: str,
-        *,
-        project_id: str,
-        validator_rounds: int,
-        max_parallel_validators: int,
-        validator_agent_name: str,
-        results: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        status_counts: dict[str, int] = {}
-        for result in results:
-            status = str(result.get("status") or "unknown")
-            status_counts[status] = status_counts.get(status, 0) + 1
-        summary = {
-            "audit_run_id": audit_run_id,
-            "project_id": project_id,
-            "status": "accepted",
-            "scheduled": len(results),
-            "validator_rounds": validator_rounds,
-            "max_parallel_validators": max_parallel_validators,
-            "validator_agent_name": validator_agent_name,
-            "results": results,
-            "status_counts": status_counts,
-            "temporal_fanout": True,
-        }
-        await self.record_audit_run_event(
-            audit_run_id,
-            "pipeline_step_completed",
-            {"step": "validators", "backend": "temporal", "result": self.compact_event_payload(summary)},
-        )
-        await self.raise_if_cancelled(audit_run_id)
-        return {"step": "validators", "result": summary, "append_to_steps": True}
-
-    async def execute_temporal_swarm_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
-        audit_run_id = str(payload["audit_run_id"])
-        kind = str(payload.get("kind") or "")
-        await self.raise_if_cancelled(audit_run_id)
-        cached = await self._reuse_completed_agent_activity(audit_run_id, payload)
-        if cached is not None:
-            return cached
-        if kind == "source-sink-finding":
-            if self.run_source_sink_finding is None:
-                return {"status": "failed", "error": "source-to-sink finding callback is not configured"}
-            result = await self.run_source_sink_finding(
-                audit_run_id,
-                str(payload["project_id"]),
-                str(payload["workspace_host_path"]),
-                self.runtime,
-                dict(payload.get("audit_run") or {}),
-                dict(payload.get("finding") or {}),
-            )
-            await self._mark_agent_activity_key(audit_run_id, payload, result)
-            await self.raise_if_cancelled(audit_run_id)
-            return result
-        if kind == "judger-finding":
-            if self.run_judger_finding is None:
-                return {"status": "failed", "error": "judger finding callback is not configured"}
-            result = await self.run_judger_finding(
-                audit_run_id,
-                self.runtime,
-                dict(payload.get("audit_run") or {}),
-                dict(payload.get("finding") or {}),
-            )
-            await self._mark_agent_activity_key(audit_run_id, payload, result)
-            await self.raise_if_cancelled(audit_run_id)
-            return result
-        if kind == "poc-writer-finding":
-            if self.run_poc_writer_finding is None:
-                return {"status": "failed", "error": "poc writer finding callback is not configured"}
-            result = await self.run_poc_writer_finding(
-                audit_run_id,
-                self.runtime,
-                dict(payload.get("audit_run") or {}),
-                dict(payload.get("finding") or {}),
-            )
-            await self._mark_agent_activity_key(audit_run_id, payload, result)
-            await self.raise_if_cancelled(audit_run_id)
-            return result
-        if kind == "poc-verifier-finding":
-            if payload.get("missing_finding"):
-                return {"finding_id": str(payload.get("finding_id") or ""), "status": "skipped", "reason": "finding not found"}
-            if self.run_poc_verifier_finding is None:
-                return {"status": "failed", "error": "poc verifier finding callback is not configured"}
-            result = await self.run_poc_verifier_finding(
-                audit_run_id,
-                self.runtime,
-                dict(payload.get("audit_run") or {}),
-                dict(payload.get("finding") or {}),
-                list(payload.get("poc_evidence") or []),
-            )
-            await self._mark_agent_activity_key(audit_run_id, payload, result)
-            await self.raise_if_cancelled(audit_run_id)
-            return result
-        raise RuntimeError(f"unknown temporal swarm agent kind: {kind}")
-
-    async def complete_temporal_swarm_stage(self, payload: dict[str, Any]) -> dict[str, Any]:
-        audit_run_id = str(payload["audit_run_id"])
-        stage = str(payload.get("stage") or "")
-        results = list(payload.get("results") or [])
-        if stage == "source-sink-analysis":
-            if self.complete_source_sink_analysis is None:
-                status_counts = self._count_results_by_status(results)
-                failed = int(status_counts.get("failed") or 0)
-                summary = {
-                    "ok": failed == 0,
-                    "available": True,
-                    "scheduled": len(results),
-                    "completed": int(status_counts.get("completed") or 0),
-                    "failed": failed,
-                    "skipped": int(status_counts.get("skipped") or 0),
-                    "status_counts": status_counts,
-                    "chains_created": sum(int(item.get("chains_created") or 0) for item in results if isinstance(item, dict)),
-                    "results": results,
-                }
-            else:
-                summary = await self.complete_source_sink_analysis(audit_run_id, results)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-            return {"step": stage, "result": summary, "append_to_steps": True}
-        if stage == "judgement":
-            if self.complete_judgement is None:
-                return {"step": stage, "result": {"agent_runs": results, "decisions": []}, "judge_result": {"agent_runs": results, "decisions": []}, "append_to_steps": True}
-            summary = await self.complete_judgement(audit_run_id, results)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-            return {"step": stage, "result": summary, "judge_result": summary, "append_to_steps": True}
-        if stage == "poc-writing":
-            if self.complete_poc_writing is None:
-                status_counts = self._count_results_by_status(results)
-                failed = int(status_counts.get("failed") or 0)
-                summary = {"ok": failed == 0, "scheduled": len(results), "failed": failed, "status_counts": status_counts, "results": results}
-            else:
-                summary = await self.complete_poc_writing(audit_run_id, results)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-            return {"step": stage, "result": summary, "append_to_steps": True}
-        if stage == "poc-verification":
-            if self.complete_poc_verification is None:
-                status_counts = self._count_results_by_status(results)
-                failed = int(status_counts.get("failed") or 0)
-                summary = {"ok": failed == 0, "scheduled": len(results), "failed": failed, "status_counts": status_counts, "results": results}
-            else:
-                summary = await self.complete_poc_verification(audit_run_id, results)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_step_completed",
-                {"step": stage, "backend": "temporal", "result": self.compact_event_payload(summary)},
-            )
-            await self.raise_if_cancelled(audit_run_id)
-            return {"step": stage, "result": summary, "append_to_steps": True}
-        raise RuntimeError(f"unknown temporal swarm stage: {stage}")
-
-    async def _prepare_temporal_validator_attempts(
-        self,
-        *,
-        audit_run_id: str,
-        project_id: str,
-        findings: list[dict[str, Any]],
-        validator_rounds: int,
-        max_parallel_validators: int,
-        validator_agent_name: str,
-        allow_external_network: bool,
-        retain_runtime_on_failure: bool,
-    ) -> None:
-        record_audit_run = getattr(self.runtime, "_record_audit_run", None)
-        if record_audit_run is not None:
-            await record_audit_run(
-                audit_run_id=audit_run_id,
-                project_id=project_id,
-                validator_rounds=validator_rounds,
-                max_parallel_validators=max_parallel_validators,
-                allow_external_network=allow_external_network,
-                retain_runtime_on_failure=retain_runtime_on_failure,
-                config={"validator_agent_name": validator_agent_name, "finding_count": len(findings), "backend": "temporal"},
-            )
-        mark_findings_status = getattr(self.runtime, "_mark_findings_status", None)
-        if mark_findings_status is not None:
-            await mark_findings_status([str(finding.get("finding_id")) for finding in findings if finding.get("finding_id")], "validating")
-
-    @staticmethod
-    def _count_results_by_status(results: list[dict[str, Any]]) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for result in results:
-            status = str(result.get("status") or "unknown") if isinstance(result, dict) else "unknown"
-            counts[status] = counts.get(status, 0) + 1
-        return counts
-
-    @classmethod
-    def _activity_key(cls, audit_run_id: str, stage: str, finding: dict[str, Any], round_index: int | None = None) -> str:
-        finding_id = str(finding.get("finding_id") or finding.get("id") or "inline")
-        return cls._activity_key_from_id(audit_run_id, stage, finding_id, round_index)
-
-    @staticmethod
-    def _activity_key_from_id(audit_run_id: str, stage: str, finding_id: str, round_index: int | None = None) -> str:
-        parts = ["dieaudit", audit_run_id, stage, finding_id]
-        if round_index is not None:
-            parts.append(f"round-{round_index}")
-        raw = "-".join(parts)
-        return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw)[:255]
-
-    async def _reuse_completed_agent_activity(self, audit_run_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-        activity_key = str(payload.get("activity_key") or "")
-        if not activity_key:
-            return None
-        async with SessionLocal() as session:
-            rows = (
-                await session.execute(
-                    select(AgentRun)
-                    .where(AgentRun.audit_run_id == audit_run_id)
-                    .where(AgentRun.status == "completed")
-                    .order_by(AgentRun.updated_at.desc())
-                )
-            ).scalars()
-            for row in rows:
-                input_summary = row.input_summary or {}
-                if input_summary.get("activity_key") == activity_key:
-                    cached = dict(input_summary.get("activity_result") or {})
-                    if cached:
-                        cached.setdefault("agent_run_id", row.agent_run_id)
-                        cached.setdefault("status", "completed")
-                        cached["reused_activity_key"] = activity_key
-                        return cached
-        return None
-
-    async def _mark_agent_activity_key(self, audit_run_id: str, payload: dict[str, Any], result: dict[str, Any]) -> None:
-        activity_key = str(payload.get("activity_key") or "")
-        agent_run_id = str(result.get("agent_run_id") or result.get("run_id") or "")
-        if not activity_key or not agent_run_id:
-            return
-        async with SessionLocal() as session:
-            row = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id).where(AgentRun.audit_run_id == audit_run_id))
-            if row is None:
-                return
-            input_summary = dict(row.input_summary or {})
-            input_summary["activity_key"] = activity_key
-            input_summary["activity_kind"] = payload.get("kind") or "validator-attempt"
-            input_summary["activity_result"] = result
-            row.input_summary = input_summary
-            await session.commit()
-
-    async def finalize_temporal_pipeline(
-        self,
-        audit_run_id: str,
-        *,
-        steps: list[dict[str, Any]],
-        judge_result: dict[str, Any],
-        report_result: dict[str, Any],
-    ) -> dict[str, Any]:
-        audit_run = await self._audit_run_for_temporal_stage(audit_run_id, steps)
-        result_quality = self._result_quality(steps=steps, judge_result=judge_result, report_result=report_result)
-        final_status = "completed_with_warnings" if result_quality["warnings"] else "completed"
-        final_event = "pipeline_completed_with_warnings" if final_status == "completed_with_warnings" else "pipeline_completed"
-        summary = {"steps": steps, "judge": judge_result, "report": report_result, "result_quality": result_quality}
-        await self.record_pipeline_summary(audit_run_id, summary)
-        await self.mark_audit_run_status(audit_run_id, final_status)
-        await self.set_pipeline_state(audit_run_id, stage="completed", status=final_status)
-        await self.record_audit_run_event(
-            audit_run_id,
-            final_event,
-            {"report": self.compact_event_payload(report_result), "result_quality": self.compact_event_payload(result_quality), "backend": "temporal"},
-        )
-        await self._cleanup_terminal_runtime(audit_run_id, terminal_status=final_status, audit_run=audit_run)
-        return {"audit_run_id": audit_run_id, "status": final_status, "summary": summary}
-
-    async def fail_temporal_pipeline(
-        self,
-        audit_run_id: str,
-        *,
-        error: str,
-        steps: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        audit_run = await self.get_audit_run(audit_run_id)
-        if not audit_run:
-            return {"audit_run_id": audit_run_id, "status": "failed", "error": error}
-        if await self.is_cancel_requested(audit_run_id):
-            reason = await self.cancel_reason(audit_run_id)
-            await self.mark_audit_run_status(audit_run_id, "cancelled")
-            await self.set_pipeline_state(audit_run_id, stage="cancelled", status="cancelled", error=reason or error)
-            await self.record_audit_run_event(
-                audit_run_id,
-                "pipeline_cancelled",
-                {"reason": reason or error, "error": error, "steps": [self.compact_event_payload(step) for step in steps], "backend": "temporal"},
-            )
-            await self._cleanup_terminal_runtime(audit_run_id, terminal_status="cancelled", audit_run=audit_run)
-            return {"audit_run_id": audit_run_id, "status": "cancelled", "error": reason or error}
-        await self.record_pipeline_event(audit_run_id, "pipeline_failed", {"error": error, "steps": steps, "backend": "temporal"})
-        await self.set_pipeline_state(audit_run_id, stage="failed", status="failed", error=error)
-        await self.record_audit_run_event(
-            audit_run_id,
-            "pipeline_failed",
-            {"error": error, "steps": [self.compact_event_payload(step) for step in steps], "backend": "temporal"},
-        )
-        await self.mark_audit_run_status(audit_run_id, "failed")
-        await self._cleanup_terminal_runtime(audit_run_id, terminal_status="failed", audit_run=audit_run)
-        return {"audit_run_id": audit_run_id, "status": "failed", "error": error}
-
-    async def _audit_run_for_temporal_stage(self, audit_run_id: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
-        audit_run = await self.get_audit_run(audit_run_id)
-        if not audit_run:
-            raise RuntimeError(f"audit run not found: {audit_run_id}")
-        config = dict(audit_run.get("config") or {})
-        pipeline = dict(config.get("pipeline") or {})
-        pipeline["steps"] = steps
-        config["pipeline"] = pipeline
-        joern_steps = [item for item in steps if isinstance(item, dict) and item.get("step") == "joern-cpg"]
-        if joern_steps:
-            joern_result = joern_steps[-1].get("result")
-            if isinstance(joern_result, dict):
-                config["joern_context"] = joern_result
-        audit_run["config"] = config
-        return audit_run
-
     async def _cleanup_terminal_runtime(
         self,
         audit_run_id: str,
@@ -1280,6 +407,75 @@ class PipelineExecutor:
             {"terminal_status": terminal_status, "result": self.compact_event_payload(result)},
         )
 
+    async def _run_feedback_loop(
+        self,
+        *,
+        audit_run_id: str,
+        audit_run: dict[str, Any],
+        workspace_path: str,
+        validation_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        if not bool(config.get("enable_feedback_loop", True)):
+            return self._skipped_result("feedback loop disabled")
+        if self.run_code_batch_analysis is None or not self._code_batch_analysis_enabled(audit_run):
+            return self._skipped_result("code batch analysis unavailable")
+        max_rounds = max(0, int(config.get("max_feedback_rounds") or 2))
+        if max_rounds <= 0:
+            return self._skipped_result("max feedback rounds is zero")
+        status_counts = validation_result.get("status_counts") if isinstance(validation_result.get("status_counts"), dict) else {}
+        decisions = validation_result.get("decisions") if isinstance(validation_result.get("decisions"), list) else []
+        confirmed = int(status_counts.get("confirmed") or status_counts.get("pass") or status_counts.get("completed_confirmed") or 0)
+        needs_review = int(status_counts.get("needs_review") or 0)
+        false_positive = int(status_counts.get("false_positive") or status_counts.get("failed") or 0)
+        if not decisions and not status_counts:
+            return {"ok": True, "skipped": True, "reason": "no validation status available"}
+        if confirmed or needs_review:
+            return {"ok": True, "skipped": True, "reason": "confirmed or needs_review findings exist", "status_counts": status_counts}
+        if false_positive <= 0 and status_counts:
+            return {"ok": True, "skipped": True, "reason": "validation did not indicate all candidates are unreachable", "status_counts": status_counts}
+        results = []
+        feedback = {
+            "round_reason": "all candidates were rejected or unreachable",
+            "validation_status_counts": status_counts,
+            "validation_decisions": decisions[:50],
+            "guidance": [
+                "Avoid repeating candidates already marked false_positive or unreachable.",
+                "Search uncovered architecture modules, critical flows, codebase-memory graph paths, and dependency-enabled code paths.",
+                "Prefer new candidate_vulnerability Whiteboard cards with concrete files, lines, source, sink, and reachability questions.",
+            ],
+        }
+        for round_index in range(1, max_rounds + 1):
+            feedback_config = dict(config)
+            feedback_config["feedback_loop"] = {**feedback, "round_index": round_index, "max_rounds": max_rounds}
+            feedback_audit_run = {**audit_run, "config": feedback_config}
+            try:
+                result = await self.run_code_batch_analysis(
+                    audit_run_id,
+                    audit_run["project_id"],
+                    workspace_path,
+                    self.runtime,
+                    feedback_audit_run,
+                )
+            except Exception as exc:
+                result = {"ok": False, "round_index": round_index, "error": str(exc)}
+                await self.record_pipeline_event(audit_run_id, "feedback_loop_failed", result)
+                results.append(result)
+                break
+            result = {**result, "round_index": round_index}
+            results.append(result)
+            await self.record_pipeline_event(audit_run_id, "feedback_loop_round_completed", result)
+            created = int(result.get("findings_created") or result.get("cards_created") or result.get("candidates_created") or 0)
+            if created <= 0:
+                break
+        return {
+            "ok": all(bool(item.get("ok", True)) for item in results),
+            "rounds": len(results),
+            "max_rounds": max_rounds,
+            "results": results,
+            "feedback": feedback,
+        }
+
     @staticmethod
     def _result_quality(
         *,
@@ -1314,10 +510,6 @@ class PipelineExecutor:
                     )
                 if ingest and int(ingest.get("findings_created") or 0) == 0:
                     warnings.append({"kind": "agent_created_no_findings"})
-            elif step_name == "joern-cpg":
-                if result.get("ok") is False:
-                    metrics["tool_failures"] += 1
-                    warnings.append({"kind": "joern_cpg_failed", "result": result})
             elif step_name in {"sca", "semgrep"}:
                 tool_status = str(result.get("status") or "")
                 if result.get("ok") is False or result.get("available") is False or tool_status in {"syft_unavailable", "osv_unreachable", "unavailable", "failed"}:
@@ -1337,6 +529,9 @@ class PipelineExecutor:
                     warnings.append({"kind": "source_sink_analysis_failed", "result": result})
                 if result.get("skipped") and "disabled" not in str(result.get("reason") or ""):
                     warnings.append({"kind": "source_sink_analysis_skipped", "result": result})
+            elif step_name == "whiteboard-swarm":
+                if result.get("ok") is False:
+                    warnings.append({"kind": "whiteboard_swarm_failed", "result": result})
             elif step_name == "validators":
                 status_counts = result.get("status_counts") if isinstance(result.get("status_counts"), dict) else {}
                 failed = int(status_counts.get("failed") or 0)
@@ -1387,7 +582,22 @@ class PipelineExecutor:
     @staticmethod
     def _source_sink_analysis_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        return bool(config.get("enable_source_sink_analysis", True)) and PipelineExecutor._agent_enabled(config, "source-sink-finder")
+        return False
+
+    @staticmethod
+    def _legacy_source_sink_analysis_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_source_sink_analysis", False)) and PipelineExecutor._agent_enabled(config, "source-sink-finder")
+
+    @staticmethod
+    def _whiteboard_swarm_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_whiteboard", True)) and bool(config.get("enable_whiteboard_swarm", True))
+
+    @staticmethod
+    def _structure_discovery_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_structure_discovery", True))
 
     @staticmethod
     def _agent_audit_enabled(audit_run: dict[str, Any]) -> bool:
@@ -1397,12 +607,24 @@ class PipelineExecutor:
     @staticmethod
     def _validators_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        return bool(config.get("enable_validators", True)) and PipelineExecutor._agent_enabled(config, "validator")
+        return PipelineExecutor._validation_judgement_enabled(audit_run)
+
+    @staticmethod
+    def _validation_judgement_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_validation_judgement", True)) and (
+            PipelineExecutor._agent_enabled(config, "validation-judgement") or PipelineExecutor._agent_enabled(config, "validator")
+        )
 
     @staticmethod
     def _judgement_enabled(audit_run: dict[str, Any]) -> bool:
         config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        return bool(config.get("enable_judgement", True)) and PipelineExecutor._agent_enabled(config, "judger")
+        return False
+
+    @staticmethod
+    def _legacy_judgement_enabled(audit_run: dict[str, Any]) -> bool:
+        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+        return bool(config.get("enable_judgement", False)) and PipelineExecutor._agent_enabled(config, "judger")
 
     @staticmethod
     def _poc_writing_enabled(audit_run: dict[str, Any]) -> bool:
@@ -1450,34 +672,15 @@ class PipelineExecutor:
         return None
 
     @staticmethod
-    def _joern_enabled(audit_run: dict[str, Any]) -> bool:
-        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        return bool(config.get("enable_joern", True))
-
     @staticmethod
-    def _joern_required(audit_run: dict[str, Any]) -> bool:
-        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        return bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False))
-
-    @classmethod
-    def _agent_joern_context(cls, audit_run: dict[str, Any]) -> dict[str, Any]:
-        config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-        result = config.get("joern_context") if isinstance(config.get("joern_context"), dict) else {}
-        query_packs = config.get("joern_query_packs")
-        if query_packs is None:
-            query_packs = ["entrypoints", "authz", "injection", "file-io", "network", "secrets"]
-        elif isinstance(query_packs, str):
-            query_packs = [item.strip() for item in query_packs.split(",") if item.strip()]
-        elif not isinstance(query_packs, list):
-            query_packs = list(query_packs or [])
+    def _agent_codebase_memory_context() -> dict[str, Any]:
         return {
-            "enabled": cls._joern_enabled(audit_run),
-            "required": cls._joern_required(audit_run),
-            "mcp": "joern-mcp",
-            "cpg_path": result.get("cpg_path"),
-            "cpg_artifact_id": result.get("artifact_id") or result.get("cpg_artifact_id"),
-            "artifact_path": result.get("artifact_path"),
-            "status": result.get("status"),
-            "ok": result.get("ok"),
-            "recommended_query_packs": query_packs,
+            "mcp": "codebase-memory-mcp",
+            "repo_path": "/workspace",
+            "cache_dir": "/artifacts/codebase-memory",
+            "instruction": (
+                "Call index_repository for /workspace when graph context is needed or missing. "
+                "Use get_architecture before broad planning, then search_graph, trace_path, query_graph, "
+                "get_code_snippet, detect_changes, and search_code for focused security analysis."
+            ),
         }

@@ -47,12 +47,13 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
             "code-search-mcp",
             "semgrep-mcp",
             "sca-mcp",
-            "joern-mcp",
-            "kb-mcp",
-            "http-test-mcp",
-            "sandbox-mcp",
+            "codebase-memory-mcp",
+                "kb-mcp",
+                "http-test-mcp",
+                "sandbox-mcp",
+                "whiteboard-mcp",
+            ]
         ]
-    ]
 
     checks = {check["id"]: check for check in _template_readiness_checks(agent_templates, mcp_templates)}
 
@@ -60,7 +61,7 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
     assert checks["production_mcp_templates"]["status"] == "pass"
 
 
-def test_joern_is_production_required_when_required_binaries_available() -> None:
+def test_codebase_memory_is_production_required_without_tool_image_probe() -> None:
     checks = {
         check["id"]: check
         for check in _template_readiness_checks(
@@ -83,23 +84,22 @@ def test_joern_is_production_required_when_required_binaries_available() -> None
                 ]
             ],
             [
-                {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"] if name == "joern-mcp" else []}
+                {"name": name, "transport": "stdio", "command": "codebase-memory-mcp"} if name == "codebase-memory-mcp" else {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": []}
                 for name in [
                     "filesystem-mcp",
                     "code-search-mcp",
                     "semgrep-mcp",
                     "sca-mcp",
-                    "joern-mcp",
+                    "codebase-memory-mcp",
                     "kb-mcp",
                     "http-test-mcp",
                     "sandbox-mcp",
+                    "whiteboard-mcp",
                 ]
             ],
             {
                 "ok": True,
-                "templates": {
-                    "joern-mcp": {"available": True, "missing_binaries": []},
-                },
+                "templates": {},
             },
         )
     }
@@ -109,23 +109,20 @@ def test_joern_is_production_required_when_required_binaries_available() -> None
 
 def test_heavy_analyzer_templates_use_dedicated_images() -> None:
     codeql = yaml.safe_load((ROOT / "configs/mcp-templates/codeql-mcp.yaml").read_text(encoding="utf-8"))
-    joern = yaml.safe_load((ROOT / "configs/mcp-templates/joern-mcp.yaml").read_text(encoding="utf-8"))
 
     assert codeql["image"] == "dieaudit/tool-mcp-codeql:local"
-    assert joern["image"] == "dieaudit/tool-mcp-joern:local"
     assert codeql["required_binaries"] == ["codeql"]
-    assert joern["required_binaries"] == ["joern"]
 
 
-def test_joern_template_uses_executable_java_tmpdir() -> None:
-    joern = yaml.safe_load((ROOT / "configs/mcp-templates/joern-mcp.yaml").read_text(encoding="utf-8"))
+def test_codebase_memory_template_uses_stdio_transport() -> None:
+    template = yaml.safe_load((ROOT / "configs/mcp-templates/codebase-memory-mcp.yaml").read_text(encoding="utf-8"))
 
-    assert joern["env"]["JAVA_TOOL_OPTIONS"] == "-Djava.io.tmpdir=/joern-tmp"
-    assert "noexec" not in joern["resources"]["tmpfs"]["/joern-tmp"]
-    assert "exec" in joern["resources"]["tmpfs"]["/joern-tmp"]
+    assert template["transport"] == "stdio"
+    assert template["command"] == "codebase-memory-mcp"
+    assert template["env"]["CBM_CACHE_DIR"] == "/artifacts/codebase-memory"
 
 
-def test_default_opencode_audit_agents_are_authorized_for_joern() -> None:
+def test_default_opencode_audit_agents_are_authorized_for_codebase_memory() -> None:
     for name in [
         "opencode-orchestrator",
         "opencode-recon-auditor",
@@ -137,7 +134,7 @@ def test_default_opencode_audit_agents_are_authorized_for_joern() -> None:
     ]:
         template = yaml.safe_load((ROOT / f"configs/agent-templates/{name}.yaml").read_text(encoding="utf-8"))
 
-        assert "joern-mcp" in template["required_mcp"]
+        assert "codebase-memory-mcp" in template["required_mcp"]
 
 
 def test_core_tool_templates_declare_required_binaries() -> None:
@@ -167,7 +164,7 @@ def test_mock_orchestrator_is_demo_only() -> None:
     assert template["protocol"]["runtime"] == "mock"
 
 
-def test_joern_missing_binary_fails_production_readiness_but_codeql_does_not() -> None:
+def test_codebase_memory_has_no_image_binary_probe_requirement() -> None:
     checks = {
         check["id"]: check
         for check in _template_readiness_checks(
@@ -190,16 +187,17 @@ def test_joern_missing_binary_fails_production_readiness_but_codeql_does_not() -
                 ]
             ],
             [
-                {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": ["joern"] if name == "joern-mcp" else []}
+                {"name": name, "transport": "stdio", "command": "codebase-memory-mcp"} if name == "codebase-memory-mcp" else {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": []}
                 for name in [
                     "filesystem-mcp",
                     "code-search-mcp",
                     "semgrep-mcp",
                     "sca-mcp",
-                    "joern-mcp",
+                    "codebase-memory-mcp",
                     "kb-mcp",
                     "http-test-mcp",
                     "sandbox-mcp",
+                    "whiteboard-mcp",
                 ]
             ]
             + [
@@ -208,15 +206,14 @@ def test_joern_missing_binary_fails_production_readiness_but_codeql_does_not() -
             {
                 "ok": False,
                 "templates": {
-                    "joern-mcp": {"available": False, "missing_binaries": ["joern"]},
                     "codeql-mcp": {"available": False, "missing_binaries": ["codeql"]},
                 },
             },
         )
     }
 
-    assert checks["production_mcp_templates"]["status"] == "fail"
-    assert checks["production_mcp_templates"]["detail"]["missing_binaries"] == {"joern-mcp": ["joern"]}
+    assert checks["production_mcp_templates"]["status"] == "pass"
+    assert checks["production_mcp_templates"]["detail"]["missing_binaries"] == {}
     assert "heavy_analyzers" not in checks
 
 

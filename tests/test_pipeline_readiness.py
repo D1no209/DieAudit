@@ -47,14 +47,14 @@ def test_pipeline_readiness_fails_workflow_worker_without_heartbeat() -> None:
     assert check["detail"]["worker_health"]["ok"] is False
 
 
-def test_pipeline_readiness_passes_temporal_backend_with_worker_heartbeat() -> None:
+def test_pipeline_readiness_fails_temporal_backend() -> None:
     settings = SimpleNamespace(pipeline_execution_backend="temporal", pipeline_recovery_on_startup=True)
 
     check = _pipeline_backend_readiness_check(settings, worker_health={"ok": True, "active_count": 1})
 
-    assert check["status"] == "pass"
+    assert check["status"] == "fail"
     assert check["detail"]["backend"] == "temporal"
-    assert "temporal" in check["detail"]["production_backends"]
+    assert "temporal" not in check["detail"]["production_backends"]
 
 
 def test_pipeline_readiness_fails_unsupported_backend() -> None:

@@ -16,6 +16,11 @@ from app.domain.models import (
     ReportArtifact,
     CodeAnalysisTask,
     ValidationAttempt,
+    WhiteboardAttachment,
+    WhiteboardCard,
+    WhiteboardEdge,
+    WhiteboardNote,
+    WhiteboardTask,
 )
 from app.services.artifacts import (
     ArtifactAccessError,
@@ -259,6 +264,106 @@ def dependency_record_to_dict(row: DependencyRecord) -> dict[str, Any]:
         "manifest": row.manifest,
         "vulnerability_count": row.vulnerability_count,
         "vulnerabilities": row.vulnerabilities or [],
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def whiteboard_card_to_dict(row: WhiteboardCard, *, attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "card_id": row.card_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "title": row.title,
+        "card_type": row.card_type,
+        "status": row.status,
+        "author": row.author,
+        "agent_run_id": row.agent_run_id,
+        "event_time": row.event_time.isoformat() if row.event_time else None,
+        "content": row.content,
+        "confidence": row.confidence,
+        "finding_id": row.finding_id,
+        "file_path": row.file_path,
+        "line_start": row.line_start,
+        "line_end": row.line_end,
+        "expected_predecessors": row.expected_predecessors or [],
+        "possible_successors": row.possible_successors or [],
+        "requirements": row.requirements or [],
+        "attachments": attachments or [],
+        "metadata": row.metadata_json or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def whiteboard_edge_to_dict(row: WhiteboardEdge) -> dict[str, Any]:
+    return {
+        "edge_id": row.edge_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "source_card_id": row.source_card_id,
+        "target_card_id": row.target_card_id,
+        "edge_type": row.edge_type,
+        "author": row.author,
+        "agent_run_id": row.agent_run_id,
+        "rationale": row.rationale,
+        "metadata": row.metadata_json or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def whiteboard_note_to_dict(row: WhiteboardNote) -> dict[str, Any]:
+    return {
+        "note_id": row.note_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "card_id": row.card_id,
+        "author": row.author,
+        "agent_run_id": row.agent_run_id,
+        "content": row.content,
+        "metadata": row.metadata_json or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def whiteboard_attachment_to_dict(row: WhiteboardAttachment) -> dict[str, Any]:
+    return {
+        "attachment_id": row.attachment_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "card_id": row.card_id,
+        "path": row.path,
+        "label": row.label,
+        "content_type": row.content_type,
+        "metadata": row.metadata_json or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def whiteboard_task_to_dict(row: WhiteboardTask) -> dict[str, Any]:
+    return {
+        "task_id": row.task_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "gap_card_id": row.gap_card_id,
+        "card_id": row.card_id,
+        "agent_role": row.agent_role,
+        "agent_name": row.agent_name,
+        "status": row.status,
+        "round_index": row.round_index,
+        "attempt_index": row.attempt_index,
+        "agent_run_id": row.agent_run_id,
+        "parent_task_id": row.parent_task_id,
+        "root_task_id": row.root_task_id,
+        "wait_reason": row.wait_reason,
+        "wake_event_id": row.wake_event_id,
+        "task_group": row.task_group,
+        "requested_by_agent_run_id": row.requested_by_agent_run_id,
+        "prompt": row.prompt,
+        "result": row.result or {},
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }

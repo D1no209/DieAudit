@@ -74,14 +74,11 @@ def test_audit_run_swarm_defaults_cover_finding_pipeline_agents() -> None:
     assert audit_run.max_parallel_poc_verifiers == 2
 
 
-def test_joern_defaults_are_enabled_and_required_on_audit_runs() -> None:
+def test_audit_run_schema_keeps_graph_indexing_in_acp_agent_context() -> None:
     audit_run = CreateAuditRunRequest()
 
-    assert audit_run.enable_joern is True
-    assert audit_run.joern_required is True
-    assert audit_run.allow_joern_unavailable is False
-    assert audit_run.joern_timeout_seconds == 900
-    assert audit_run.joern_query_packs == ["entrypoints", "authz", "injection", "file-io", "network", "secrets"]
+    assert audit_run.enable_decompilation is True
+    assert audit_run.decompiled_source_dir == ".dieaudit/decompiled"
 
 
 def test_sandbox_execution_requests_require_explicit_commands() -> None:

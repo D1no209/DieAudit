@@ -160,6 +160,50 @@ body {
   gap: 16px;
 }
 
+.agent-graph {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.agent-graph-node {
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e6eaf0;
+  border-left: 4px solid #8aa4c8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.agent-graph-node-agent-run {
+  border-left-color: #1677ff;
+}
+
+.agent-graph-node-whiteboard-task,
+.agent-graph-node-whiteboard-card {
+  border-left-color: #7c3aed;
+}
+
+.agent-graph-node-container {
+  border-left-color: #08979c;
+}
+
+.agent-graph-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  color: #334155;
+  background: #eef2f7;
+  border-radius: 8px;
+}
+
 .panel-stack {
   display: flex;
   flex-direction: column;

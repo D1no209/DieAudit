@@ -6,7 +6,6 @@ API_KEY="${DIEAUDIT_API_KEY:-}"
 API_KEY_HEADER="${API_KEY_HEADER:-X-DieAudit-Api-Key}"
 START_COMPOSE="${START_COMPOSE:-false}"
 RUN_PIPELINE="${RUN_PIPELINE:-false}"
-USE_TEMPORAL="${USE_TEMPORAL:-false}"
 SKIP_CLEANUP="${SKIP_CLEANUP:-false}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-900}"
 
@@ -37,13 +36,7 @@ json() {
 }
 
 if [ "${START_COMPOSE}" = "true" ]; then
-  if [ "${USE_TEMPORAL}" = "true" ]; then
-    export PIPELINE_EXECUTION_BACKEND=temporal
-  fi
   docker compose --profile core up -d
-  if [ "${USE_TEMPORAL}" = "true" ]; then
-    docker compose --profile core up -d --force-recreate web-api workflow-worker
-  fi
 fi
 
 deadline=$((SECONDS + 180))
@@ -59,12 +52,8 @@ status="$(json GET /runtime/e2e/status)"
 model_configured="$(python -c 'import json,sys; print(str(bool(json.load(sys.stdin)["checks"]["model_configured"])).lower())' <<<"${status}")"
 pipeline_backend="$(python -c 'import json,sys; print(json.load(sys.stdin).get("pipeline_backend") or "")' <<<"${status}")"
 should_run_pipeline="${RUN_PIPELINE}"
-if [ "${model_configured}" = "true" ] || [ "${USE_TEMPORAL}" = "true" ]; then
+if [ "${model_configured}" = "true" ]; then
   should_run_pipeline="true"
-fi
-if [ "${USE_TEMPORAL}" = "true" ] && [ "${pipeline_backend}" != "temporal" ]; then
-  echo "USE_TEMPORAL was requested, but runtime pipeline_backend is '${pipeline_backend}'. Recreate web-api and workflow-worker with PIPELINE_EXECUTION_BACKEND=temporal." >&2
-  exit 1
 fi
 
 work_root="$(mktemp -d)"
@@ -114,14 +103,6 @@ if [ "${should_run_pipeline}" = "true" ]; then
     echo "pipeline did not complete successfully: ${run_status}" >&2
     exit 1
   fi
-  if [ "${USE_TEMPORAL}" = "true" ]; then
-    events="$(json GET "/audit-runs/${audit_run_id}/events")"
-    temporal_observed="$(python -c 'import json,sys; events=json.load(sys.stdin); print(str(any(str(e.get("event_type","")).startswith("temporal_") or (isinstance(e.get("payload"), dict) and e["payload"].get("backend") == "temporal") for e in events)).lower())' <<<"${events}")"
-    if [ "${temporal_observed}" != "true" ]; then
-      echo "USE_TEMPORAL was requested, but no Temporal backend audit event was observed for ${audit_run_id}" >&2
-      exit 1
-    fi
-  fi
 else
   finding_body='{"title":"E2E control-plane smoke finding","severity":"low","status":"needs_review","file_path":"app.py","line_start":7,"description":"Synthetic finding used only to validate persistence and report generation without a model key.","source":"e2e-smoke","raw":{"skipped_pipeline":true}}'
   json POST "/audit-runs/${audit_run_id}/findings" "${finding_body}" >/dev/null
@@ -156,7 +137,7 @@ printf '%s' "${containers}" >"${work_root}/containers.json"
 printf '%s' "${cleanup_json}" >"${work_root}/cleanup.json"
 printf '%s' "${final_pipeline}" >"${work_root}/pipeline.json"
 
-python - "${should_run_pipeline}" "${audit_run_id}" "${project_id}" "${model_configured}" "${work_root}" "${pipeline_backend}" "${USE_TEMPORAL}" <<'PY'
+python - "${should_run_pipeline}" "${audit_run_id}" "${project_id}" "${model_configured}" "${work_root}" "${pipeline_backend}" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -175,7 +156,6 @@ print(json.dumps({
     "ok": True,
     "mode": "pipeline" if sys.argv[1] == "true" else "control-plane",
     "pipeline_backend": sys.argv[6],
-    "temporal_required": sys.argv[7] == "true",
     "pipeline_status": pipeline["audit_run"]["status"],
     "audit_run_id": sys.argv[2],
     "project_id": sys.argv[3],

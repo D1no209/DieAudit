@@ -23,7 +23,7 @@ required_mcp:
   - filesystem-mcp
   - code-search-mcp
   - kb-mcp
-  - joern-mcp
+  - codebase-memory-mcp
 network_policy:
   allow_gateway: true
   allow_mcp: true

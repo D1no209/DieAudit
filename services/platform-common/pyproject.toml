@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dieaudit-common"
+version = "0.1.0"
+description = "Shared domain, persistence, schemas, and telemetry primitives for DieAudit services."
+requires-python = ">=3.12"
+dependencies = [
+  "SQLAlchemy==2.0.36",
+  "psycopg[binary]==3.2.3",
+  "pydantic-settings==2.7.1",
+  "nats-py==2.10.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dieaudit_common*"]

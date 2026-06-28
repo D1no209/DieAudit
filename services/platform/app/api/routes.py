@@ -42,6 +42,9 @@ from app.api.serializers import (
     project_to_dict as _project_to_dict,
     report_to_dict as _report_to_dict,
     snapshot_to_dict as _snapshot_to_dict,
+    whiteboard_card_to_dict as _whiteboard_card_to_dict,
+    whiteboard_edge_to_dict as _whiteboard_edge_to_dict,
+    whiteboard_task_to_dict as _whiteboard_task_to_dict,
 )
 from app.domain.models import (
     AgentRun,
@@ -62,6 +65,9 @@ from app.domain.models import (
     ProjectSnapshot,
     ReportArtifact,
     ValidationAttempt,
+    WhiteboardTask,
+    WhiteboardCard,
+    WhiteboardEdge,
     WorkerHeartbeat,
 )
 from app.integrations.docker import DockerApiError
@@ -74,15 +80,24 @@ from app.schemas import (
     CreateApiKeyRequest,
     CreateFindingRequest,
     CreateProjectRequest,
-    JoernBuildCpgRequest,
-    JoernQueryRequest,
+    CreateWhiteboardCardRequest,
+    CreateWhiteboardEdgeRequest,
+    CreateWhiteboardNoteRequest,
+    CreateWhiteboardScheduleRequest,
+    CreateWhiteboardSubscriptionRequest,
+    DecideWhiteboardScheduleRequest,
     KnowledgeSearchRequest,
     RunPocRequest,
+    RunWhiteboardTasksRequest,
+    SearchWhiteboardCardsRequest,
     StartSandboxComposeRequest,
     StartAgentRunRequest,
     StartSandboxServiceRequest,
     StorageCleanupRequest,
+    SubmitWhiteboardEvidenceRequest,
     TemplateBody,
+    UpdateWhiteboardCardRequest,
+    UpdateWhiteboardNotificationRequest,
     ValidatorScaleRequest,
 )
 from app.services.artifacts import (
@@ -104,14 +119,15 @@ from app.services.auth import (
     normalize_scopes,
 )
 from app.services.code_analysis import CodeAuditPlanner
+from app.services.decompiler import DecompilerService
 from app.services.dependency_scanner import DependencyScanner
 from app.services.finding_dedupe import find_existing_finding, finding_identity
 from app.services.knowledge import KnowledgeIndexError, KnowledgeService
 from app.services.pipeline_executor import PipelineCancelled, PipelineExecutor
 from app.services.pipeline_recovery import is_active_pipeline
 from app.services.storage_cleanup import StorageCleanupService
-from app.services.temporal_pipeline import TemporalPipelineConfig, start_temporal_pipeline
 from app.services.templates import TemplateStore
+from app.services.whiteboard import WhiteboardService
 from app.services.worker_heartbeat import list_worker_heartbeats, workflow_worker_health
 from app.services.workspace import WorkspaceImportError, WorkspaceService
 from app.settings import Settings, get_settings
@@ -155,11 +171,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             is_cancel_requested=_is_cancel_requested,
             cancel_reason=_cancel_reason,
             list_findings=_list_findings,
-            run_joern=_run_joern_mcp,
+            run_structure_discovery=_run_structure_discovery,
             run_code_batch_analysis=_run_code_batch_analysis,
             run_source_sink_analysis=_run_source_sink_analysis,
             run_source_sink_finding=_run_source_sink_finding_internal,
             complete_source_sink_analysis=_complete_source_sink_analysis_internal,
+            run_whiteboard_swarm=_run_whiteboard_swarm,
             run_judger_finding=_run_judger_finding_internal,
             complete_judgement=_complete_judgement_internal,
             run_poc_writer_finding=_run_poc_writer_finding_internal,
@@ -634,6 +651,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "input_payload": input_payload,
                     "workspace_host_path": snapshot.workspace_path,
                     "enable_code_batch_analysis": body.enable_code_batch_analysis,
+                    "enable_batch_internal_semgrep": body.enable_batch_internal_semgrep,
+                    "enable_batch_internal_sca": body.enable_batch_internal_sca,
                     "max_code_audit_tasks": body.max_code_audit_tasks,
                     "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
                     "max_parallel_code_auditors": body.max_parallel_code_auditors,
@@ -644,6 +663,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "max_source_sink_findings": body.max_source_sink_findings,
                     "enable_validators": body.enable_validators,
                     "validator_agent_name": body.validator_agent_name,
+                    "enable_validation_judgement": body.enable_validation_judgement,
+                    "validation_judgement_agent_name": body.validation_judgement_agent_name,
                     "enable_judgement": body.enable_judgement,
                     "judger_agent_name": body.judger_agent_name,
                     "max_parallel_judgers": body.max_parallel_judgers,
@@ -654,15 +675,22 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "enable_poc_verification": body.enable_poc_verification,
                     "poc_verifier_agent_name": body.poc_verifier_agent_name,
                     "max_parallel_poc_verifiers": body.max_parallel_poc_verifiers,
-                    "enable_joern": body.enable_joern,
-                    "joern_required": body.joern_required,
-                    "allow_joern_unavailable": body.allow_joern_unavailable,
-                    "joern_timeout_seconds": body.joern_timeout_seconds,
-                    "joern_query_packs": body.joern_query_packs,
+                    "enable_decompilation": body.enable_decompilation,
+                    "decompiled_source_dir": body.decompiled_source_dir,
+                    "decompile_max_artifact_size_mb": body.decompile_max_artifact_size_mb,
+                    "decompile_timeout_seconds": body.decompile_timeout_seconds,
+                    "decompile_max_artifacts": body.decompile_max_artifacts,
+                    "enable_feedback_loop": body.enable_feedback_loop,
+                    "max_feedback_rounds": body.max_feedback_rounds,
+                    "enable_whiteboard": True,
+                    "enable_whiteboard_swarm": True,
+                    "max_whiteboard_rounds": 3,
+                    "max_whiteboard_tasks_per_round": 8,
                 },
             )
             session.add(audit_run)
             await session.commit()
+            await WhiteboardService(settings, session).write_snapshot(audit_run_id)
         agent_result = None
         if body.start_agent:
             start_body = StartAgentRunRequest(
@@ -699,6 +727,236 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 )
             ).scalars()
             return [_finding_to_dict(row) for row in rows]
+
+    @router.get("/audit-runs/{audit_run_id}/whiteboard")
+    async def get_whiteboard(request: Request, audit_run_id: str) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.graph(audit_run_id)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/search")
+    async def search_whiteboard_cards(request: Request, audit_run_id: str, body: SearchWhiteboardCardsRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.search_cards(audit_run_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/audit-runs/{audit_run_id}/whiteboard/events")
+    async def list_whiteboard_events(
+        request: Request,
+        audit_run_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        after_event_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.list_events(audit_run_id, limit=limit, after_event_id=after_event_id)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/subscriptions")
+    async def create_whiteboard_subscription(request: Request, audit_run_id: str, body: CreateWhiteboardSubscriptionRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.subscribe(audit_run_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/audit-runs/{audit_run_id}/whiteboard/notifications")
+    async def list_whiteboard_notifications(
+        request: Request,
+        audit_run_id: str,
+        status: str | None = None,
+        subscriber_agent_run_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.list_notifications(
+                    audit_run_id,
+                    status=status,
+                    subscriber_agent_run_id=subscriber_agent_run_id,
+                )
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/notifications/{notification_id}")
+    async def update_whiteboard_notification(
+        request: Request,
+        audit_run_id: str,
+        notification_id: str,
+        body: UpdateWhiteboardNotificationRequest,
+    ) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.update_notification(
+                    audit_run_id,
+                    notification_id,
+                    body.status,
+                    claimed_by_agent_run_id=body.claimed_by_agent_run_id,
+                    lease_seconds=body.lease_seconds,
+                )
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/schedule-requests")
+    async def create_whiteboard_schedule_request(request: Request, audit_run_id: str, body: CreateWhiteboardScheduleRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.create_schedule_request(audit_run_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/schedule-requests/{request_id}/decide")
+    async def decide_whiteboard_schedule_request(
+        request: Request,
+        audit_run_id: str,
+        request_id: str,
+        body: DecideWhiteboardScheduleRequest,
+    ) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                result = await service.decide_schedule_request(audit_run_id, request_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if result.get("status") in {"approved", "scheduled"}:
+            audit_run = await _get_audit_run(audit_run_id)
+            runtime = runtime_provider()
+            if audit_run and runtime is not None:
+                config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+                workspace_path = config.get("workspace_host_path")
+                agent_name = str(body.agent_name or result.get("suggested_agent_name") or "opencode-source-sink-finder")
+                agent_result = await runtime.start_agent_run(
+                    audit_run_id=audit_run_id,
+                    project_id=audit_run["project_id"],
+                    agent_name=agent_name,
+                    workspace_host_path=workspace_path,
+                    allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+                    retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+                    input_payload={
+                        "goal": result.get("goal"),
+                        "long_running": True,
+                        "agent_lifecycle": "long-running",
+                        "audit_phase": "whiteboard-requested-agent",
+                        "whiteboard": {
+                            "schedule_request_id": result.get("request_id"),
+                            "task_id": result.get("task_id"),
+                            "related_card_ids": result.get("related_card_ids") or [],
+                            "instruction": "Read the Whiteboard, subscribe to relevant changes, and keep working until the requested goal is resolved or blocked.",
+                        },
+                    },
+                )
+                result = {**result, "agent_run": _compact_event_payload(agent_result)}
+        return result
+
+    @router.get("/audit-runs/{audit_run_id}/whiteboard/agent-graph")
+    async def get_whiteboard_agent_graph(request: Request, audit_run_id: str) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.agent_graph(audit_run_id)
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/cards")
+    async def create_whiteboard_card(request: Request, audit_run_id: str, body: CreateWhiteboardCardRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.create_card(audit_run_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.patch("/audit-runs/{audit_run_id}/whiteboard/cards/{card_id}")
+    async def update_whiteboard_card(request: Request, audit_run_id: str, card_id: str, body: UpdateWhiteboardCardRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.update_card(audit_run_id, card_id, body.model_dump(exclude_unset=True))
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/edges")
+    async def create_whiteboard_edge(request: Request, audit_run_id: str, body: CreateWhiteboardEdgeRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.create_edge(audit_run_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/notes")
+    async def add_whiteboard_note(request: Request, audit_run_id: str, body: CreateWhiteboardNoteRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.add_note(audit_run_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/tasks/run")
+    async def run_whiteboard_tasks(request: Request, audit_run_id: str, body: RunWhiteboardTasksRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        try:
+            return await _run_whiteboard_swarm(
+                audit_run_id,
+                runtime_provider(),
+                override_rounds=body.rounds,
+                override_max_tasks_per_round=body.max_tasks_per_round,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/audit-runs/{audit_run_id}/whiteboard/evidence")
+    async def submit_whiteboard_evidence(request: Request, audit_run_id: str, body: SubmitWhiteboardEvidenceRequest) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            service = WhiteboardService(settings, session)
+            try:
+                return await service.submit_chain_evidence(audit_run_id, body.model_dump())
+            except LookupError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/audit-runs/{audit_run_id}/findings")
     async def create_finding(request: Request, audit_run_id: str, body: CreateFindingRequest) -> dict[str, Any]:
@@ -764,121 +1022,6 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             },
         )
         return result
-
-    @router.post("/audit-runs/{audit_run_id}/joern/build-cpg")
-    async def build_joern_cpg(request: Request, audit_run_id: str, body: JoernBuildCpgRequest) -> dict[str, Any]:
-        runtime = runtime_provider()
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
-            raise HTTPException(status_code=404, detail="audit run not found")
-        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
-        if runtime is None:
-            return await proxy_gateway(f"/audit-runs/{audit_run_id}/joern/build-cpg", method="POST", json=body.model_dump())
-        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
-        if not workspace_path:
-            raise HTTPException(status_code=400, detail="audit run has no workspace path")
-        config = dict(audit_run.get("config") or {})
-        result = await _run_joern_mcp(
-            audit_run_id,
-            audit_run["project_id"],
-            workspace_path,
-            runtime,
-            {
-                **audit_run,
-                "config": {
-                    **config,
-                    "joern_timeout_seconds": body.timeout_seconds,
-                    "allow_joern_unavailable": body.allow_unavailable,
-                    **({"joern_language": body.language} if body.language else {}),
-                    **({"joern_workspace_path": body.workspace_path} if body.workspace_path else {}),
-                },
-            },
-        )
-        if not result.get("ok") and not body.allow_unavailable:
-            raise HTTPException(status_code=502, detail=result)
-        return result
-
-    @router.get("/audit-runs/{audit_run_id}/joern/cpgs")
-    async def list_joern_cpgs(request: Request, audit_run_id: str) -> dict[str, Any]:
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
-            raise HTTPException(status_code=404, detail="audit run not found")
-        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
-        events = await _list_audit_run_events(audit_run_id)
-        cpgs = []
-        for event in events:
-            if event.get("event_type") != "joern_cpg_completed":
-                continue
-            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-            cpg_path = payload.get("cpg_path")
-            if cpg_path:
-                cpgs.append(
-                    {
-                        "cpg_path": cpg_path,
-                        "cpg_artifact_id": payload.get("cpg_artifact_id"),
-                        "artifact_path": payload.get("artifact_path"),
-                        "artifact": payload.get("artifact"),
-                        "query_packs": payload.get("query_packs") or [],
-                        "created_at": event.get("created_at"),
-                    }
-                )
-        return {"audit_run_id": audit_run_id, "cpgs": cpgs, "count": len(cpgs)}
-
-    @router.post("/audit-runs/{audit_run_id}/joern/query")
-    async def query_joern(request: Request, audit_run_id: str, body: JoernQueryRequest) -> dict[str, Any]:
-        runtime = runtime_provider()
-        audit_run = await _get_audit_run(audit_run_id)
-        if not audit_run:
-            raise HTTPException(status_code=404, detail="audit run not found")
-        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
-        if runtime is None:
-            return await proxy_gateway(f"/audit-runs/{audit_run_id}/joern/query", method="POST", json=body.model_dump())
-        workspace_path = audit_run.get("config", {}).get("workspace_host_path")
-        if not workspace_path:
-            raise HTTPException(status_code=400, detail="audit run has no workspace path")
-        if not body.script and not body.query_pack:
-            raise HTTPException(status_code=400, detail="script or query_pack is required")
-        tool_path = "/tools/joern_common_queries" if body.query_pack else "/tools/joern_run_script"
-        payload = {
-            "cpg_path": body.cpg_path,
-            "timeout_seconds": body.timeout_seconds,
-            **({"query_pack": body.query_pack} if body.query_pack else {}),
-            **({"script": body.script} if body.script else {}),
-        }
-        try:
-            mcp_result = await runtime.run_mcp_tool(
-                audit_run_id=audit_run_id,
-                project_id=audit_run["project_id"],
-                mcp_name="joern-mcp",
-                tool_path=tool_path,
-                workspace_host_path=workspace_path,
-                payload=payload,
-                allow_external_network=False,
-                retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-            )
-        except Exception as exc:
-            result = {"ok": False, "available": False, "error": str(exc)}
-            await _record_pipeline_event(audit_run_id, "joern_query_failed", result)
-            raise HTTPException(status_code=502, detail=result) from exc
-        result = mcp_result.get("result", {})
-        await _record_pipeline_event(audit_run_id, "joern_query_completed", _compact_event_payload(result))
-        return {"ok": bool(mcp_result.get("ok")) and bool(result.get("ok")), "result": result, "mcp": mcp_result.get("mcp")}
-
-    @router.get("/runtime/joern/health")
-    async def runtime_joern_health() -> dict[str, Any]:
-        runtime = runtime_provider()
-        if runtime is None:
-            return await proxy_gateway("/runtime/joern/health")
-        templates = [template for template in mcp_template_store().list() if template.get("name") == "joern-mcp"]
-        capabilities = await runtime.tool_image_capabilities(templates)
-        joern = (capabilities.get("templates") or {}).get("joern-mcp") or {}
-        missing = joern.get("missing_binaries") or []
-        return {
-            "ok": bool(joern.get("available")) and not missing,
-            "required": bool(settings.enable_joern and settings.joern_required),
-            "template": joern,
-            "capabilities": capabilities,
-        }
 
     @router.post("/audit-runs/{audit_run_id}/sca")
     async def run_sca(request: Request, audit_run_id: str) -> dict[str, Any]:
@@ -971,33 +1114,13 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             raise HTTPException(status_code=409, detail="audit run pipeline is already active")
         await _clear_pipeline_cancel(audit_run_id)
         backend = _normalized_pipeline_backend(settings)
-        if backend == "temporal":
-            await _mark_audit_run_status(audit_run_id, "running")
-            await _set_pipeline_state(audit_run_id, stage="temporal-starting", status="running")
-            await _record_audit_run_event(audit_run_id, "pipeline_temporal_starting", {"status": "running", "backend": backend})
-        else:
-            await _mark_audit_run_status(audit_run_id, "queued")
-            await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
-            await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": backend})
+        if backend not in {"workflow-worker", "background-tasks"}:
+            backend = "workflow-worker"
+        await _mark_audit_run_status(audit_run_id, "queued")
+        await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
+        await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": backend})
         if backend == "background-tasks":
             background_tasks.add_task(pipeline_executor(runtime).execute, audit_run_id)
-        elif backend == "temporal":
-            try:
-                temporal_result = await start_temporal_pipeline(
-                    audit_run_id,
-                    TemporalPipelineConfig(
-                        address=settings.temporal_address,
-                        namespace=settings.temporal_namespace,
-                        task_queue=settings.temporal_task_queue,
-                    ),
-                )
-            except Exception as exc:
-                await _mark_audit_run_status(audit_run_id, "failed")
-                await _set_pipeline_state(audit_run_id, stage="failed", status="failed", error=f"Temporal start failed: {exc}")
-                await _record_audit_run_event(audit_run_id, "temporal_pipeline_start_failed", {"error": str(exc)})
-                raise HTTPException(status_code=503, detail=f"Temporal pipeline start failed: {exc}") from exc
-            await _record_audit_run_event(audit_run_id, "temporal_pipeline_started", temporal_result)
-            return {"audit_run_id": audit_run_id, "status": "accepted", "backend": backend, "temporal": temporal_result}
         return {"audit_run_id": audit_run_id, "status": "accepted", "backend": backend}
 
     @router.post("/audit-runs/{audit_run_id}/cancel")
@@ -1599,7 +1722,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         checks.append(_http_guardrails_readiness_check(settings))
         checks.append(_workspace_import_readiness_check(settings))
         worker_health: dict[str, Any] | None = None
-        if _normalized_pipeline_backend(settings) in {"workflow-worker", "temporal"}:
+        if _normalized_pipeline_backend(settings) == "workflow-worker":
             worker_health = await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
         checks.append(_pipeline_backend_readiness_check(settings, worker_health=worker_health))
         async with SessionLocal() as session:
@@ -1715,13 +1838,6 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             return await proxy_gateway("/runtime/workers/health")
         return await workflow_worker_health(max_age_seconds=settings.pipeline_worker_heartbeat_ttl_seconds)
 
-    @router.get("/runtime/temporal/health")
-    async def runtime_temporal_health() -> dict[str, Any]:
-        runtime = runtime_provider()
-        if runtime is None:
-            return await proxy_gateway("/runtime/temporal/health")
-        return await _temporal_health(settings)
-
     @router.get("/runtime/managed")
     async def managed_runtime() -> dict[str, Any]:
         runtime = runtime_provider()
@@ -1804,6 +1920,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         runtime = runtime_provider()
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/agent-runs", method="POST", json=body.model_dump())
+        audit_run = None
+        with contextlib.suppress(Exception):
+            audit_run = await _get_audit_run(audit_run_id)
+        input_payload = dict(body.input_payload or {})
+        if audit_run:
+            input_payload = _with_shared_agent_context(input_payload, audit_run)
         try:
             return await runtime.start_agent_run(
                 audit_run_id=audit_run_id,
@@ -1812,7 +1934,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 workspace_host_path=body.workspace_host_path,
                 allow_external_network=body.allow_external_network,
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
-                input_payload=body.input_payload,
+                input_payload=input_payload,
             )
         except (DockerApiError, FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1877,6 +1999,14 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 )
             ).scalars()
             return [_agent_run_to_dict(row) for row in rows]
+
+    @router.get("/audit-runs/{audit_run_id}/execution-graph")
+    async def audit_run_execution_graph(request: Request, audit_run_id: str) -> dict[str, Any]:
+        audit_run = await _get_audit_run(audit_run_id)
+        if not audit_run:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
+        return await _execution_graph(audit_run)
 
     @router.get("/audit-runs/{audit_run_id}/agent-runs/{agent_run_id}")
     async def audit_run_agent_run(request: Request, audit_run_id: str, agent_run_id: str) -> dict[str, Any]:
@@ -2110,36 +2240,6 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         )
 
     return router
-
-
-async def _temporal_health(settings: Settings) -> dict[str, Any]:
-    address = str(settings.temporal_address or "temporal:7233").strip()
-    host, _, port_text = address.rpartition(":")
-    if not host:
-        host = address
-        port = 7233
-    else:
-        try:
-            port = int(port_text)
-        except ValueError:
-            return {"ok": False, "address": address, "error": "TEMPORAL_ADDRESS must be host:port"}
-    try:
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=3)
-        writer.close()
-        with contextlib.suppress(Exception):
-            await writer.wait_closed()
-        with contextlib.suppress(Exception):
-            reader.feed_eof()
-        return {
-            "ok": True,
-            "address": address,
-            "host": host,
-            "port": port,
-            "mode": "tcp",
-            "message": "Temporal frontend TCP port is reachable; full workflow namespace/task-queue checks require Temporal SDK wiring.",
-        }
-    except Exception as exc:
-        return {"ok": False, "address": address, "host": host, "port": port, "mode": "tcp", "error": str(exc)}
 
 
 def _sandbox_compose_to_service_request(body: StartSandboxComposeRequest) -> StartSandboxServiceRequest:
@@ -3078,7 +3178,7 @@ async def _run_sca_mcp(
     return summary
 
 
-async def _run_joern_mcp(
+async def _run_structure_discovery(
     audit_run_id: str,
     project_id: str,
     workspace_path: str,
@@ -3086,73 +3186,240 @@ async def _run_joern_mcp(
     audit_run: dict[str, Any],
 ) -> dict[str, Any]:
     config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-    query_packs = _joern_query_packs(config)
-    timeout_seconds = int(config.get("joern_timeout_seconds") or 900)
-    language = config.get("joern_language")
-    workspace_input = str(config.get("joern_workspace_path") or ".")
-    payload = {
-        "workspace_path": workspace_input,
-        "language": language,
-        "timeout_seconds": timeout_seconds,
-        "query_packs": query_packs,
-    }
-    try:
-        mcp_result = await runtime.run_mcp_tool(
+    common_dir = settings.artifact_root / "common" / audit_run_id
+    common_dir.mkdir(parents=True, exist_ok=True)
+    structure_path = common_dir / "STRUCTURE.md"
+    inventory = _workspace_structure_inventory(Path(workspace_path))
+    decompiled = {"enabled": False, "artifacts": [], "count": 0}
+    if bool(config.get("enable_decompilation", True)):
+        decompiled = DecompilerService(
+            workspace_path,
+            output_dir=str(config.get("decompiled_source_dir") or ".dieaudit/decompiled"),
+            max_artifact_size_mb=int(config.get("decompile_max_artifact_size_mb") or 200),
+            timeout_seconds=int(config.get("decompile_timeout_seconds") or 300),
+            max_artifacts=int(config.get("decompile_max_artifacts") or 50),
+        ).decompile()
+    structure_path.write_text(
+        _render_structure_markdown(
             audit_run_id=audit_run_id,
             project_id=project_id,
-            mcp_name="joern-mcp",
-            tool_path="/tools/joern_build_cpg",
-            workspace_host_path=workspace_path,
-            payload=payload,
-            allow_external_network=False,
-            retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
-        )
-    except Exception as exc:
-        result = {"ok": False, "available": False, "error": str(exc), "query_packs": query_packs}
-        await _record_pipeline_event(audit_run_id, "joern_cpg_failed", result)
-        return result
-
-    result = mcp_result.get("result", {}) if isinstance(mcp_result, dict) else {}
-    if not isinstance(result, dict):
-        result = {"ok": False, "available": False, "error": "Joern MCP returned a non-object result"}
-    cpg_artifact = result.get("artifact") if isinstance(result.get("artifact"), dict) else {}
-    summary = {
-        "ok": bool(mcp_result.get("ok")) and bool(result.get("ok")),
-        "available": result.get("available", bool(mcp_result.get("ok"))),
-        "status": "completed" if result.get("ok") else "failed",
-        "reason": None if result.get("ok") else result.get("error") or result.get("stderr") or "Joern CPG build failed",
-        "cpg_path": result.get("cpg_path"),
-        "artifact_path": result.get("artifact_path") or result.get("cpg_path"),
-        "artifact": cpg_artifact,
-        "cpg_artifact_id": cpg_artifact.get("sha256") if isinstance(cpg_artifact, dict) else None,
-        "language": result.get("language"),
-        "query_packs": _compact_joern_query_packs(result.get("query_packs")),
-        "command": result.get("command"),
-        "exit_code": result.get("exit_code"),
+            workspace_path=workspace_path,
+            inventory=inventory,
+            decompiled=decompiled,
+        ),
+        encoding="utf-8",
+    )
+    result: dict[str, Any] = {
+        "ok": True,
+        "available": True,
+        "path": str(structure_path),
+        "relative_path": f"common/{audit_run_id}/STRUCTURE.md",
+        "agent_path": "/artifacts/common/STRUCTURE.md",
+        "inventory": inventory,
+        "decompiled": decompiled,
+        "agent_run": None,
     }
-    artifact_path = _platform_joern_artifact_path(audit_run_id, summary.get("artifact_path"))
-    if artifact_path:
-        summary["artifact_path"] = str(artifact_path)
-    if artifact_path:
-        with contextlib.suppress(Exception):
-            metadata = _artifact_store_metadata(get_settings(), Path(str(artifact_path)))
-            await _upsert_artifact_record(
-                metadata,
-                [
-                    {
-                        "kind": "joern_cpg",
-                        "project_id": project_id,
-                        "audit_run_id": audit_run_id,
-                        "record_id": audit_run.get("snapshot_id"),
-                    }
-                ],
+    await _record_pipeline_event(audit_run_id, "structure_discovery_bootstrap_completed", _compact_event_payload(result))
+    if bool(config.get("enable_structure_discovery_agent", True)) and runtime is not None:
+        agent_name = str(config.get("structure_discovery_agent_name") or config.get("agent_name") or "opencode-orchestrator")
+        try:
+            agent_result = await runtime.start_agent_run(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                agent_name=agent_name,
+                workspace_host_path=workspace_path,
+                allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+                retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+                input_payload={
+                    "goal": (
+                        "Explore the project architecture and update /artifacts/common/STRUCTURE.md. "
+                        "Describe core components, entrypoints, trust boundaries, data flows, and security-sensitive components."
+                    ),
+                    "audit_phase": "structure-discovery",
+                    "structure": {
+                        "path": "/artifacts/common/STRUCTURE.md",
+                        "instruction": "Read the workspace read-only and update this shared markdown file in place.",
+                    },
+                },
             )
-            summary["artifact_id"] = metadata["artifact_id"]
-            summary["artifact_uri"] = metadata["artifact_uri"]
-            summary["cpg_artifact_id"] = metadata["artifact_id"]
-    event_type = "joern_cpg_completed" if summary["ok"] else "joern_cpg_failed"
-    await _record_pipeline_event(audit_run_id, event_type, summary)
-    return summary
+            result["agent_run"] = _compact_event_payload(agent_result)
+            if isinstance(agent_result, dict) and (agent_result.get("error") or str(agent_result.get("status") or "").lower() == "failed"):
+                result["ok"] = False
+        except Exception as exc:
+            result["ok"] = False
+            result["agent_error"] = str(exc)
+    await _record_pipeline_event(audit_run_id, "structure_discovery_completed", _compact_event_payload(result))
+    return result
+
+
+def _workspace_structure_inventory(workspace: Path) -> dict[str, Any]:
+    markers = {
+        "package.json",
+        "pyproject.toml",
+        "requirements.txt",
+        "go.mod",
+        "Cargo.toml",
+        "pom.xml",
+        "build.gradle",
+        "Dockerfile",
+        "docker-compose.yml",
+        "compose.yml",
+    }
+    ignored = {".git", "node_modules", ".venv", "__pycache__", "target", "dist", "build"}
+    files: list[str] = []
+    directories: set[str] = set()
+    marker_hits: list[str] = []
+    critical_paths: dict[str, list[str]] = {
+        "entrypoints": [],
+        "routes": [],
+        "auth": [],
+        "data": [],
+        "files": [],
+        "network": [],
+        "deserialization": [],
+    }
+    keywords = {
+        "entrypoints": ("main", "startup", "bootstrap", "server", "app."),
+        "routes": ("route", "router", "controller", "handler", "endpoint", "api"),
+        "auth": ("auth", "login", "session", "jwt", "permission", "role", "policy"),
+        "data": ("sql", "query", "repository", "dao", "mapper", "database", "model"),
+        "files": ("upload", "download", "file", "path", "archive", "extract"),
+        "network": ("http", "request", "fetch", "url", "client", "socket"),
+        "deserialization": ("deserialize", "pickle", "yaml", "xml", "protobuf", "json"),
+    }
+    try:
+        for path in workspace.rglob("*"):
+            if any(part in ignored for part in path.parts):
+                continue
+            rel = path.relative_to(workspace).as_posix()
+            if path.is_dir():
+                if rel.count("/") <= 1:
+                    directories.add(rel)
+                continue
+            if path.name in markers:
+                marker_hits.append(rel)
+            if len(files) < 200:
+                files.append(rel)
+            lowered = rel.lower()
+            for category, terms in keywords.items():
+                if len(critical_paths[category]) < 40 and any(term in lowered for term in terms):
+                    critical_paths[category].append(rel)
+    except OSError:
+        pass
+    return {
+        "markers": sorted(marker_hits),
+        "top_directories": sorted(directories)[:80],
+        "sample_files": files[:200],
+        "critical_paths": {key: sorted(value) for key, value in critical_paths.items() if value},
+    }
+
+
+def _render_structure_markdown(
+    *,
+    audit_run_id: str,
+    project_id: str,
+    workspace_path: str,
+    inventory: dict[str, Any],
+    decompiled: dict[str, Any] | None = None,
+) -> str:
+    lines = [
+        "# STRUCTURE",
+        "",
+        f"- AuditRun: `{audit_run_id}`",
+        f"- Project: `{project_id}`",
+        f"- Workspace: `{workspace_path}`",
+        "",
+        "## Detected Project Markers",
+    ]
+    lines.extend([f"- `{item}`" for item in inventory.get("markers") or []] or ["- No common build markers detected."])
+    lines.extend(["", "## Top Directories"])
+    lines.extend([f"- `{item}`" for item in inventory.get("top_directories") or []] or ["- No directories sampled."])
+    lines.extend(["", "## Sample Files"])
+    lines.extend([f"- `{item}`" for item in inventory.get("sample_files") or []] or ["- No files sampled."])
+    lines.extend(["", "## Architecture And Critical Flow Hints"])
+    critical_paths = inventory.get("critical_paths") if isinstance(inventory.get("critical_paths"), dict) else {}
+    if critical_paths:
+        for category, paths in critical_paths.items():
+            lines.extend([f"", f"### {category}"])
+            lines.extend([f"- `{item}`" for item in paths[:40]])
+    else:
+        lines.append("- No keyword-based critical paths detected in bootstrap scan.")
+    lines.extend(["", "## Decompiled Artifacts"])
+    decompiled_artifacts = (decompiled or {}).get("artifacts") if isinstance(decompiled, dict) else []
+    if decompiled_artifacts:
+        for item in decompiled_artifacts:
+            if not isinstance(item, dict):
+                continue
+            lines.extend(
+                [
+                    f"- `{item.get('original_path')}`",
+                    f"  - artifact_id: `{item.get('artifact_id')}`",
+                    f"  - tool: `{item.get('tool')}`",
+                    f"  - status: `{item.get('status')}`",
+                    f"  - output: `{item.get('workspace_output_path')}`",
+                    f"  - language_hint: `{item.get('language_hint')}`",
+                    f"  - graph_indexable: `{item.get('graph_indexable')}`",
+                ]
+            )
+            if item.get("error"):
+                lines.append(f"  - error: `{str(item.get('error'))[:500]}`")
+    else:
+        lines.append("- No packaged artifacts were decompiled.")
+    lines.extend(["", "## Recommended Code Graph Indexing"])
+    lines.append("- Use `codebase-memory-mcp.index_repository` with `repo_path` set to `/workspace`.")
+    if decompiled_artifacts:
+        for item in decompiled_artifacts:
+            if isinstance(item, dict) and item.get("graph_indexable"):
+                lines.append(f"- Include decompiled output `{item.get('workspace_output_path')}` when investigating `{item.get('artifact_id')}`.")
+    lines.extend(
+        [
+            "",
+            "## Agent Notes",
+            "",
+            "This file is a shared starting point. Structure-discovery Agents should extend it with architecture, entrypoints, trust boundaries, data flows, decompiled source usage, and security-sensitive components.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _with_shared_agent_context(payload: dict[str, Any], audit_run: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload or {})
+    audit_run_id = str(audit_run.get("audit_run_id") or "")
+    if audit_run_id:
+        result.setdefault(
+            "structure",
+            {
+                "path": "/artifacts/common/STRUCTURE.md",
+                "artifact_path": str(settings.artifact_root / "common" / audit_run_id / "STRUCTURE.md"),
+                "instruction": "Read STRUCTURE.md before analysis and update it only during structure-discovery.",
+            },
+        )
+    result.setdefault(
+        "codebase_memory",
+        {
+            "mcp": "codebase-memory-mcp",
+            "repo_path": "/workspace",
+            "cache_dir": "/artifacts/codebase-memory",
+            "instruction": (
+                "Use codebase-memory-mcp for graph-backed analysis. Call index_repository for /workspace when graph context "
+                "is needed or missing; use get_architecture before broad planning, then search_graph, trace_path, "
+                "query_graph, get_code_snippet, detect_changes, and search_code for focused security analysis."
+            ),
+        },
+    )
+    result.setdefault(
+        "agent_collaboration",
+        {
+            "whiteboard_mcp": "whiteboard-mcp",
+            "codebase_memory_mcp": "codebase-memory-mcp",
+            "instruction": (
+                "Use whiteboard-mcp for shared cards, subscriptions, notifications, and help requests. "
+                "Use codebase-memory-mcp for architecture, route, symbol, source/sink, call-chain, and graph queries whenever available."
+            ),
+        },
+    )
+    return result
 
 
 async def _run_semgrep_mcp(
@@ -3301,99 +3568,27 @@ def _semgrep_status(result: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "status": "no_findings", "reason": None}
 
 
-def _joern_query_packs(config: dict[str, Any]) -> list[str]:
-    configured = config.get("joern_query_packs")
-    if configured is None:
-        configured = get_settings().joern_query_packs
-    if isinstance(configured, str):
-        raw = configured.split(",")
-    else:
-        raw = list(configured or [])
-    packs: list[str] = []
-    for item in raw:
-        pack = str(item).strip()
-        if pack and pack not in packs:
-            packs.append(pack)
-    return packs
-
-
-def _latest_joern_context(audit_run: dict[str, Any]) -> dict[str, Any]:
-    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
-    pipeline = config.get("pipeline") if isinstance(config.get("pipeline"), dict) else {}
-    for step in pipeline.get("steps") or []:
-        if not isinstance(step, dict) or step.get("step") != "joern-cpg":
-            continue
-        result = step.get("result") if isinstance(step.get("result"), dict) else {}
-        return {
-            "enabled": bool(config.get("enable_joern", True)),
-            "required": bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False)),
-            "mcp": "joern-mcp",
-            "cpg_path": result.get("cpg_path"),
-            "cpg_artifact_id": result.get("artifact_id") or result.get("cpg_artifact_id"),
-            "artifact_path": result.get("artifact_path"),
-            "status": result.get("status"),
-            "ok": result.get("ok"),
-            "query_packs": _compact_joern_query_packs(result.get("query_packs")),
-            "recommended_query_packs": _joern_query_packs(config),
-        }
-    joern_context = config.get("joern_context") if isinstance(config.get("joern_context"), dict) else {}
-    if joern_context:
-        return {
-            "enabled": bool(config.get("enable_joern", True)),
-            "required": bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False)),
-            "mcp": "joern-mcp",
-            "cpg_path": joern_context.get("cpg_path"),
-            "cpg_artifact_id": joern_context.get("artifact_id") or joern_context.get("cpg_artifact_id"),
-            "artifact_path": joern_context.get("artifact_path"),
-            "status": joern_context.get("status"),
-            "ok": joern_context.get("ok"),
-            "query_packs": _compact_joern_query_packs(joern_context.get("query_packs")),
-            "recommended_query_packs": _joern_query_packs(config),
-        }
+def _codebase_memory_context() -> dict[str, Any]:
     return {
-        "enabled": bool(config.get("enable_joern", True)),
-        "required": bool(config.get("joern_required", True)) and not bool(config.get("allow_joern_unavailable", False)),
-        "mcp": "joern-mcp",
-        "cpg_path": None,
-        "cpg_artifact_id": None,
-        "query_packs": [],
-        "recommended_query_packs": _joern_query_packs(config),
+        "mcp": "codebase-memory-mcp",
+        "repo_path": "/workspace",
+        "cache_dir": "/artifacts/codebase-memory",
+        "tools": [
+            "index_repository",
+            "get_architecture",
+            "search_graph",
+            "trace_path",
+            "query_graph",
+            "get_code_snippet",
+            "detect_changes",
+            "search_code",
+        ],
+        "instruction": (
+            "Call index_repository for /workspace when graph context is needed or missing. "
+            "Use get_architecture before broad planning, then search_graph, trace_path, query_graph, "
+            "get_code_snippet, detect_changes, and search_code for focused security analysis."
+        ),
     }
-
-
-def _compact_joern_query_packs(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    packs = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        packs.append(
-            {
-                "query_pack": item.get("query_pack"),
-                "ok": item.get("ok"),
-                "available": item.get("available"),
-                "artifact_path": item.get("artifact_path"),
-                "artifact": item.get("artifact"),
-                "exit_code": item.get("exit_code"),
-                "error": item.get("error"),
-            }
-        )
-    return packs
-
-
-def _platform_joern_artifact_path(audit_run_id: str, artifact_path: Any) -> Path | None:
-    if not artifact_path:
-        return None
-    raw = str(artifact_path)
-    marker = "/artifacts/"
-    settings = get_settings()
-    if raw.startswith(marker):
-        return settings.artifact_root / "joern" / audit_run_id / raw.removeprefix(marker)
-    path = Path(raw)
-    if path.is_absolute():
-        return path
-    return settings.artifact_root / path
 
 
 async def _judge_audit_run_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
@@ -3450,7 +3645,7 @@ async def _run_judger_finding_internal(audit_run_id: str, runtime: Any, audit_ru
                 "evidence": finding_evidence,
                 "validation_attempts": finding_attempts,
                 "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "judger"),
-                "joern": _latest_joern_context(audit_run),
+                "codebase_memory": _codebase_memory_context(),
             },
         )
         agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
@@ -3539,7 +3734,7 @@ async def _run_source_sink_finding_internal(
         "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "source-sink"),
         "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
         "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
-        "joern": _latest_joern_context(audit_run),
+        "codebase_memory": _codebase_memory_context(),
         "output_contract": {
             "chains": [
                 {
@@ -3551,7 +3746,7 @@ async def _run_source_sink_finding_internal(
                     "sanitizers": [],
                     "exploitability": "...",
                     "confidence": "high|medium|low",
-                    "joern_queries": [],
+                    "codebase_memory_queries": [],
                 }
             ]
         },
@@ -3608,6 +3803,394 @@ async def _complete_source_sink_analysis_internal(audit_run_id: str, results: li
     return final
 
 
+async def _run_whiteboard_swarm(
+    audit_run_id: str,
+    runtime: Any,
+    *,
+    override_rounds: int | None = None,
+    override_max_tasks_per_round: int | None = None,
+) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id)
+    if not audit_run:
+        raise LookupError("audit run not found")
+    config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    if not bool(config.get("enable_whiteboard", True)):
+        result = {"ok": True, "skipped": True, "reason": "whiteboard disabled"}
+        await _record_pipeline_event(audit_run_id, "whiteboard_swarm_skipped", result)
+        return result
+    if not bool(config.get("enable_whiteboard_swarm", True)):
+        result = {"ok": True, "skipped": True, "reason": "whiteboard swarm disabled"}
+        await _record_pipeline_event(audit_run_id, "whiteboard_swarm_skipped", result)
+        return result
+    workspace_path = config.get("workspace_host_path")
+    if not workspace_path:
+        result = {"ok": False, "error": "audit run has no workspace path"}
+        await _record_pipeline_event(audit_run_id, "whiteboard_swarm_failed", result)
+        return result
+    if runtime is None:
+        result = {"ok": False, "error": "runtime is unavailable"}
+        await _record_pipeline_event(audit_run_id, "whiteboard_swarm_failed", result)
+        return result
+
+    rounds = max(1, int(override_rounds or config.get("max_whiteboard_rounds") or 3))
+    max_tasks_per_round = max(1, int(override_max_tasks_per_round or config.get("max_whiteboard_tasks_per_round") or 8))
+    controller_agent = str(config.get("whiteboard_swarm_agent_name") or config.get("agent_name") or "opencode-orchestrator")
+    async with SessionLocal() as session:
+        service = WhiteboardService(settings, session)
+        task = WhiteboardTask(
+            task_id=str(uuid.uuid4()),
+            audit_run_id=audit_run_id,
+            project_id=audit_run["project_id"],
+            gap_card_id=None,
+            agent_role="whiteboard-controller",
+            agent_name=controller_agent,
+            status="running",
+            round_index=1,
+            attempt_index=1,
+            prompt="AI-controlled whiteboard swarm controller",
+            result={},
+        )
+        session.add(task)
+        await session.commit()
+        await service.write_snapshot(audit_run_id)
+
+    await _record_pipeline_event(
+        audit_run_id,
+        "whiteboard_swarm_started",
+        {"mode": "ai-controller", "controller_agent": controller_agent, "rounds": rounds, "max_tasks_per_round": max_tasks_per_round},
+    )
+    try:
+        graph = await _whiteboard_graph(audit_run_id)
+        agent_result = await runtime.start_agent_run(
+            audit_run_id=audit_run_id,
+            project_id=audit_run["project_id"],
+            agent_name=controller_agent,
+            workspace_host_path=workspace_path,
+            allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
+            retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
+                input_payload={
+                    "goal": (
+                        "Act as the Whiteboard swarm controller. Inspect the shared Whiteboard, decide which gaps or partial chains "
+                    "deserve more work, and use whiteboard-mcp schedule_agent to launch specialized Agents. Respect the supplied "
+                    "budgets. Add cards/edges/notes for your reasoning and submit chain evidence only when complete."
+                    ),
+                    "long_running": True,
+                    "agent_lifecycle": "long-running",
+                    "audit_phase": "whiteboard-swarm-controller",
+                "whiteboard_swarm": {
+                    "mode": "ai-controller",
+                    "controller_task_id": task.task_id,
+                    "max_rounds": rounds,
+                    "max_agent_schedules": max_tasks_per_round,
+                    "allowed_agent_names": [
+                        "opencode-source-sink-finder",
+                        "opencode-validator",
+                        "opencode-judger",
+                        "opencode-poc-writer",
+                        "opencode-poc-verifier",
+                        "opencode-code-auditor",
+                    ],
+                    "instruction": (
+                        "You decide the next Agent work. Do not rely on platform gap rules. Use list_graph to inspect all cards, "
+                        "search_cards or find_attach_points to locate related cards by keyword or filters, then use "
+                        "create_card, link_cards, declare_gap, schedule_agent, and submit_chain_evidence. Card predecessor/successor "
+                        "slots must use card_ids arrays, status values not_ready/finding/not_found/hint/impossible, and agent_run_id."
+                    ),
+                },
+                "whiteboard_snapshot": _compact_event_payload(graph),
+                "codebase_memory": _codebase_memory_context(),
+            },
+        )
+        agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
+        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        status = "failed" if failed else "completed"
+        async with SessionLocal() as session:
+            row = await session.scalar(select(WhiteboardTask).where(WhiteboardTask.task_id == task.task_id))
+            if row:
+                row.status = status
+                row.agent_run_id = agent_run_id or None
+                row.result = _compact_event_payload(agent_result)
+                await session.commit()
+            await WhiteboardService(settings, session).write_snapshot(audit_run_id)
+        result = {
+            "ok": not failed,
+            "mode": "ai-controller",
+            "controller_task_id": task.task_id,
+            "controller_agent_run_id": agent_run_id or None,
+            "scheduled": 1,
+            "status_counts": {status: 1},
+            "result": _compact_event_payload(agent_result),
+        }
+    except Exception as exc:
+        async with SessionLocal() as session:
+            row = await session.scalar(select(WhiteboardTask).where(WhiteboardTask.task_id == task.task_id))
+            if row:
+                row.status = "failed"
+                row.result = {"error": str(exc)}
+                await session.commit()
+        result = {"ok": False, "mode": "ai-controller", "controller_task_id": task.task_id, "scheduled": 1, "status_counts": {"failed": 1}, "error": str(exc)}
+    result = {
+        **result,
+        "budget": {"max_rounds": rounds, "max_agent_schedules": max_tasks_per_round},
+    }
+    await _record_pipeline_event(audit_run_id, "whiteboard_swarm_completed", result)
+    return result
+
+
+async def _whiteboard_graph(audit_run_id: str) -> dict[str, Any]:
+    async with SessionLocal() as session:
+        return await WhiteboardService(settings, session).graph(audit_run_id)
+
+
+async def _execution_graph(audit_run: dict[str, Any]) -> dict[str, Any]:
+    audit_run_id = str(audit_run["audit_run_id"])
+    project_id = str(audit_run["project_id"])
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    seen_nodes: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def add_node(node: dict[str, Any]) -> None:
+        node_id = str(node["id"])
+        if node_id in seen_nodes:
+            return
+        seen_nodes.add(node_id)
+        nodes.append(node)
+
+    def add_edge(source: str, target: str, edge_type: str, **metadata: Any) -> None:
+        key = (source, target, edge_type)
+        if source not in seen_nodes or target not in seen_nodes or key in seen_edges:
+            return
+        seen_edges.add(key)
+        edges.append({"source": source, "target": target, "type": edge_type, **metadata})
+
+    add_node(
+        {
+            "id": f"audit:{audit_run_id}",
+            "kind": "audit-run",
+            "label": audit_run_id,
+            "status": audit_run.get("status"),
+            "group": "audit",
+            "target": {"view": "audit-runs", "audit_run_id": audit_run_id},
+            "data": audit_run,
+        }
+    )
+
+    events = await _list_audit_run_events(audit_run_id, limit=500)
+    step_nodes: dict[str, str] = {}
+    step_order: list[str] = []
+    for event in events:
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        step = str(payload.get("step") or payload.get("stage") or "").strip()
+        if not step:
+            continue
+        step_id = f"step:{step}"
+        status = _event_step_status(str(event.get("event_type") or ""))
+        if step_id not in step_nodes:
+            step_nodes[step] = step_id
+            step_order.append(step)
+            add_node(
+                {
+                    "id": step_id,
+                    "kind": "pipeline-step",
+                    "label": step,
+                    "status": status,
+                    "group": "pipeline",
+                    "target": {"view": "audit-runs", "audit_run_id": audit_run_id},
+                    "data": {"latest_event": event},
+                }
+            )
+            add_edge(f"audit:{audit_run_id}", step_id, "contains")
+        else:
+            for node in nodes:
+                if node["id"] == step_id and status != "unknown":
+                    node["status"] = status
+                    node["data"] = {"latest_event": event}
+                    break
+    for previous, current in zip(step_order, step_order[1:]):
+        add_edge(step_nodes[previous], step_nodes[current], "next")
+
+    async with SessionLocal() as session:
+        agent_rows = list(
+            (
+                await session.execute(
+                    select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.asc())
+                )
+            ).scalars()
+        )
+        container_rows = list(
+            (
+                await session.execute(
+                    select(ContainerRun).where(ContainerRun.audit_run_id == audit_run_id).order_by(ContainerRun.created_at.asc())
+                )
+            ).scalars()
+        )
+        task_rows = list(
+            (
+                await session.execute(
+                    select(WhiteboardTask).where(WhiteboardTask.audit_run_id == audit_run_id).order_by(WhiteboardTask.created_at.asc())
+                )
+            ).scalars()
+        )
+        card_rows = list(
+            (
+                await session.execute(
+                    select(WhiteboardCard).where(WhiteboardCard.audit_run_id == audit_run_id).order_by(WhiteboardCard.created_at.asc())
+                )
+            ).scalars()
+        )
+        whiteboard_edges = list(
+            (
+                await session.execute(
+                    select(WhiteboardEdge).where(WhiteboardEdge.audit_run_id == audit_run_id).order_by(WhiteboardEdge.created_at.asc())
+                )
+            ).scalars()
+        )
+
+    for agent in agent_rows:
+        node_id = f"agent:{agent.agent_run_id}"
+        output_summary = agent.output_summary or {}
+        runtime_name = output_summary.get("acp_runtime") or (output_summary.get("acp_result") or {}).get("runtime_name")
+        add_node(
+            {
+                "id": node_id,
+                "kind": "agent-run",
+                "label": agent.agent_name,
+                "status": agent.status,
+                "group": str(runtime_name or _agent_group(agent.agent_name)),
+                "target": {"view": "agent-runs", "audit_run_id": audit_run_id, "agent_run_id": agent.agent_run_id},
+                "data": _agent_run_to_dict(agent),
+            }
+        )
+        step_id = _agent_step_node_id(agent.agent_name, step_nodes)
+        add_edge(step_id or f"audit:{audit_run_id}", node_id, "runs")
+
+    for task in task_rows:
+        node_id = f"whiteboard-task:{task.task_id}"
+        add_node(
+            {
+                "id": node_id,
+                "kind": "whiteboard-task",
+                "label": task.agent_role,
+                "status": task.status,
+                "group": "whiteboard",
+                "target": {"view": "whiteboard", "audit_run_id": audit_run_id, "task_id": task.task_id},
+                "data": _whiteboard_task_to_dict(task),
+            }
+        )
+        swarm_step_id = step_nodes.get("whiteboard-swarm") or f"audit:{audit_run_id}"
+        add_edge(swarm_step_id, node_id, "schedules")
+        if task.agent_run_id:
+            add_edge(node_id, f"agent:{task.agent_run_id}", "started")
+
+    for container in container_rows:
+        node_id = f"container:{container.container_id}"
+        add_node(
+            {
+                "id": node_id,
+                "kind": "container",
+                "label": container.container_name or container.container_id[:12],
+                "status": container.status,
+                "group": container.role,
+                "target": {"view": "runtime-containers", "audit_run_id": audit_run_id, "container_id": container.container_id},
+                "data": {
+                    "container_id": container.container_id,
+                    "container_name": container.container_name,
+                    "agent_run_id": container.agent_run_id,
+                    "image": container.image,
+                    "role": container.role,
+                    "status": container.status,
+                    "exit_code": container.exit_code,
+                    "log_artifact": container.log_artifact,
+                },
+            }
+        )
+        source = f"agent:{container.agent_run_id}" if container.agent_run_id else f"audit:{audit_run_id}"
+        add_edge(source, node_id, "container")
+
+    for card in card_rows:
+        node_id = f"whiteboard-card:{card.card_id}"
+        add_node(
+            {
+                "id": node_id,
+                "kind": "whiteboard-card",
+                "label": card.title,
+                "status": card.status,
+                "group": card.card_type,
+                "target": {"view": "whiteboard", "audit_run_id": audit_run_id, "card_id": card.card_id},
+                "data": _whiteboard_card_to_dict(card),
+            }
+        )
+        if card.agent_run_id:
+            add_edge(f"agent:{card.agent_run_id}", node_id, "writes")
+        elif card.card_type == "gap":
+            add_edge(step_nodes.get("whiteboard-swarm") or f"audit:{audit_run_id}", node_id, "tracks")
+
+    for edge in whiteboard_edges:
+        source = f"whiteboard-card:{edge.source_card_id}"
+        target = f"whiteboard-card:{edge.target_card_id}"
+        add_edge(source, target, f"whiteboard:{edge.edge_type}", data=_whiteboard_edge_to_dict(edge))
+
+    return {
+        "audit_run_id": audit_run_id,
+        "project_id": project_id,
+        "summary": _execution_graph_summary(nodes),
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+def _event_step_status(event_type: str) -> str:
+    if event_type.endswith("_completed"):
+        return "completed"
+    if event_type.endswith("_skipped"):
+        return "skipped"
+    if event_type.endswith("_failed"):
+        return "failed"
+    if event_type.endswith("_started"):
+        return "running"
+    return "unknown"
+
+
+def _agent_group(agent_name: str) -> str:
+    return agent_name.split("-", 1)[0] if "-" in agent_name else "agent"
+
+
+def _agent_step_node_id(agent_name: str, step_nodes: dict[str, str]) -> str | None:
+    normalized = agent_name.lower()
+    mapping = [
+        ("code-auditor", "code-analysis"),
+        ("validator", "validation-judgement"),
+        ("judger", "validation-judgement"),
+        ("poc-writer", "poc-writing"),
+        ("poc-verifier", "poc-verification"),
+        ("orchestrator", "agent-audit"),
+    ]
+    for needle, step in mapping:
+        if needle in normalized and step in step_nodes:
+            return step_nodes[step]
+    return None
+
+
+def _execution_graph_summary(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    by_kind: dict[str, int] = {}
+    by_status: dict[str, int] = {}
+    for node in nodes:
+        kind = str(node.get("kind") or "unknown")
+        status = str(node.get("status") or "unknown")
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+    unfinished_statuses = {"created", "starting", "queued", "running", "open", "needs_agent", "agent_queued"}
+    return {
+        "node_count": len(nodes),
+        "by_kind": by_kind,
+        "by_status": by_status,
+        "completed": sum(count for status, count in by_status.items() if status in {"completed", "confirmed", "closed"}),
+        "unfinished": sum(count for status, count in by_status.items() if status in unfinished_statuses),
+        "failed": sum(count for status, count in by_status.items() if status in {"failed", "cancelled"}),
+    }
+
+
 async def _generate_pocs_internal(audit_run_id: str, runtime: Any) -> dict[str, Any]:
     audit_run = await _get_audit_run(audit_run_id)
     if not audit_run:
@@ -3656,7 +4239,7 @@ async def _run_poc_writer_finding_internal(audit_run_id: str, runtime: Any, audi
         "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "poc-writer"),
         "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],
         "validation_attempts": [item for item in attempts if str(item.get("finding_id")) == finding_id],
-        "joern": _latest_joern_context(audit_run),
+        "codebase_memory": _codebase_memory_context(),
     }
     try:
         agent_result = await runtime.start_agent_run(
@@ -3771,7 +4354,7 @@ async def _run_poc_verifier_finding_internal(
         "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "poc-verifier"),
         "poc_evidence": poc_evidence,
         "source_sink_evidence": [item for item in evidence if item.get("finding_id") == finding_id and item.get("kind") == "source-sink-chain"],
-        "joern": _latest_joern_context(audit_run),
+        "codebase_memory": _codebase_memory_context(),
     }
     try:
         agent_result = await runtime.start_agent_run(
@@ -4737,14 +5320,14 @@ def _tool_failures(audit_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for event in audit_events:
         event_type = str(event.get("event_type") or "")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        if event_type in {"joern_cpg_failed", "joern_failed", "sca_failed", "semgrep_failed", "semgrep_skipped", "tool_unavailable"}:
+        if event_type in {"sca_failed", "semgrep_failed", "semgrep_skipped", "tool_unavailable"}:
             failures.append({"event_type": event_type, "payload": payload})
             continue
         if event_type != "pipeline_step_completed":
             continue
         step = str(payload.get("step") or "")
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-        if step in {"joern-cpg", "sca", "semgrep"} and (result.get("ok") is False or result.get("available") is False):
+        if step in {"sca", "semgrep"} and (result.get("ok") is False or result.get("available") is False):
             failures.append({"event_type": event_type, "step": step, "payload": result})
     return failures
 
@@ -4853,12 +5436,10 @@ async def _run_code_batch_analysis(
         task_db_id = f"{audit_run_id}-{plan.task_id}"
         async with semaphore:
             await mark_task(task_db_id, "running", {"risk_keywords": plan.risk_keywords, "metadata": plan.metadata})
-            joern_context = _latest_joern_context(audit_run)
             input_payload = {
                 "goal": (
-                    "Perform focused code vulnerability analysis for this batch. "
-                    "Find vulnerabilities in the project's own code, not only dependency CVEs. "
-                    "Return strict JSON with findings[], evidence[], and summary."
+                    "Perform high-recall candidate vulnerability discovery for this batch. "
+                    "Do not make final vulnerability judgements. Write every plausible candidate to the shared Whiteboard as candidate_vulnerability cards."
                 ),
                 "audit_phase": "code-batch-analysis",
                 "code_audit_task": {
@@ -4877,13 +5458,19 @@ async def _run_code_batch_analysis(
                         "source",
                     ],
                 },
-                "joern": joern_context,
+                "codebase_memory": _codebase_memory_context(),
+                "internal_tools": {
+                    "semgrep": {"enabled": bool(config.get("enable_batch_internal_semgrep", True)), "mode": "agent-invoked"},
+                    "sca": {"enabled": bool(config.get("enable_batch_internal_sca", True)), "mode": "agent-invoked"},
+                    "codebase_memory": {"enabled": True, "repo_path": "/workspace"},
+                },
+                "feedback_loop": config.get("feedback_loop") if isinstance(config.get("feedback_loop"), dict) else None,
                 "analysis_guidance": [
                     "Prioritize authentication, authorization, injection, file/path, SSRF, deserialization, crypto, secret handling, and business logic flaws.",
-                    "Use the complete workspace and MCP code search as needed, but keep findings tied to concrete files and lines.",
-                    "Use Joern MCP and the CPG artifact for entrypoint, source/sink, call-chain, and data-flow confirmation when Joern is available.",
-                    "If a suspected issue spans files, include the primary sink/source file and describe the chain in evidence.",
-                    "Do not report dependency CVEs here unless they directly enable a code path vulnerability.",
+                    "Use source and decompiled source roots when STRUCTURE.md says they are available.",
+                    "Use codebase-memory-mcp: call index_repository for /workspace when graph context is missing, then get_architecture, search_graph, trace_path, query_graph, get_code_snippet, detect_changes, or search_code as needed.",
+                    "Create Whiteboard candidate_vulnerability cards with source metadata: source, decompiled, semgrep, sca, codebase-memory, or agent.",
+                    "Prefer recall over precision. Validators will refine reachability later.",
                 ],
             }
             try:

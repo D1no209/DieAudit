@@ -15,6 +15,7 @@ import { RuntimePage } from "../pages/RuntimePage";
 import { RuntimeContainersPage } from "../pages/RuntimeContainersPage";
 import { RuntimeReadinessPage } from "../pages/RuntimeReadinessPage";
 import { RuntimeSandboxPage } from "../pages/RuntimeSandboxPage";
+import { WhiteboardPage } from "../pages/WhiteboardPage";
 
 export function renderOverviewRoute({ state }: DashboardController) {
   return (
@@ -72,8 +73,19 @@ export function renderAuditRunsRoute({ actions, state }: DashboardController) {
   );
 }
 
-export function renderAgentRunsRoute({ columns, state }: DashboardController) {
-  return <AgentRunsPage agentColumns={columns.agentColumns} agentRuns={state.agentRuns} auditRun={state.auditRun} />;
+export function renderAgentRunsRoute({ actions, columns, state }: DashboardController, onViewChange: (view: AppView) => void) {
+  return (
+    <AgentRunsPage
+      agentColumns={columns.agentColumns}
+      agentRuns={state.agentRuns}
+      auditRun={state.auditRun}
+      containers={state.containers}
+      executionGraph={state.executionGraph}
+      onOpenAgentEvents={actions.openAgentEvents}
+      onOpenContainerLogs={actions.openContainerLogs}
+      onViewWhiteboard={() => onViewChange("whiteboard")}
+    />
+  );
 }
 
 export function renderFindingsRoute({ actions, state }: DashboardController) {
@@ -108,6 +120,17 @@ export function renderReportsRoute({ actions, state }: DashboardController) {
       onGenerateReport={actions.generateReport}
       onOpenArtifact={actions.openArtifact}
       onPreviewArtifact={actions.previewArtifact}
+    />
+  );
+}
+
+export function renderWhiteboardRoute({ actions, state }: DashboardController) {
+  return (
+    <WhiteboardPage
+      auditRun={state.auditRun}
+      loading={state.loading}
+      whiteboard={state.whiteboard}
+      onRunWhiteboardSwarm={actions.runWhiteboardSwarm}
     />
   );
 }
@@ -202,6 +225,7 @@ export const routeRenderers: Record<AppView, (dashboard: DashboardController, on
   findings: renderFindingsRoute,
   "finding-review": renderFindingReviewRoute,
   dependencies: renderDependenciesRoute,
+  whiteboard: renderWhiteboardRoute,
   reports: renderReportsRoute,
   runtime: renderRuntimeRoute,
   "runtime-readiness": renderRuntimeReadinessRoute,

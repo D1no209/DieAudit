@@ -32,9 +32,6 @@ class Settings(BaseSettings):
     knowledge_embedding_timeout_seconds: float = 60.0
     knowledge_embedding_probe_on_readiness: bool = True
     agent_gateway_url: str = "http://agent-gateway:8000"
-    temporal_address: str = "temporal:7233"
-    temporal_namespace: str = "default"
-    temporal_task_queue: str = "dieaudit-audit-pipeline"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     local_llm_api_key: str = ""
@@ -72,11 +69,6 @@ class Settings(BaseSettings):
     pipeline_worker_heartbeat_interval_seconds: float = 5.0
     pipeline_worker_heartbeat_ttl_seconds: float = 30.0
     pipeline_worker_heartbeat_retention_seconds: float = 3600.0
-    enable_joern: bool = True
-    joern_required: bool = True
-    allow_joern_unavailable: bool = False
-    joern_timeout_seconds: int = 900
-    joern_query_packs: str = "entrypoints,authz,injection,file-io,network,secrets"
     enable_demo_templates: bool = False
 
 

@@ -12,14 +12,12 @@ $env:NO_PROXY = if ($env:NO_PROXY) { $env:NO_PROXY } else { "localhost,127.0.0.1
 $env:no_proxy = $env:NO_PROXY
 
 $images = @(
-    "dieaudit/tool-mcp-joern:local",
     "semgrep/semgrep:latest",
     "aquasec/trivy:latest",
-    "anchore/syft:latest",
-    "ghcr.io/joernio/joern:master"
+    "anchore/syft:latest"
 )
 
-docker compose --profile tools build tool-mcp-image tool-mcp-joern-image opencode-agent-image
+docker compose --profile tools build tool-mcp-image opencode-agent-image kimi-code-agent-image
 if ($IncludeDemo) {
     docker compose --profile demo build mock-agent-image mock-mcp-image
 }

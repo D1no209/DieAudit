@@ -378,12 +378,3 @@ def test_tool_evidence_payload_embeds_compact_execution_metadata() -> None:
     assert payload["tool_execution"]["command"] == ["osv-scanner"]
     assert "ignored" in payload["tool_execution"]
 
-
-def test_platform_joern_artifact_path_maps_container_artifacts_to_run_root(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(artifact_root=tmp_path))
-
-    path = routes._platform_joern_artifact_path("run-1", "/artifacts/joern-mcp/joern/cpg.bin.zip")
-
-    assert path == tmp_path / "joern" / "run-1" / "joern-mcp" / "joern" / "cpg.bin.zip"
