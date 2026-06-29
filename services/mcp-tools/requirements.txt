@@ -2,4 +2,4 @@ mcp==1.13.1
 httpx==0.28.1
 uvicorn==0.34.0
 semgrep==1.121.0
-setuptools==80.9.0
+setuptools==82.0.1
