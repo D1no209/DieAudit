@@ -1,6 +1,6 @@
-import { message } from "antd";
 import * as dashboardApi from "../../client/dashboardApi";
 import type { SandboxPocFormValues, SandboxServiceFormValues } from "../../types";
+import { toast } from "../../ui/toast";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
@@ -33,7 +33,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
     if (sandboxCapabilities?.sandbox_execution_available) {
       return true;
     }
-    message.error(sandboxUnavailableMessage());
+    toast.error(sandboxUnavailableMessage());
     return false;
   }
 
@@ -59,7 +59,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
 
   async function runSandboxPoc(values: SandboxPocFormValues) {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     if (!ensureSandboxExecutionAvailable()) {
@@ -86,7 +86,7 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
 
   async function startSandboxService(values: SandboxServiceFormValues) {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     if (!ensureSandboxExecutionAvailable()) {
@@ -115,11 +115,11 @@ export function useRuntimeActions(dashboardState: DashboardStateController, runn
 
   async function runSandboxTargetPoc(values: SandboxPocFormValues) {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     if (!sandboxTarget) {
-      message.error("请先启动 Sandbox Service");
+      toast.error("请先启动 Sandbox Service");
       return;
     }
     if (!ensureSandboxExecutionAvailable()) {

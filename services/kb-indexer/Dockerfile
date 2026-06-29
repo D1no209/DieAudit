@@ -1,4 +1,5 @@
 FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:0.5.31 /uv /uvx /usr/local/bin/
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -8,7 +9,7 @@ ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} http_proxy=${HTTP_PROXY}
 WORKDIR /app
 COPY services/platform-common /app/platform-common
 COPY services/kb-indexer/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN uv pip install --system --no-cache -r /app/requirements.txt
 COPY services/kb-indexer/app /app/app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

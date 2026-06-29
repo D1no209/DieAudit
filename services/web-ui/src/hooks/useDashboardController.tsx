@@ -18,7 +18,6 @@ export function useDashboardController(activeView: AppView) {
     artifactPreview,
     apiHealth,
     apiKey,
-    apiKeyForm,
     apiKeys,
     auditRun,
     authStatus,
@@ -30,13 +29,10 @@ export function useDashboardController(activeView: AppView) {
     dockerHealth,
     error,
     findings,
-    gitForm,
     knowledgeDocuments,
     knowledgeFiles,
     knowledgeMatches,
     knowledgeStatus,
-    knowledgeSearchForm,
-    knowledgeUploadForm,
     lastResponse,
     loading,
     managedRuntime,
@@ -64,7 +60,6 @@ export function useDashboardController(activeView: AppView) {
     whiteboard,
     workerHeartbeats,
     zipFiles,
-    zipForm,
   } = dashboardState;
 
   const runner = useDashboardRefresh(dashboardState);
@@ -117,13 +112,7 @@ export function useDashboardController(activeView: AppView) {
       setZipFiles,
     },
     columns,
-    forms: {
-      apiKeyForm,
-      gitForm,
-      knowledgeSearchForm,
-      knowledgeUploadForm,
-      zipForm,
-    },
+    forms: {},
     state: {
       agentEvents,
       agentRuns,

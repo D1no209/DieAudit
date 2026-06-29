@@ -1,17 +1,11 @@
-import { Card, Descriptions, Tag } from "antd";
 import type { KnowledgeDocument, KnowledgeStatus } from "../../types";
+import { Badge, Panel } from "../../ui";
+import { statusTone } from "../../utils/format";
 
 type Props = {
   documents: KnowledgeDocument[];
   status?: KnowledgeStatus;
 };
-
-function statusColor(value?: string) {
-  if (value === "pass") return "green";
-  if (value === "warn") return "gold";
-  if (value === "fail") return "red";
-  return "default";
-}
 
 export function KnowledgeStatusPanel({ documents, status }: Props) {
   const indexedChunks = documents.reduce((total, item) => total + (item.chunk_count || 0), 0);
@@ -19,21 +13,24 @@ export function KnowledgeStatusPanel({ documents, status }: Props) {
   const chunkCount = status?.documents?.chunk_count ?? indexedChunks;
 
   return (
-    <Card title="Readiness">
-      <Descriptions column={1} size="small">
-        <Descriptions.Item label="Embedding">
-          <Tag color={statusColor(status?.embedding?.status)}>{status?.embedding?.status || "unknown"}</Tag>
-          {status?.embedding?.provider || "-"}
-        </Descriptions.Item>
-        <Descriptions.Item label="Embedding Detail">{status?.embedding?.message || "-"}</Descriptions.Item>
-        <Descriptions.Item label="Collection">
-          <Tag color={statusColor(status?.vector_store?.status)}>{status?.vector_store?.status || "unknown"}</Tag>
-          {status?.vector_store?.collection || status?.embedding?.collection || "-"}
-        </Descriptions.Item>
-        <Descriptions.Item label="Vector Detail">{status?.vector_store?.message || "-"}</Descriptions.Item>
-        <Descriptions.Item label="Documents">{documentCount}</Descriptions.Item>
-        <Descriptions.Item label="Chunks">{chunkCount}</Descriptions.Item>
-      </Descriptions>
-    </Card>
+    <Panel title="Readiness">
+      <dl className="grid gap-3 text-sm">
+        <InfoRow label="Embedding" value={<span className="inline-flex items-center gap-2"><Badge tone={statusTone(status?.embedding?.status)}>{status?.embedding?.status || "unknown"}</Badge>{status?.embedding?.provider || "-"}</span>} />
+        <InfoRow label="Embedding Detail" value={status?.embedding?.message || "-"} />
+        <InfoRow label="Collection" value={<span className="inline-flex items-center gap-2"><Badge tone={statusTone(status?.vector_store?.status)}>{status?.vector_store?.status || "unknown"}</Badge>{status?.vector_store?.collection || status?.embedding?.collection || "-"}</span>} />
+        <InfoRow label="Vector Detail" value={status?.vector_store?.message || "-"} />
+        <InfoRow label="Documents" value={documentCount} />
+        <InfoRow label="Chunks" value={chunkCount} />
+      </dl>
+    </Panel>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="grid gap-1">
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="text-slate-800">{value}</dd>
+    </div>
   );
 }

@@ -1,7 +1,5 @@
-import type { ColumnsType } from "antd/es/table";
-import type { FormInstance } from "antd/es/form";
-import type { UploadFile } from "antd/es/upload/interface";
 import type { KnowledgeDocument, KnowledgeMatch, KnowledgeStatus } from "../types";
+import type { DataColumn } from "../ui";
 import { PageHeader } from "../components/PageHeader";
 import { KnowledgeDocumentsPanel } from "./knowledge/KnowledgeDocumentsPanel";
 import { KnowledgeSearchPanel } from "./knowledge/KnowledgeSearchPanel";
@@ -9,17 +7,15 @@ import { KnowledgeStatusPanel } from "./knowledge/KnowledgeStatusPanel";
 import { KnowledgeUploadPanel } from "./knowledge/KnowledgeUploadPanel";
 
 type Props = {
-  knowledgeColumns: ColumnsType<KnowledgeDocument>;
+  knowledgeColumns: DataColumn<KnowledgeDocument>[];
   knowledgeDocuments: KnowledgeDocument[];
-  knowledgeFiles: UploadFile[];
+  knowledgeFiles: File[];
   knowledgeMatches: KnowledgeMatch[];
-  knowledgeSearchForm: FormInstance;
   knowledgeStatus?: KnowledgeStatus;
-  knowledgeUploadForm: FormInstance;
   loading: boolean;
   selectedProjectId?: string;
   onSearchKnowledge: (values: { query: string; project_id?: string; limit?: string }) => void;
-  onSetKnowledgeFiles: (files: UploadFile[]) => void;
+  onSetKnowledgeFiles: (files: File[]) => void;
   onUploadKnowledgeDocument: (values: { title: string; scope?: string; project_id?: string }) => void;
 };
 
@@ -28,9 +24,7 @@ export function KnowledgePage({
   knowledgeDocuments,
   knowledgeFiles,
   knowledgeMatches,
-  knowledgeSearchForm,
   knowledgeStatus,
-  knowledgeUploadForm,
   loading,
   selectedProjectId,
   onSearchKnowledge,
@@ -40,12 +34,11 @@ export function KnowledgePage({
   return (
     <>
       <PageHeader title="Knowledge" />
-      <div className="knowledge-grid section">
-        <div className="panel-stack">
+      <div className="grid gap-4 xl:grid-cols-[minmax(420px,0.9fr)_minmax(480px,1.1fr)]">
+        <div className="grid gap-4">
           <KnowledgeStatusPanel documents={knowledgeDocuments} status={knowledgeStatus} />
           <KnowledgeUploadPanel
             files={knowledgeFiles}
-            form={knowledgeUploadForm}
             loading={loading}
             selectedProjectId={selectedProjectId}
             onSetFiles={onSetKnowledgeFiles}
@@ -53,13 +46,7 @@ export function KnowledgePage({
           />
           <KnowledgeDocumentsPanel columns={knowledgeColumns} documents={knowledgeDocuments} />
         </div>
-        <KnowledgeSearchPanel
-          form={knowledgeSearchForm}
-          loading={loading}
-          matches={knowledgeMatches}
-          selectedProjectId={selectedProjectId}
-          onSearch={onSearchKnowledge}
-        />
+        <KnowledgeSearchPanel loading={loading} matches={knowledgeMatches} selectedProjectId={selectedProjectId} onSearch={onSearchKnowledge} />
       </div>
     </>
   );

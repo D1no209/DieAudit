@@ -1,8 +1,6 @@
-import { Alert, List, Space, Tag, Typography } from "antd";
 import type { RuntimeReadinessCheck } from "../../types";
+import { Alert, Badge } from "../../ui";
 import { readinessColor, renderReadinessDescription } from "../../utils/format";
-
-const { Text } = Typography;
 
 type Props = {
   checks: RuntimeReadinessCheck[];
@@ -12,25 +10,20 @@ type Props = {
 
 export function ReadinessCheckList({ checks, emptyText, type = "success" }: Props) {
   if (checks.length === 0) {
-    return <Alert type={type} showIcon message={emptyText} />;
+    return <Alert tone={type} title={emptyText} />;
   }
 
   return (
-    <List
-      dataSource={checks}
-      renderItem={(item) => (
-        <List.Item>
-          <List.Item.Meta
-            title={
-              <Space>
-                <Tag color={readinessColor(item.status)}>{item.status}</Tag>
-                <Text>{item.title}</Text>
-              </Space>
-            }
-            description={renderReadinessDescription(item)}
-          />
-        </List.Item>
-      )}
-    />
+    <div className="grid gap-3">
+      {checks.map((item) => (
+        <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Badge tone={readinessColor(item.status)}>{item.status}</Badge>
+            <span className="font-medium text-slate-800">{item.title}</span>
+          </div>
+          {renderReadinessDescription(item)}
+        </div>
+      ))}
+    </div>
   );
 }

@@ -1,22 +1,7 @@
-import {
-  ApiOutlined,
-  BugOutlined,
-  CloudServerOutlined,
-  FolderOpenOutlined,
-  SafetyCertificateOutlined,
-} from "@ant-design/icons";
-import { Alert, Card, Statistic, Typography } from "antd";
-import type {
-  ApiHealth,
-  AuthStatus,
-  DockerHealth,
-  ManagedRuntime,
-  RuntimeReadiness,
-  SandboxCapabilities,
-} from "../types";
-import { PageHeader } from "../components/PageHeader";
-
-const { Text } = Typography;
+import { Activity, Bug, Container, FolderOpen, KeyRound, Network, ShieldCheck } from "lucide-react";
+import type { ApiHealth, AuthStatus, DockerHealth, ManagedRuntime, RuntimeReadiness, SandboxCapabilities } from "../types";
+import { Alert, Badge, MetricCard, PageHeader, Panel } from "../ui";
+import { statusTone } from "../utils/format";
 
 type Props = {
   apiHealth?: ApiHealth;
@@ -45,52 +30,69 @@ export function OverviewPage({
   return (
     <>
       <PageHeader title="Overview" />
-      {!runtimeReadiness?.ok && firstNextAction && (
+      {!runtimeReadiness?.ok && firstNextAction ? (
         <Alert
-          className="section"
-          type="error"
-          showIcon
-          message={firstNextAction.title || "Production readiness blocker"}
+          className="mb-5"
+          tone="danger"
+          title={firstNextAction.title || "Production readiness blocker"}
           description={firstNextAction.remediation?.[0] || "Open Runtime > Readiness for the full remediation checklist."}
         />
-      )}
-      <div className="stats-grid section">
-        <Card><Statistic title="Web API" value={apiHealth?.ok ? "Healthy" : "Unknown"} prefix={<ApiOutlined />} /></Card>
-        <Card>
-          <Statistic title="API Auth" value={authStatus?.enabled ? "Enabled" : "Disabled"} prefix={<SafetyCertificateOutlined />} />
-          {!authStatus?.enabled && <Text type="danger">Set DIEAUDIT_API_KEY before production use.</Text>}
-        </Card>
-        <Card>
-          <Statistic
-            title="Production Readiness"
-            value={runtimeReadiness?.ok ? "Ready" : "Not Ready"}
-            prefix={<SafetyCertificateOutlined />}
-          />
-          <Text type={runtimeReadiness?.ok ? "success" : "danger"}>
-            fail {runtimeReadiness?.summary?.fail ?? "-"} / warn {runtimeReadiness?.summary?.warn ?? "-"} / pass {runtimeReadiness?.summary?.pass ?? "-"}
-          </Text>
-          {!runtimeReadiness?.ok && firstBlockingCheck && (
-            <Text type="secondary">{firstBlockingCheck.title}</Text>
-          )}
-        </Card>
-        <Card><Statistic title="Docker Runtime" value={dockerHealth?.ok ? "Ready" : "Unknown"} prefix={<CloudServerOutlined />} /></Card>
-        <Card><Statistic title="Projects" value={projectsCount} prefix={<FolderOpenOutlined />} /></Card>
-        <Card><Statistic title="Findings" value={findingsCount} prefix={<BugOutlined />} /></Card>
-        <Card><Statistic title="Runtime Containers" value={managedRuntime?.summary?.container_count ?? 0} prefix={<CloudServerOutlined />} /></Card>
-        <Card>
-          <Statistic
-            title={`Sandbox ${sandboxCapabilities?.requested_runtime || ""}`}
-            value={sandboxCapabilities?.sandbox_execution_available ? "Ready" : "Unavailable"}
-            prefix={<SafetyCertificateOutlined />}
-          />
-          {sandboxCapabilities?.requested_runtime === "runc" && !sandboxCapabilities?.strong_isolation_available && (
-            <Text type={sandboxCapabilities?.allow_runc_sandbox ? "warning" : "danger"}>
-              {sandboxCapabilities?.allow_runc_sandbox ? "Weak runc isolation enabled" : "Strong isolation unavailable"}
-            </Text>
-          )}
-          {sandboxCapabilities?.warnings?.[0] && <Text type="secondary">{sandboxCapabilities.warnings[0]}</Text>}
-        </Card>
+      ) : null}
+
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard icon={<Activity className="h-5 w-5" />} label="Web API" value={apiHealth?.ok ? "Healthy" : "Unknown"} />
+        <MetricCard
+          icon={<KeyRound className="h-5 w-5" />}
+          label="API Auth"
+          value={authStatus?.enabled ? "Enabled" : "Disabled"}
+          detail={!authStatus?.enabled ? <span className="text-red-700">Set DIEAUDIT_API_KEY before production use.</span> : null}
+        />
+        <MetricCard
+          icon={<ShieldCheck className="h-5 w-5" />}
+          label="Production Readiness"
+          value={runtimeReadiness?.ok ? "Ready" : "Not Ready"}
+          detail={
+            <span className="grid gap-1">
+              <span>fail {runtimeReadiness?.summary?.fail ?? "-"} / warn {runtimeReadiness?.summary?.warn ?? "-"} / pass {runtimeReadiness?.summary?.pass ?? "-"}</span>
+              {!runtimeReadiness?.ok && firstBlockingCheck ? <span>{firstBlockingCheck.title}</span> : null}
+            </span>
+          }
+        />
+        <MetricCard icon={<Network className="h-5 w-5" />} label="Docker Runtime" value={dockerHealth?.ok ? "Ready" : "Unknown"} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+        <Panel title="Audit Surface">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <MetricInline icon={<FolderOpen className="h-4 w-4" />} label="Projects" value={projectsCount} />
+            <MetricInline icon={<Bug className="h-4 w-4" />} label="Findings" value={findingsCount} />
+            <MetricInline icon={<Container className="h-4 w-4" />} label="Runtime Containers" value={managedRuntime?.summary?.container_count ?? 0} />
+          </div>
+        </Panel>
+        <Panel title="Sandbox">
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge tone={sandboxCapabilities?.sandbox_execution_available ? "success" : "danger"}>
+              {sandboxCapabilities?.sandbox_execution_available ? "Ready" : "Unavailable"}
+            </Badge>
+            <span className="text-sm text-slate-600">Runtime {sandboxCapabilities?.requested_runtime || "-"}</span>
+            {sandboxCapabilities?.requested_runtime === "runc" && !sandboxCapabilities?.strong_isolation_available ? (
+              <Badge tone={sandboxCapabilities?.allow_runc_sandbox ? "warning" : "danger"}>
+                {sandboxCapabilities?.allow_runc_sandbox ? "Weak runc isolation enabled" : "Strong isolation unavailable"}
+              </Badge>
+            ) : null}
+          </div>
+          {sandboxCapabilities?.warnings?.[0] ? <p className="mt-3 text-sm text-slate-500">{sandboxCapabilities.warnings[0]}</p> : null}
+        </Panel>
       </div>
     </>
+  );
+}
+
+function MetricInline({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center gap-2 text-xs font-medium text-slate-500">{icon}{label}</div>
+      <div className="mt-2 text-xl font-semibold text-slate-950">{value}</div>
+    </div>
   );
 }

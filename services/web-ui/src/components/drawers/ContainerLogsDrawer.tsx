@@ -1,13 +1,8 @@
-import { Drawer } from "antd";
+import { Drawer } from "../../ui";
 
-type Props = {
-  logs?: { title: string; body: string };
-  onClose: () => void;
-};
-
-export function ContainerLogsDrawer({ logs, onClose }: Props) {
+export function ContainerLogsDrawer({ logs, onClose }: { logs?: { title: string; body: string }; onClose: () => void }) {
   return (
-    <Drawer title={`Container Logs - ${logs?.title || ""}`} open={Boolean(logs)} width={820} onClose={onClose}>
+    <Drawer open={Boolean(logs)} onOpenChange={(open) => !open && onClose()} title={logs?.title || "Container Logs"}>
       <pre>{logs?.body || ""}</pre>
     </Drawer>
   );

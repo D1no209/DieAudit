@@ -1,7 +1,7 @@
-import { Button } from "antd";
-import { BugOutlined } from "@ant-design/icons";
+import { Bug } from "lucide-react";
 import type { ArtifactRef, FindingDetail, SandboxPocFormValues } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { Button } from "../ui";
 import { FindingDetailPanel } from "./findings/FindingDetailPanel";
 
 type Props = {
@@ -26,10 +26,8 @@ export function FindingReviewPage({
   onViewFindings,
 }: Props) {
   const pageActions = (
-    <div className="action-bar">
-      <Button icon={<BugOutlined />} onClick={onViewFindings}>
-        返回 Findings
-      </Button>
+    <div className="flex flex-wrap gap-2">
+      <Button icon={<Bug className="h-4 w-4" />} onClick={onViewFindings}>返回 Findings</Button>
     </div>
   );
 

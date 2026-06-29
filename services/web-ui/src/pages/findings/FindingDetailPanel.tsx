@@ -1,9 +1,7 @@
-import { FileTextOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Collapse, Descriptions, Empty, Form, Input, InputNumber, List, Space, Switch, Tag, Typography } from "antd";
+import { FileText, ShieldCheck } from "lucide-react";
 import type { ArtifactRef, FindingDetail, SandboxPocFormValues } from "../../types";
-import { severityColor } from "../../utils/format";
-
-const { Text } = Typography;
+import { Accordion, Alert, Badge, Button, EmptyState, Field, NumberInput, Panel, SwitchField, Tabs, Textarea, Input, checkedFieldValue, fieldValue, numberFieldValue } from "../../ui";
+import { severityColor, statusTone } from "../../utils/format";
 
 type Props = {
   finding?: FindingDetail;
@@ -26,164 +24,115 @@ export function FindingDetailPanel({
 }: Props) {
   if (!finding) {
     return (
-      <Card className="section">
-        <Empty
-          description="Select a finding from the Findings page to review evidence, validation attempts, and PoC execution."
-        />
-      </Card>
+      <Panel>
+        <EmptyState description="Select a finding from the Findings page to review evidence, validation attempts, and PoC execution." />
+      </Panel>
     );
   }
 
   return (
-    <Space direction="vertical" size={16} className="drawer-stack">
-      {!sandboxExecutionAvailable && (
-        <Alert type="warning" showIcon message="Sandbox execution is unavailable" description={sandboxUnavailableReason} />
-      )}
-      <Card title={finding.finding.title}>
-        <Descriptions bordered size="small" column={1}>
-          <Descriptions.Item label="ID">{finding.finding.finding_id}</Descriptions.Item>
-          <Descriptions.Item label="Severity">
-            <Tag color={severityColor(finding.finding.severity)}>{finding.finding.severity}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Status">
-            <Tag>{finding.finding.status}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="Location">
-            {finding.finding.file_path || "-"}:{finding.finding.line_start || "-"}
-          </Descriptions.Item>
-          <Descriptions.Item label="Source">{finding.finding.source}</Descriptions.Item>
-          <Descriptions.Item label="Description">{finding.finding.description || "-"}</Descriptions.Item>
-          <Descriptions.Item label="Tracking Markdown">
-            <Space wrap>
-              <Text code>{finding.finding.finding_markdown?.relative_path || "-"}</Text>
-              <Button
-                size="small"
-                icon={<FileTextOutlined />}
-                disabled={!finding.finding.finding_markdown}
-                onClick={() => onPreviewArtifact(finding.finding.finding_markdown)}
-              >
-                预览
-              </Button>
-              <Button
-                size="small"
-                icon={<FileTextOutlined />}
-                disabled={!finding.finding.finding_markdown}
-                onClick={() => onOpenArtifact(finding.finding.finding_markdown)}
-              >
-                打开
-              </Button>
-            </Space>
-          </Descriptions.Item>
-        </Descriptions>
-      </Card>
-      <Collapse
-        defaultActiveKey={["evidence", "attempts"]}
+    <div className="grid gap-4">
+      {!sandboxExecutionAvailable ? <Alert tone="warning" title="Sandbox execution is unavailable" description={sandboxUnavailableReason} /> : null}
+      <Panel title={finding.finding.title}>
+        <dl className="grid gap-3 text-sm">
+          <InfoRow label="ID" value={finding.finding.finding_id} />
+          <InfoRow label="Severity" value={<Badge tone={severityColor(finding.finding.severity)}>{finding.finding.severity}</Badge>} />
+          <InfoRow label="Status" value={<Badge tone={statusTone(finding.finding.status)}>{finding.finding.status}</Badge>} />
+          <InfoRow label="Location" value={`${finding.finding.file_path || "-"}:${finding.finding.line_start || "-"}`} />
+          <InfoRow label="Source" value={finding.finding.source} />
+          <InfoRow label="Description" value={finding.finding.description || "-"} />
+          <InfoRow
+            label="Tracking Markdown"
+            value={
+              <span className="flex flex-wrap items-center gap-2">
+                <code className="text-xs">{finding.finding.finding_markdown?.relative_path || "-"}</code>
+                <Button size="sm" icon={<FileText className="h-4 w-4" />} disabled={!finding.finding.finding_markdown} onClick={() => onPreviewArtifact(finding.finding.finding_markdown)}>预览</Button>
+                <Button size="sm" icon={<FileText className="h-4 w-4" />} disabled={!finding.finding.finding_markdown} onClick={() => onOpenArtifact(finding.finding.finding_markdown)}>打开</Button>
+              </span>
+            }
+          />
+        </dl>
+      </Panel>
+      <Tabs
         items={[
           {
             key: "evidence",
             label: `Evidence (${finding.evidence.length})`,
             children: (
-              <List
-                dataSource={finding.evidence}
-                renderItem={(item) => (
-                  <List.Item
-                    actions={[
-                      <Button
-                        key="preview"
-                        size="small"
-                        icon={<FileTextOutlined />}
-                        disabled={!item.artifact && !item.artifact_path}
-                        onClick={() => onPreviewArtifact(item.artifact, item.artifact_path)}
-                      >
-                        预览
-                      </Button>,
-                      <Button
-                        key="artifact"
-                        size="small"
-                        icon={<FileTextOutlined />}
-                        disabled={!item.artifact && !item.artifact_path}
-                        onClick={() => onOpenArtifact(item.artifact, item.artifact_path)}
-                      >
-                        下载
-                      </Button>,
-                    ]}
-                  >
-                    <List.Item.Meta
-                      title={
-                        <Space>
-                          <Tag>{item.kind}</Tag>
-                          <Text>{item.summary || item.artifact?.name || item.evidence_id}</Text>
-                        </Space>
-                      }
-                      description={<pre>{JSON.stringify(item, null, 2)}</pre>}
-                    />
-                  </List.Item>
-                )}
-              />
+              <div className="grid gap-3">
+                {finding.evidence.map((item) => (
+                  <div key={item.evidence_id} className="rounded-lg border border-slate-200 bg-white p-3">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <Badge>{item.kind}</Badge>
+                        <span className="font-medium text-slate-900">{item.summary || item.artifact?.name || item.evidence_id}</span>
+                      </span>
+                      <span className="flex gap-2">
+                        <Button size="sm" icon={<FileText className="h-4 w-4" />} disabled={!item.artifact && !item.artifact_path} onClick={() => onPreviewArtifact(item.artifact, item.artifact_path)}>预览</Button>
+                        <Button size="sm" icon={<FileText className="h-4 w-4" />} disabled={!item.artifact && !item.artifact_path} onClick={() => onOpenArtifact(item.artifact, item.artifact_path)}>下载</Button>
+                      </span>
+                    </div>
+                    <pre>{JSON.stringify(item, null, 2)}</pre>
+                  </div>
+                ))}
+              </div>
             ),
           },
-          {
-            key: "attempts",
-            label: `Validation Attempts (${finding.validation_attempts.length})`,
-            children: <pre>{JSON.stringify(finding.validation_attempts, null, 2)}</pre>,
-          },
+          { key: "attempts", label: `Validation Attempts (${finding.validation_attempts.length})`, children: <pre>{JSON.stringify(finding.validation_attempts, null, 2)}</pre> },
           {
             key: "poc",
             label: "PoC Execution",
             children: (
-              <Form
-                layout="vertical"
-                initialValues={{
-                  image: "python:3.12-slim",
-                  expected_exit_code: 0,
-                  mount_workspace: true,
-                  retain_runtime_on_failure: false,
-                  timeout_seconds: 120,
+              <form
+                className="grid gap-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const formData = new FormData(event.currentTarget);
+                  onRunFindingPoc({
+                    image: fieldValue(formData, "image") || "",
+                    command: fieldValue(formData, "command") || "",
+                    timeout_seconds: numberFieldValue(formData, "timeout_seconds"),
+                    expected_exit_code: numberFieldValue(formData, "expected_exit_code"),
+                    mount_workspace: checkedFieldValue(formData, "mount_workspace"),
+                    retain_runtime_on_failure: checkedFieldValue(formData, "retain_runtime_on_failure"),
+                  });
                 }}
-                onFinish={onRunFindingPoc}
               >
-                <Form.Item name="image" label="Image" rules={[{ required: true }]}>
-                  <Input />
-                </Form.Item>
-                <Form.Item name="command" label="Command" rules={[{ required: true }]}>
-                  <Input.TextArea rows={5} placeholder={"python\n-c\nprint('project-specific PoC')"} />
-                </Form.Item>
-                <Space wrap>
-                  <Form.Item name="timeout_seconds" label="Timeout">
-                    <InputNumber min={1} max={3600} />
-                  </Form.Item>
-                  <Form.Item name="expected_exit_code" label="Expected Exit">
-                    <InputNumber />
-                  </Form.Item>
-                </Space>
-                <Space wrap>
-                  <Form.Item name="mount_workspace" label="Mount Workspace" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="retain_runtime_on_failure" label="Retain On Failure" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                </Space>
+                <Field label="Image"><Input name="image" required defaultValue="python:3.12-slim" /></Field>
+                <Field label="Command"><Textarea name="command" required rows={5} placeholder={"python\n-c\nprint('project-specific PoC')"} /></Field>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Timeout"><NumberInput name="timeout_seconds" min={1} max={3600} defaultValue={120} /></Field>
+                  <Field label="Expected Exit"><NumberInput name="expected_exit_code" defaultValue={0} /></Field>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <SwitchField name="mount_workspace" label="Mount Workspace" defaultChecked />
+                  <SwitchField name="retain_runtime_on_failure" label="Retain On Failure" />
+                </div>
                 <Button
-                  icon={<SafetyCertificateOutlined />}
+                  icon={<ShieldCheck className="h-4 w-4" />}
                   loading={loading}
-                  htmlType="submit"
-                  type="primary"
+                  type="submit"
+                  variant="primary"
                   disabled={!sandboxExecutionAvailable}
                   title={sandboxExecutionAvailable ? undefined : sandboxUnavailableReason}
                 >
                   Run PoC
                 </Button>
-              </Form>
+              </form>
             ),
           },
-          {
-            key: "raw",
-            label: "Raw",
-            children: <pre>{JSON.stringify(finding.finding.raw || {}, null, 2)}</pre>,
-          },
+          { key: "raw", label: "Raw", children: <pre>{JSON.stringify(finding.finding.raw || {}, null, 2)}</pre> },
         ]}
       />
-    </Space>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="grid gap-1">
+      <dt className="text-xs font-medium text-slate-500">{label}</dt>
+      <dd className="text-slate-800">{value}</dd>
+    </div>
   );
 }

@@ -1,14 +1,9 @@
-import { Drawer } from "antd";
 import type { AgentRunEvent } from "../../types";
+import { Drawer } from "../../ui";
 
-type Props = {
-  events?: AgentRunEvent[];
-  onClose: () => void;
-};
-
-export function AgentEventsDrawer({ events, onClose }: Props) {
+export function AgentEventsDrawer({ events, onClose }: { events?: AgentRunEvent[]; onClose: () => void }) {
   return (
-    <Drawer title="Agent Events" open={Boolean(events)} width={720} onClose={onClose}>
+    <Drawer open={Boolean(events)} onOpenChange={(open) => !open && onClose()} title="Agent Events">
       <pre>{JSON.stringify(events || [], null, 2)}</pre>
     </Drawer>
   );

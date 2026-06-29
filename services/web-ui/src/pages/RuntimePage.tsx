@@ -1,8 +1,7 @@
-import { ClusterOutlined, PlayCircleOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
-import { Button, Card, Statistic } from "antd";
+import { Boxes, PlayCircle, ShieldCheck } from "lucide-react";
 import type { AppView } from "../navigation";
 import type { AuditRun, ContainerRow, RuntimeReadiness, SandboxCapabilities, WorkerHeartbeat } from "../types";
-import { PageHeader } from "../components/PageHeader";
+import { Button, MetricCard, PageHeader } from "../ui";
 import { RuntimeActionBar } from "./runtime/RuntimeActionBar";
 
 type Props = {
@@ -28,54 +27,29 @@ export function RuntimePage({
   onCleanupExpiredRuntime,
   onViewChange,
 }: Props) {
-  const pageActions = (
-    <RuntimeActionBar
-      loading={loading}
-      onCleanup={onCleanup}
-      onCleanupExpiredRuntime={onCleanupExpiredRuntime}
-    />
-  );
+  const pageActions = <RuntimeActionBar loading={loading} onCleanup={onCleanup} onCleanupExpiredRuntime={onCleanupExpiredRuntime} />;
 
   return (
     <>
       <PageHeader title="Runtime" actions={pageActions} />
-      <div className="runtime-route-grid section">
-        <Card
-          title="Readiness"
-          actions={[
-            <Button key="open" type="link" icon={<SafetyCertificateOutlined />} onClick={() => onViewChange("runtime-readiness")}>
-              打开
-            </Button>,
-          ]}
-        >
-          <Statistic title="Blocking Checks" value={runtimeReadiness?.summary?.fail ?? 0} />
-        </Card>
-        <Card
-          title="Containers"
-          actions={[
-            <Button key="open" type="link" icon={<ClusterOutlined />} onClick={() => onViewChange("runtime-containers")}>
-              打开
-            </Button>,
-          ]}
-        >
-          <Statistic title="Managed Containers" value={containers.length} />
-        </Card>
-        <Card
-          title="Sandbox"
-          actions={[
-            <Button key="open" type="link" icon={<PlayCircleOutlined />} onClick={() => onViewChange("runtime-sandbox")}>
-              打开
-            </Button>,
-          ]}
-        >
-          <Statistic title="Execution Available" value={sandboxCapabilities?.sandbox_execution_available ? "Yes" : "No"} />
-        </Card>
-        <Card title="Workers">
-          <Statistic title="Heartbeats" value={workerHeartbeats.length} />
-        </Card>
-        <Card title="Active AuditRun">
-          <Statistic title="Status" value={auditRun?.status || "None"} />
-        </Card>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <MetricCard
+          label="Readiness"
+          value={runtimeReadiness?.summary?.fail ?? 0}
+          detail={<Button size="sm" variant="link" icon={<ShieldCheck className="h-4 w-4" />} onClick={() => onViewChange("runtime-readiness")}>打开</Button>}
+        />
+        <MetricCard
+          label="Containers"
+          value={containers.length}
+          detail={<Button size="sm" variant="link" icon={<Boxes className="h-4 w-4" />} onClick={() => onViewChange("runtime-containers")}>打开</Button>}
+        />
+        <MetricCard
+          label="Sandbox"
+          value={sandboxCapabilities?.sandbox_execution_available ? "Yes" : "No"}
+          detail={<Button size="sm" variant="link" icon={<PlayCircle className="h-4 w-4" />} onClick={() => onViewChange("runtime-sandbox")}>打开</Button>}
+        />
+        <MetricCard label="Workers" value={workerHeartbeats.length} detail="Heartbeats" />
+        <MetricCard label="Active AuditRun" value={auditRun?.status || "None"} />
       </div>
     </>
   );

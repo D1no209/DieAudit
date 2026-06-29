@@ -1,7 +1,7 @@
-import { message } from "antd";
 import * as dashboardApi from "../../client/dashboardApi";
 import { hashFromAppView } from "../../navigation";
 import type { ArtifactRef, ContainerRow } from "../../types";
+import { toast } from "../../ui/toast";
 import { artifactFileName, artifactUrl } from "../../utils/format";
 import type { DashboardStateController } from "../useDashboardState";
 
@@ -22,7 +22,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
 
   async function runSca() {
     if (!auditRun) {
-      message.error("请先启动 AuditRun");
+      toast.error("请先启动 AuditRun");
       return;
     }
     await runner.runAction(async () => {
@@ -34,7 +34,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
 
   async function runCodeAnalysis() {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     await runner.runAction(async () => {
@@ -46,7 +46,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
 
   async function runPipeline() {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     await runner.runAction(async () => {
@@ -58,7 +58,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
 
   async function runJudge() {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     await runner.runAction(async () => {
@@ -70,7 +70,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
 
   async function runWhiteboardSwarm() {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     await runner.runAction(async () => {
@@ -82,7 +82,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
 
   async function generateReport() {
     if (!auditRun) {
-      message.error("请先创建 AuditRun");
+      toast.error("请先创建 AuditRun");
       return;
     }
     await runner.runAction(async () => {
@@ -95,7 +95,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
   async function openArtifact(artifact?: ArtifactRef, fallbackPath?: string) {
     const url = artifactUrl(artifact, fallbackPath);
     if (!url) {
-      message.warning("Artifact is not available");
+      toast.warning("Artifact is not available");
       return;
     }
     await runner.runAction(async () => {
@@ -115,7 +115,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
   async function previewArtifact(artifact?: ArtifactRef, fallbackPath?: string) {
     const url = artifactUrl(artifact, fallbackPath);
     if (!url) {
-      message.warning("Artifact is not available");
+      toast.warning("Artifact is not available");
       return;
     }
     await runner.runAction(async () => {

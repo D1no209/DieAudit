@@ -1,4 +1,5 @@
 FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:0.5.31 /uv /uvx /usr/local/bin/
 
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -33,7 +34,7 @@ RUN set -eux; \
     syft version
 
 COPY services/mcp-tools/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN uv pip install --system --no-cache -r /app/requirements.txt
 
 COPY services/mcp-tools/tool_mcp.py /app/tool_mcp.py
 

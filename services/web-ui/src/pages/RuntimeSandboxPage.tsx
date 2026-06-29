@@ -1,6 +1,6 @@
-import { Alert } from "antd";
 import type { AuditRun, SandboxCapabilities, SandboxPocFormValues, SandboxServiceFormValues } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { Alert } from "../ui";
 import { RuntimeSandboxPanel } from "./runtime/RuntimeSandboxPanel";
 
 type Props = {
@@ -31,10 +31,9 @@ export function RuntimeSandboxPage({
       <PageHeader title="Runtime Sandbox" />
       {!sandboxExecutionAvailable && (
         <Alert
-          className="section"
-          type="warning"
-          showIcon
-          message="Sandbox execution is unavailable"
+          className="mb-5"
+          tone="warning"
+          title="Sandbox execution is unavailable"
           description={sandboxUnavailableReason}
         />
       )}

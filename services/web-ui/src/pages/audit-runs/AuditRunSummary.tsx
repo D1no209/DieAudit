@@ -1,7 +1,6 @@
-import { Card, Statistic, Tag, Typography } from "antd";
 import type { AuditRun, PipelineStatus, Project } from "../../types";
-
-const { Text } = Typography;
+import { Badge, MetricCard } from "../../ui";
+import { statusTone } from "../../utils/format";
 
 type Props = {
   agentRunsCount: number;
@@ -13,25 +12,15 @@ type Props = {
 
 export function AuditRunSummary({ agentRunsCount, auditRun, pipelineStatus, reportsCount, selectedProject }: Props) {
   return (
-    <div className="run-summary-grid section">
-      <Card>
-        <Statistic title="Project" value={selectedProject?.name || "-"} />
-        <Text type="secondary">{selectedProject?.project_id || "No project selected"}</Text>
-      </Card>
-      <Card>
-        <Statistic title="AuditRun" value={auditRun?.audit_run_id || "-"} />
-        <Text type="secondary">{auditRun?.status || "No run created"}</Text>
-      </Card>
-      <Card>
-        <Statistic title="Pipeline" value={pipelineStatus?.current?.stage || "-"} />
-        <Tag color={pipelineStatus?.current?.status === "failed" ? "red" : pipelineStatus?.current?.status === "completed" ? "green" : "blue"}>
-          {pipelineStatus?.current?.status || "-"}
-        </Tag>
-      </Card>
-      <Card>
-        <Statistic title="Reports" value={reportsCount} />
-        <Text type="secondary">AgentRuns {agentRunsCount}</Text>
-      </Card>
+    <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <MetricCard label="Project" value={selectedProject?.name || "-"} detail={selectedProject?.project_id || "No project selected"} />
+      <MetricCard label="AuditRun" value={auditRun?.audit_run_id || "-"} detail={<Badge tone={statusTone(auditRun?.status)}>{auditRun?.status || "No run created"}</Badge>} />
+      <MetricCard
+        label="Pipeline"
+        value={pipelineStatus?.current?.stage || "-"}
+        detail={<Badge tone={statusTone(pipelineStatus?.current?.status)}>{pipelineStatus?.current?.status || "-"}</Badge>}
+      />
+      <MetricCard label="Reports" value={reportsCount} detail={`AgentRuns ${agentRunsCount}`} />
     </div>
   );
 }

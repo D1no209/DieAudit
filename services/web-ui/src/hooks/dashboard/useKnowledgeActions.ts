@@ -1,5 +1,5 @@
-import { message } from "antd";
 import * as dashboardApi from "../../client/dashboardApi";
+import { toast } from "../../ui/toast";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
@@ -9,7 +9,6 @@ type DashboardRunner = {
 export function useKnowledgeActions(dashboardState: DashboardStateController, runner: DashboardRunner) {
   const {
     knowledgeFiles,
-    knowledgeUploadForm,
     selectedProjectId,
     setKnowledgeDocuments,
     setKnowledgeFiles,
@@ -18,9 +17,9 @@ export function useKnowledgeActions(dashboardState: DashboardStateController, ru
   } = dashboardState;
 
   async function uploadKnowledgeDocument(values: { title: string; scope?: string; project_id?: string }) {
-    const knowledgeFile = knowledgeFiles[0]?.originFileObj;
+    const knowledgeFile = knowledgeFiles[0];
     if (!knowledgeFile) {
-      message.error("请选择知识库文档");
+      toast.error("请选择知识库文档");
       return;
     }
     await runner.runAction(async () => {
@@ -34,7 +33,6 @@ export function useKnowledgeActions(dashboardState: DashboardStateController, ru
       formData.append("file", knowledgeFile);
       const result = await dashboardApi.uploadKnowledgeDocument(formData);
       setLastResponse(result);
-      knowledgeUploadForm.resetFields();
       setKnowledgeFiles([]);
       const rows = await dashboardApi.listKnowledgeDocuments();
       setKnowledgeDocuments(rows);

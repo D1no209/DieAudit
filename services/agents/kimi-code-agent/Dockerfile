@@ -1,4 +1,5 @@
 FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:0.5.31 /uv /uvx /usr/local/bin/
 
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
@@ -22,7 +23,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir agent-client-protocol==0.10.1 fastapi==0.115.6 uvicorn==0.34.0 httpx==0.28.1
+RUN uv pip install --system --no-cache agent-client-protocol==0.10.1 fastapi==0.115.6 uvicorn==0.34.0 httpx==0.28.1
 
 RUN curl -fsSL https://bun.sh/install | bash \
     && bun --version \

@@ -1,10 +1,10 @@
-import type { ColumnsType } from "antd/es/table";
 import type { ContainerRow } from "../types";
+import type { DataColumn } from "../ui";
 import { PageHeader } from "../components/PageHeader";
 import { RuntimeContainersPanel } from "./runtime/RuntimeContainersPanel";
 
 type Props = {
-  containerColumns: ColumnsType<ContainerRow>;
+  containerColumns: DataColumn<ContainerRow>[];
   containers: ContainerRow[];
 };
 

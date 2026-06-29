@@ -1,6 +1,4 @@
 import { useMemo, useState } from "react";
-import { Form } from "antd";
-import type { UploadFile } from "antd/es/upload/interface";
 import { API_KEY_STORAGE_KEY } from "../api";
 import type {
   AgentRun,
@@ -68,13 +66,8 @@ export function useDashboardState() {
   const [lastResponse, setLastResponse] = useState<unknown>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
-  const [zipFiles, setZipFiles] = useState<UploadFile[]>([]);
-  const [knowledgeFiles, setKnowledgeFiles] = useState<UploadFile[]>([]);
-  const [gitForm] = Form.useForm();
-  const [zipForm] = Form.useForm();
-  const [apiKeyForm] = Form.useForm();
-  const [knowledgeUploadForm] = Form.useForm();
-  const [knowledgeSearchForm] = Form.useForm();
+  const [zipFiles, setZipFiles] = useState<File[]>([]);
+  const [knowledgeFiles, setKnowledgeFiles] = useState<File[]>([]);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.project_id === selectedProjectId),
@@ -119,7 +112,6 @@ export function useDashboardState() {
     artifactPreview,
     apiHealth,
     apiKey,
-    apiKeyForm,
     apiKeys,
     auditRun,
     authStatus,
@@ -132,13 +124,10 @@ export function useDashboardState() {
     dockerHealth,
     error,
     findings,
-    gitForm,
     knowledgeDocuments,
     knowledgeFiles,
     knowledgeMatches,
-    knowledgeSearchForm,
     knowledgeStatus,
-    knowledgeUploadForm,
     lastResponse,
     loading,
     managedRuntime,
@@ -194,7 +183,6 @@ export function useDashboardState() {
     whiteboard,
     workerHeartbeats,
     zipFiles,
-    zipForm,
   };
 }
 
