@@ -692,10 +692,11 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                     "decompile_max_artifacts": body.decompile_max_artifacts,
                     "enable_feedback_loop": body.enable_feedback_loop,
                     "max_feedback_rounds": body.max_feedback_rounds,
-                    "enable_whiteboard": True,
-                    "enable_whiteboard_swarm": True,
-                    "max_whiteboard_rounds": 3,
-                    "max_whiteboard_tasks_per_round": 8,
+                    "enable_whiteboard": body.enable_whiteboard,
+                    "enable_whiteboard_swarm": body.enable_whiteboard_swarm,
+                    "whiteboard_swarm_agent_name": body.whiteboard_swarm_agent_name or body.agent_name,
+                    "max_whiteboard_rounds": body.max_whiteboard_rounds,
+                    "max_whiteboard_tasks_per_round": body.max_whiteboard_tasks_per_round,
                 },
             )
             session.add(audit_run)
@@ -3292,7 +3293,7 @@ async def _record_pipeline_event(audit_run_id: str, event_type: str, payload: di
             select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
         )
         if agent_run:
-            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload=payload))
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload_json=payload, payload=payload))
             await session.commit()
 
 
@@ -3343,8 +3344,8 @@ async def _record_pipeline_summary(audit_run_id: str, summary: dict[str, Any]) -
             select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
         )
         if agent_run:
-            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type="pipeline_summary", payload=summary))
-        await session.commit()
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type="pipeline_summary", payload_json=summary, payload=summary))
+            await session.commit()
 
 
 async def _run_sca_mcp(
@@ -4111,7 +4112,7 @@ async def _run_whiteboard_swarm(
     controller_agent = str(config.get("whiteboard_swarm_agent_name") or config.get("agent_name") or "opencode-orchestrator")
     settings = get_settings()
     async with SessionLocal() as session:
-        service = WhiteboardService(settings, session)
+        service = WhiteboardService(runtime_settings, session)
         task = WhiteboardTask(
             task_id=str(uuid.uuid4()),
             audit_run_id=audit_run_id,
@@ -4156,8 +4157,8 @@ async def _run_whiteboard_swarm(
                     "high-value candidates. Respect the supplied budgets. Add cards/edges/notes for your reasoning and submit "
                     "chain evidence only when complete."
                     ),
-                    "long_running": True,
-                    "agent_lifecycle": "long-running",
+                    "long_running": controller_long_running,
+                    "agent_lifecycle": "long-running" if controller_long_running else "prompt",
                     "audit_phase": "whiteboard-swarm-controller",
                 "whiteboard_swarm": {
                     "mode": "ai-controller",
@@ -4198,7 +4199,7 @@ async def _run_whiteboard_swarm(
                 row.agent_run_id = agent_run_id or None
                 row.result = _compact_event_payload(agent_result)
                 await session.commit()
-            await WhiteboardService(settings, session).write_snapshot(audit_run_id)
+            await WhiteboardService(runtime_settings, session).write_snapshot(audit_run_id)
         result = {
             "ok": not failed,
             "mode": "ai-controller",

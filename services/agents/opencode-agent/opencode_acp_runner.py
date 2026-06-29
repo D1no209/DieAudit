@@ -96,7 +96,14 @@ async def main() -> int:
     input_payload = _load_input_payload()
     mcp_servers = _load_mcp_servers()
     finding_markdown = _read_finding_markdown()
-    prompt = _prompt(input_payload, finding_markdown=finding_markdown)
+    runtime_name = os.environ.get("ACP_RUNTIME_NAME") or os.environ.get("OPENCODE_RUNTIME_NAME") or "opencode"
+    kimi_prompt_mode = runtime_name == "kimi" and os.environ.get("KIMI_USE_ACP_MODE", "").lower() not in {"1", "true", "yes"}
+    prompt = _prompt(
+        input_payload,
+        finding_markdown=finding_markdown,
+        allow_tools=not kimi_prompt_mode,
+        include_workspace_context=kimi_prompt_mode,
+    )
     result: dict[str, Any] = {
         "status": "running",
         "agent_run_id": os.environ.get("AGENT_RUN_ID"),
@@ -104,9 +111,9 @@ async def main() -> int:
         "project_id": os.environ.get("PROJECT_ID"),
         "events": [],
     }
+    process_ref: Any | None = None
     try:
         env = dict(os.environ)
-        runtime_name = os.environ.get("ACP_RUNTIME_NAME") or os.environ.get("OPENCODE_RUNTIME_NAME") or "opencode"
         command = os.environ.get("ACP_COMMAND") or os.environ.get("OPENCODE_ACP_COMMAND", "opencode")
         args = (os.environ.get("ACP_ARGS") or os.environ.get("OPENCODE_ACP_ARGS", "acp")).split()
         stream_limit = int(os.environ.get("ACP_STREAM_LIMIT_BYTES", str(8 * 1024 * 1024)))
@@ -145,6 +152,38 @@ async def main() -> int:
                 }
             )
             _append_finding_markdown(input_payload, result)
+        else:
+            if runtime_name == "kimi":
+                _prepare_kimi_config(env)
+            async with acp.spawn_agent_process(client, command, *args, env=env, cwd="/workspace") as (agent, process):
+                process_ref = process
+                initialize = await _maybe_await(
+                    agent.initialize(
+                        protocol_version=acp.PROTOCOL_VERSION,
+                        client_capabilities=schema.ClientCapabilities(terminal=False),
+                        client_info=schema.Implementation(name="dieaudit-opencode-runner", version="0.1.0"),
+                    )
+                )
+                session = await _maybe_await(agent.new_session(cwd="/workspace", mcp_servers=mcp_servers))
+                response = await _maybe_await(
+                    agent.prompt(
+                        prompt=[schema.TextContentBlock(type="text", text=prompt)],
+                        session_id=session.sessionId,
+                    )
+                )
+                result.update(
+                    {
+                        "status": "completed",
+                        "initialize": _dump(initialize),
+                        "session": _dump(session),
+                        "response": _dump(response),
+                        "events": client.events,
+                        "process_returncode": getattr(process, "returncode", None),
+                        "runtime_name": runtime_name,
+                        "acp_command": [command, *args],
+                    }
+                )
+                _append_finding_markdown(input_payload, result)
     except Exception as exc:
         if result.get("status") == "completed" and result.get("response"):
             result.update(
@@ -162,12 +201,205 @@ async def main() -> int:
                     "error": repr(exc),
                     "traceback": traceback.format_exc(),
                     "events": client.events,
+                    "process_stderr": await _read_process_stderr(process_ref),
                 }
             )
             _append_finding_markdown(input_payload, result)
     result_file.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps({"dieaudit_result": str(result_file), "status": result["status"]}), flush=True)
     return 0 if result["status"] == "completed" else 1
+
+
+async def _read_process_stderr(process: Any | None) -> str:
+    stream = getattr(process, "stderr", None)
+    if stream is None:
+        return ""
+    try:
+        data = await asyncio.wait_for(stream.read(), timeout=2)
+    except Exception:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return str(data)
+
+
+def _prepare_kimi_config(env: dict[str, str]) -> None:
+    api_key = env.get("KIMI_MODEL_API_KEY") or env.get("LOCAL_LLM_API_KEY")
+    if not api_key:
+        return
+    model_name = env.get("KIMI_MODEL_NAME") or "deepseek-v4-flash"
+    base_url = env.get("KIMI_MODEL_BASE_URL") or "https://api.deepseek.com/v1"
+    max_context = int(env.get("KIMI_MODEL_MAX_CONTEXT_SIZE") or "64000")
+    kimi_home = Path(env.get("KIMI_CODE_HOME") or "/tmp/kimi-code-home")
+    kimi_home.mkdir(parents=True, exist_ok=True)
+    config_file = kimi_home / "config.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                f"default_model = {_toml_quote(model_name)}",
+                "default_thinking = false",
+                'default_permission_mode = "auto"',
+                "default_plan_mode = false",
+                "telemetry = false",
+                "",
+                '[providers.deepseek]',
+                'type = "openai"',
+                f"base_url = {_toml_quote(base_url)}",
+                f"api_key = {_toml_quote(api_key)}",
+                "",
+                f'[models.{_toml_table_key(model_name)}]',
+                'provider = "deepseek"',
+                f"model = {_toml_quote(model_name)}",
+                f"max_context_size = {max_context}",
+                'capabilities = ["tool_use"]',
+                "",
+                "[thinking]",
+                'mode = "off"',
+                "",
+                "[loop_control]",
+                "max_steps_per_turn = 12",
+                "max_retries_per_step = 2",
+                "reserved_context_size = 8000",
+                "",
+                "[experimental]",
+                "micro_compaction = false",
+                "",
+                "[background]",
+                "keep_alive_on_exit = false",
+                "",
+                "[[permission.rules]]",
+                'decision = "allow"',
+                'pattern = "Read"',
+                "",
+                "[[permission.rules]]",
+                'decision = "allow"',
+                'pattern = "Glob"',
+                "",
+                "[[permission.rules]]",
+                'decision = "allow"',
+                'pattern = "Grep"',
+                "",
+                "[[permission.rules]]",
+                'decision = "allow"',
+                'pattern = "LS"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env["KIMI_CODE_HOME"] = str(kimi_home)
+    env.setdefault("HOME", "/root")
+    env.setdefault("USER", "root")
+
+
+def _toml_quote(value: str) -> str:
+    return json.dumps(value)
+
+
+def _toml_table_key(value: str) -> str:
+    if all(ch.isalnum() or ch in {"_", "-"} for ch in value):
+        return value
+    return _toml_quote(value)
+
+
+async def _run_kimi_prompt_mode(command: str, args: list[str], prompt: str, env: dict[str, str]) -> dict[str, Any]:
+    kimi_args = list(args)
+    if kimi_args and kimi_args[-1] == "acp":
+        kimi_args = kimi_args[:-1]
+    timeout = int(os.environ.get("KIMI_PROMPT_TIMEOUT_SECONDS", os.environ.get("OPENCODE_AGENT_TIMEOUT_SECONDS", "1800")))
+    child_env = {
+        key: value
+        for key, value in env.items()
+        if key in {"PATH", "HOME", "TERM", "LANG", "BUN_INSTALL", "SHELL"}
+        or key.startswith("KIMI_")
+        or key in {"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"}
+    }
+    child_env.setdefault("HOME", "/root")
+    child_env.setdefault("USER", "root")
+    process = await asyncio.create_subprocess_exec(
+        command,
+        *kimi_args,
+        "--add-dir",
+        "/workspace",
+        "-p",
+        prompt,
+        "--output-format",
+        "text",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=child_env,
+        cwd="/tmp",
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.terminate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
+            stdout, stderr = await process.communicate()
+        return {
+            "status": "failed",
+            "error": f"kimi prompt mode timed out after {timeout}s",
+            "process_returncode": process.returncode,
+            "process_stdout": _redact_sensitive(stdout.decode("utf-8", errors="replace")),
+            "process_stderr": _redact_sensitive(stderr.decode("utf-8", errors="replace")),
+            "runtime_name": "kimi",
+            "acp_command": [command, *args],
+            "execution_mode": "prompt",
+        }
+    stdout_text = _redact_sensitive(stdout.decode("utf-8", errors="replace"))
+    stderr_text = _redact_sensitive(stderr.decode("utf-8", errors="replace"))
+    result = {
+        "status": "completed" if process.returncode == 0 else "failed",
+        "response": {"content": stdout_text},
+        "events": [],
+        "process_returncode": process.returncode,
+        "process_stdout": stdout_text,
+        "process_stderr": stderr_text,
+        "runtime_name": "kimi",
+        "acp_command": [command, *args],
+        "execution_mode": "prompt",
+        "error": None if process.returncode == 0 else stderr_text[-4000:] or f"kimi exited {process.returncode}",
+    }
+    attempt = int(env.get("_KIMI_PROMPT_ATTEMPT") or "1")
+    max_attempts = int(os.environ.get("KIMI_PROMPT_RETRIES", "2"))
+    if (
+        result["status"] == "failed"
+        and attempt < max_attempts
+        and _is_retryable_kimi_empty_exit(stdout_text, stderr_text)
+    ):
+        retry_env = dict(env)
+        retry_env["_KIMI_PROMPT_ATTEMPT"] = str(attempt + 1)
+        await asyncio.sleep(2)
+        return await _run_kimi_prompt_mode(command, args, prompt, retry_env)
+    return result
+
+
+def _is_retryable_kimi_empty_exit(stdout_text: str, stderr_text: str) -> bool:
+    normalized = "\n".join(line.strip() for line in stderr_text.splitlines() if line.strip())
+    dependency_only = normalized in {
+        "Resolving dependencies\nResolved, downloaded and extracted [41]\nSaved lockfile",
+        "Resolving dependencies\nSaved lockfile",
+    }
+    return not stdout_text.strip() and dependency_only
+
+
+def _redact_sensitive(text: str) -> str:
+    redacted = text
+    for name in (
+        "KIMI_MODEL_API_KEY",
+        "LOCAL_LLM_API_KEY",
+        "DIEAUDIT_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        value = os.environ.get(name)
+        if value:
+            redacted = redacted.replace(value, "***")
+    return redacted
 
 
 def _load_input_payload() -> dict[str, Any]:
@@ -205,8 +437,16 @@ def _load_mcp_servers() -> list[Any]:
     return result
 
 
-def _prompt(input_payload: dict[str, Any], *, finding_markdown: str | None = None) -> str:
+def _prompt(
+    input_payload: dict[str, Any],
+    *,
+    finding_markdown: str | None = None,
+    allow_tools: bool = True,
+    include_workspace_context: bool = False,
+) -> str:
     payload = input_payload.get("payload", input_payload)
+    if not allow_tools and isinstance(payload, dict):
+        payload = _sanitize_prompt_payload(payload)
     task_json = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)
     goal = payload.get("goal") if isinstance(payload, dict) else None
     finding_contract = payload.get("finding_artifact_contract") if isinstance(payload, dict) else None
@@ -220,19 +460,26 @@ def _prompt(input_payload: dict[str, Any], *, finding_markdown: str | None = Non
         '"evidence": []}. Do not omit required finding fields.\n\n'
     )
     if isinstance(finding_contract, dict) and finding_contract.get("finding_markdown_path"):
-        structured_output_guidance = (
-            "For this Finding-scoped task, `/finding/finding.md` is the authoritative output and handoff. "
-            "Structured JSON is optional; provide it only if it is reliable. Do not let JSON formatting prevent you "
-            "from updating the Markdown with the actual analysis.\n\n"
-        )
-        finding_guidance = (
-            "\nFinding shared workspace:\n"
-            "- `/finding` is mounted read/write and persists for this specific Finding across Validator, Judger, PoCWriter, and Verifier Agents.\n"
-            f"- Before analysis, read `{finding_contract['finding_markdown_path']}` and inspect relevant files under `/finding`.\n"
-            f"- After analysis, edit `{finding_contract['finding_markdown_path']}` in place with your conclusions, evidence, blockers, and next-agent handoff notes.\n"
-            "- Store Finding-specific notes, PoC drafts, and helper artifacts under `/finding` when useful.\n"
-            f"- Also write your stage report to `{finding_contract.get('agent_writable_report_path', '/artifacts/stage-report.md')}`.\n"
-        )
+        if allow_tools:
+            structured_output_guidance = (
+                "For this Finding-scoped task, `/finding/finding.md` is the authoritative output and handoff. "
+                "Structured JSON is optional; provide it only if it is reliable. Do not let JSON formatting prevent you "
+                "from updating the Markdown with the actual analysis.\n\n"
+            )
+            finding_guidance = (
+                "\nFinding shared workspace:\n"
+                "- `/finding` is mounted read/write and persists for this specific Finding across Validator, Judger, PoCWriter, and Verifier Agents.\n"
+                f"- Before analysis, read `{finding_contract['finding_markdown_path']}` and inspect relevant files under `/finding`.\n"
+                f"- After analysis, edit `{finding_contract['finding_markdown_path']}` in place with your conclusions, evidence, blockers, and next-agent handoff notes.\n"
+                "- Store Finding-specific notes, PoC drafts, and helper artifacts under `/finding` when useful.\n"
+                f"- Also write your stage report to `{finding_contract.get('agent_writable_report_path', '/artifacts/stage-report.md')}`.\n"
+            )
+        else:
+            structured_output_guidance = (
+                "For this Finding-scoped task, return concise Markdown plus optional JSON. "
+                "The runner will append your response to the Finding handoff file; do not try to read or write files.\n\n"
+            )
+            finding_guidance = "\nFinding shared context is provided below. Analyze from the supplied text only.\n"
         if finding_markdown is not None:
             finding_guidance += (
                 "\nCurrent `/finding/finding.md` content loaded by the runner before this Agent started:\n"
@@ -240,15 +487,120 @@ def _prompt(input_payload: dict[str, Any], *, finding_markdown: str | None = Non
                 f"{_truncate_text(finding_markdown, 20000)}\n"
                 "```\n"
             )
-    return (
-        "You are running inside DieAudit. Analyze only the mounted /workspace source tree. "
+    tool_guidance = (
         "Use authorized MCP servers when useful. "
+        if allow_tools
+        else "Do not use tools, MCP servers, shell commands, session state, compaction, or interactive approvals. "
+    )
+    workspace_context = f"\nWorkspace context for pure prompt mode:\n{_workspace_context(Path('/workspace'))}\n" if include_workspace_context else ""
+    return (
+        "You are running inside DieAudit. Analyze the target project only. "
+        "Do not print environment variables, API keys, bearer tokens, or other secrets. "
+        f"{tool_guidance}"
         "The full task payload is authoritative; do not rely only on the goal text. "
         f"{structured_output_guidance}"
         f"Goal:\n{goal or 'See full task payload.'}\n"
+        f"{workspace_context}"
         f"{finding_guidance}\n"
         f"Full task payload:\n```json\n{task_json}\n```"
     )
+
+
+def _sanitize_prompt_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    blocked_keys = {
+        "agent_collaboration",
+        "codebase_memory",
+        "codebase_memory_mcp",
+        "mcp",
+        "mcp_servers",
+        "structure",
+        "whiteboard_mcp",
+    }
+    sanitized: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in blocked_keys:
+            continue
+        if isinstance(value, dict):
+            sanitized[key] = _sanitize_prompt_payload(value)
+        elif isinstance(value, list):
+            sanitized[key] = [_sanitize_prompt_payload(item) if isinstance(item, dict) else item for item in value]
+        else:
+            sanitized[key] = value
+    sanitized["prompt_mode_constraints"] = {
+        "tools_available": False,
+        "instruction": "Use only the task text and the workspace context snippets embedded in this prompt. Do not attempt to read files, use MCP, use shell, or start a session.",
+    }
+    return sanitized
+
+
+def _workspace_context(root: Path) -> str:
+    ignored_dirs = {".git", "vendor", "node_modules", "runtime", "cache", "logs", "public/static", "public/assets"}
+    files: list[Path] = []
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root)
+            relative_posix = relative.as_posix()
+            if any(relative_posix == ignored or relative_posix.startswith(f"{ignored}/") for ignored in ignored_dirs):
+                continue
+            if path.stat().st_size > 256_000:
+                continue
+            files.append(relative)
+    except Exception as exc:
+        return f"Unable to inventory workspace: {exc}"
+    files = sorted(files, key=lambda item: item.as_posix())
+    listed = [item.as_posix() for item in files[:160]]
+    snippets: list[str] = []
+    snippet_budget = 24_000
+    security_names = {
+        "composer.json",
+        "composer.lock",
+        "config/app.php",
+        "config/database.php",
+        "config/route.php",
+        "route/app.php",
+        "public/index.php",
+        ".env",
+    }
+    security_prefixes = ("app/", "application/", "extend/", "config/", "route/", "public/")
+    for relative in files:
+        relative_posix = relative.as_posix()
+        selected = relative_posix in security_names or (
+            relative_posix.endswith(".php") and any(relative_posix.startswith(prefix) for prefix in security_prefixes)
+        )
+        if not selected:
+            continue
+        text = _read_workspace_snippet(root / relative, limit=1800)
+        if not text:
+            continue
+        block = f"\n--- {relative_posix} ---\n{text}"
+        if sum(len(item) for item in snippets) + len(block) > snippet_budget:
+            break
+        snippets.append(block)
+        if len(snippets) >= 18:
+            break
+    return "\n".join(
+        [
+            "File inventory sample:",
+            "\n".join(f"- {item}" for item in listed) or "- <empty>",
+            "",
+            "Selected source/config snippets:",
+            "\n".join(snippets) or "- <none>",
+        ]
+    )
+
+
+def _read_workspace_snippet(path: Path, *, limit: int) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    for name in ("KIMI_MODEL_API_KEY", "LOCAL_LLM_API_KEY"):
+        value = os.environ.get(name)
+        if value:
+            text = text.replace(value, "***")
+    return text[:limit]
 
 
 def _read_finding_markdown() -> str | None:

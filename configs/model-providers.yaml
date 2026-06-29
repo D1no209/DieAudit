@@ -1,4 +1,16 @@
 providers:
+  deepseek:
+    type: openai-compatible
+    name: DeepSeek OpenAI-Compatible
+    base_url: https://api.deepseek.com/v1
+    api_key_env: LOCAL_LLM_API_KEY
+    default_model: deepseek-v4-flash
+    models:
+      deepseek-v4-flash:
+        name: deepseek-v4-flash
+        limit:
+          context: 64000
+          output: 8192
   dieaudit-anthropic:
     type: custom
     npm: "@ai-sdk/anthropic"

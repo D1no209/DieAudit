@@ -88,6 +88,11 @@ class CreateAuditRunRequest(BaseModel):
     enable_poc_verification: bool = True
     poc_verifier_agent_name: str = "opencode-poc-verifier"
     max_parallel_poc_verifiers: int = Field(default=2, ge=1, le=20)
+    enable_whiteboard: bool = True
+    enable_whiteboard_swarm: bool = True
+    whiteboard_swarm_agent_name: str | None = None
+    max_whiteboard_rounds: int = Field(default=3, ge=1, le=20)
+    max_whiteboard_tasks_per_round: int = Field(default=8, ge=1, le=50)
     enable_decompilation: bool = True
     decompiled_source_dir: str = ".dieaudit/decompiled"
     decompile_max_artifact_size_mb: int = Field(default=200, ge=1, le=4096)
