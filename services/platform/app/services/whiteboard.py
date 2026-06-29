@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.models import (
     AuditRun,
     Evidence,
+    FindingTriageDecision,
     WhiteboardAttachment,
     WhiteboardCard,
     WhiteboardEdge,
@@ -28,13 +29,13 @@ from app.settings import Settings
 WHITEBOARD_EDGE_TYPES = {"precedes", "supports", "contradicts", "duplicates", "blocks", "refines"}
 WHITEBOARD_LINK_STATUSES = {"not_ready", "finding", "not_found", "hint", "impossible"}
 WHITEBOARD_AGENT_BY_GAP_TYPE = {
-    "source": ("source-sink-finder", "opencode-source-sink-finder"),
-    "predecessor": ("source-sink-finder", "opencode-source-sink-finder"),
-    "successor": ("source-sink-finder", "opencode-source-sink-finder"),
-    "validation": ("validator", "opencode-validator"),
-    "judgement": ("judger", "opencode-judger"),
-    "poc": ("poc-writer", "opencode-poc-writer"),
-    "poc-verification": ("poc-verifier", "opencode-poc-verifier"),
+    "source": ("source-sink-finder", "kimi-source-sink-finder"),
+    "predecessor": ("source-sink-finder", "kimi-source-sink-finder"),
+    "successor": ("source-sink-finder", "kimi-source-sink-finder"),
+    "validation": ("validator", "kimi-validator"),
+    "judgement": ("judger", "kimi-judger"),
+    "poc": ("poc-writer", "kimi-poc-writer"),
+    "poc-verification": ("poc-verifier", "kimi-poc-verifier"),
 }
 
 
@@ -631,6 +632,8 @@ class WhiteboardService:
         goal = str(body.get("goal") or "").strip()
         if not goal:
             raise ValueError("goal is required")
+        related_card_ids = [str(item) for item in body.get("related_card_ids") or [] if str(item).strip()]
+        low_value_reason = await self._low_value_only_schedule_reason(audit_run_id, related_card_ids)
         row = WhiteboardScheduleRequest(
             request_id=str(uuid.uuid4()),
             audit_run_id=audit_run_id,
@@ -640,17 +643,17 @@ class WhiteboardService:
             suggested_agent_name=self._optional_str(body.get("suggested_agent_name"), 128),
             goal=goal,
             reason=self._optional_str(body.get("reason"), 10000),
-            related_card_ids=[str(item) for item in body.get("related_card_ids") or [] if str(item).strip()],
-            status="pending",
-            decision={},
+            related_card_ids=related_card_ids,
+            status="rejected" if low_value_reason else "pending",
+            decision={"reason": low_value_reason, "policy": "low_value_swarm_triage"} if low_value_reason else {},
         )
         self.session.add(row)
         await self.record_event(
             audit_run_id,
             entity_type="schedule-request",
             entity_id=row.request_id,
-            event_type="created",
-            summary=f"Agent help requested: {goal[:160]}",
+            event_type="rejected" if low_value_reason else "created",
+            summary=(f"Low-value agent help rejected: {goal[:160]}" if low_value_reason else f"Agent help requested: {goal[:160]}"),
             payload={"schedule_request": _whiteboard_schedule_request_to_dict(row)},
             project_id=audit_run.project_id,
         )
@@ -670,6 +673,10 @@ class WhiteboardService:
         status = self._safe_token(body.get("status") or body.get("decision") or "approved", "approved")
         if status not in {"approved", "rejected", "merged", "scheduled"}:
             raise ValueError("schedule request decision must be approved, rejected, merged, or scheduled")
+        low_value_reason = await self._low_value_only_schedule_reason(audit_run_id, row.related_card_ids or [])
+        if status in {"approved", "scheduled"} and low_value_reason:
+            status = "rejected"
+            body = {**body, "decision": {"reason": low_value_reason, "policy": "low_value_swarm_triage"}}
         row.status = status
         row.decision = dict(body.get("decision") or body)
         row.task_id = self._optional_str(body.get("task_id"), 128)
@@ -703,6 +710,49 @@ class WhiteboardService:
         )
         await self.session.commit()
         return _whiteboard_schedule_request_to_dict(row)
+
+    async def _low_value_only_schedule_reason(self, audit_run_id: str, related_card_ids: list[str]) -> str | None:
+        if not related_card_ids:
+            return "Schedule requests must reference at least one Whiteboard card with a main-agent deep_dive triage decision."
+        cards = (
+            await self.session.execute(
+                select(WhiteboardCard).where(
+                    WhiteboardCard.audit_run_id == audit_run_id,
+                    WhiteboardCard.card_id.in_(related_card_ids),
+                )
+            )
+        ).scalars().all()
+        if not cards:
+            return "Schedule requests must reference existing Whiteboard cards."
+        card_ids = [card.card_id for card in cards]
+        finding_ids = [str(card.finding_id) for card in cards if card.finding_id]
+        decision_rows = (
+            await self.session.execute(
+                select(FindingTriageDecision).where(
+                    FindingTriageDecision.audit_run_id == audit_run_id,
+                    (
+                        FindingTriageDecision.card_id.in_(card_ids)
+                        if not finding_ids
+                        else (
+                            FindingTriageDecision.card_id.in_(card_ids)
+                            | FindingTriageDecision.finding_id.in_(finding_ids)
+                        )
+                    ),
+                )
+            )
+        ).scalars().all()
+        if any(row.decision_status == "deep_dive" and row.deep_dive_allowed for row in decision_rows):
+            return None
+        decisions = [str(row.decision_status or "") for row in decision_rows]
+        for card in cards:
+            triage = (card.metadata_json or {}).get("swarm_triage")
+            if isinstance(triage, dict):
+                decisions.append(str(triage.get("decision") or ""))
+        if not decisions:
+            return "No main-agent deep_dive triage decision is recorded for the related cards; Swarm scheduling is blocked."
+        if any(item in {"deep_dive", "chain_candidate"} for item in decisions):
+            return None
+        return "All related cards were triaged as low-value, evidence-only, appendix-only, or rejected; Swarm must not launch agents for standalone hygiene findings."
 
     async def agent_graph(self, audit_run_id: str) -> dict[str, Any]:
         graph = await self.graph(audit_run_id)

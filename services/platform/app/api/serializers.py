@@ -3,10 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.models import (
+    AgentRuntime,
     AgentRun,
+    AgentTranscriptEvent,
     AuditRun,
+    DeliverableArtifact,
     DependencyRecord,
     Evidence,
+    FindingTriageDecision,
     Finding,
     KnowledgeChunk,
     KnowledgeDocument,
@@ -44,9 +48,50 @@ def agent_run_to_dict(row: AgentRun) -> dict[str, Any]:
         "input_summary": row.input_summary,
         "output_summary": row.output_summary,
         "artifact_path": row.artifact_path,
+        "runtime_id": row.runtime_id,
+        "acp_session_id": row.acp_session_id,
+        "decision_status": row.decision_status,
+        "decision_reason": row.decision_reason,
         "error": row.error,
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def agent_runtime_to_dict(row: AgentRuntime) -> dict[str, Any]:
+    return {
+        "runtime_id": row.runtime_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "status": row.status,
+        "runtime_kind": row.runtime_kind,
+        "runner_container_id": row.runner_container_id,
+        "runner_container_name": row.runner_container_name,
+        "network_name": row.network_name,
+        "mcp_containers": row.mcp_containers or [],
+        "container_ids": row.container_ids or [],
+        "endpoint_url": row.endpoint_url,
+        "ttl_expires_at": row.ttl_expires_at.isoformat() if row.ttl_expires_at else None,
+        "cleanup_status": row.cleanup_status,
+        "cleanup_reason": row.cleanup_reason,
+        "metadata": row.metadata_json or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def agent_transcript_event_to_dict(row: AgentTranscriptEvent) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "agent_run_id": row.agent_run_id,
+        "audit_run_id": row.audit_run_id,
+        "runtime_id": row.runtime_id,
+        "seq": row.seq,
+        "event_type": row.event_type,
+        "session_id": row.session_id,
+        "payload": row.payload,
+        "content_text": row.content_text,
+        "created_at": row.created_at.isoformat(),
     }
 
 
@@ -248,6 +293,44 @@ def report_to_dict(row: ReportArtifact) -> dict[str, Any]:
         "path": row.path,
         "artifact": artifact_metadata_or_none(row.path),
         "summary": row.summary,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def finding_triage_decision_to_dict(row: FindingTriageDecision) -> dict[str, Any]:
+    return {
+        "decision_id": row.decision_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "finding_id": row.finding_id,
+        "card_id": row.card_id,
+        "agent_run_id": row.agent_run_id,
+        "decision_status": row.decision_status,
+        "decision_reason": row.decision_reason,
+        "deep_dive_allowed": row.deep_dive_allowed,
+        "poc_allowed": row.poc_allowed,
+        "confidence": row.confidence,
+        "signals": row.signals or {},
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+def deliverable_artifact_to_dict(row: DeliverableArtifact) -> dict[str, Any]:
+    return {
+        "artifact_id": row.artifact_id,
+        "audit_run_id": row.audit_run_id,
+        "project_id": row.project_id,
+        "finding_id": row.finding_id,
+        "kind": row.kind,
+        "path": row.path,
+        "artifact": artifact_metadata_or_none(row.path),
+        "title": row.title,
+        "content_type": row.content_type,
+        "size": row.size,
+        "sha256": row.sha256,
+        "metadata": row.metadata_json or {},
         "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }

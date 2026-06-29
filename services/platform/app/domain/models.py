@@ -126,6 +126,26 @@ class ContainerRun(TimestampMixin, Base):
     labels: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class AgentRuntime(TimestampMixin, Base):
+    __tablename__ = "agent_runtimes"
+
+    runtime_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="created")
+    runtime_kind: Mapped[str] = mapped_column(String(64), index=True, default="kimi-acp")
+    runner_container_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    runner_container_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    network_name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    mcp_containers: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    container_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    endpoint_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ttl_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    cleanup_status: Mapped[str] = mapped_column(String(32), index=True, default="pending")
+    cleanup_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class RuntimeNetwork(TimestampMixin, Base):
     __tablename__ = "runtime_networks"
 
@@ -149,6 +169,10 @@ class AgentRun(TimestampMixin, Base):
     output_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    runtime_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    acp_session_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    decision_status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     events: Mapped[list["AgentRunEvent"]] = relationship(back_populates="agent_run")
 
@@ -162,6 +186,20 @@ class AgentRunEvent(TimestampMixin, Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     agent_run: Mapped[AgentRun] = relationship(back_populates="events")
+
+
+class AgentTranscriptEvent(TimestampMixin, Base):
+    __tablename__ = "agent_transcript_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    agent_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    runtime_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    seq: Mapped[int] = mapped_column(Integer, index=True)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RuntimePackage(TimestampMixin, Base):
@@ -217,6 +255,23 @@ class Evidence(TimestampMixin, Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class FindingTriageDecision(TimestampMixin, Base):
+    __tablename__ = "finding_triage_decisions"
+
+    decision_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    finding_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    card_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    agent_run_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    decision_status: Mapped[str] = mapped_column(String(32), index=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deep_dive_allowed: Mapped[bool] = mapped_column(default=False, index=True)
+    poc_allowed: Mapped[bool] = mapped_column(default=False, index=True)
+    confidence: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    signals: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class DependencyRecord(TimestampMixin, Base):
@@ -297,6 +352,22 @@ class ReportArtifact(TimestampMixin, Base):
     kind: Mapped[str] = mapped_column(String(64))
     path: Mapped[str] = mapped_column(Text)
     summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class DeliverableArtifact(TimestampMixin, Base):
+    __tablename__ = "deliverable_artifacts"
+
+    artifact_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    audit_run_id: Mapped[str] = mapped_column(String(128), index=True)
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    finding_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    kind: Mapped[str] = mapped_column(String(64), index=True)
+    path: Mapped[str] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class WhiteboardCard(TimestampMixin, Base):

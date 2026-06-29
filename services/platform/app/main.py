@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+import asyncio
 import time
 from typing import Any
 import uuid
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
         await init_db()
     if settings.service_name in {"agent-gateway", "sandbox-runner"}:
         runtime = RuntimeOrchestrator(settings)
+        asyncio.create_task(_reconcile_runtime_on_startup(runtime))
     pipeline_backend = (settings.pipeline_execution_backend or "workflow-worker").strip().lower()
     if (
         settings.service_name == "agent-gateway"
@@ -59,6 +61,11 @@ app = FastAPI(title=f"DieAudit {settings.service_name}", version="0.1.0", lifesp
 
 
 PUBLIC_PATHS = {"/", "/health", "/ready", "/auth/status"}
+
+
+async def _reconcile_runtime_on_startup(runtime_orchestrator: RuntimeOrchestrator) -> None:
+    with suppress(Exception):
+        await runtime_orchestrator.reconcile_run_runtimes()
 
 
 @app.middleware("http")

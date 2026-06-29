@@ -1,5 +1,6 @@
 from .runtime import (
     A2AAgentCardRequest,
+    AgentTranscriptEventsRequest,
     CodeBatchAnalysisRequest,
     CreateAuditRunRequest,
     CreateApiKeyRequest,
@@ -11,6 +12,7 @@ from .runtime import (
     CreateWhiteboardScheduleRequest,
     CreateWhiteboardSubscriptionRequest,
     DecideWhiteboardScheduleRequest,
+    EnsureAgentRuntimeRequest,
     KnowledgeSearchRequest,
     RunPocRequest,
     RunWhiteboardTasksRequest,
@@ -28,6 +30,7 @@ from .runtime import (
 
 __all__ = [
     "A2AAgentCardRequest",
+    "AgentTranscriptEventsRequest",
     "CodeBatchAnalysisRequest",
     "CreateAuditRunRequest",
     "CreateApiKeyRequest",
@@ -39,6 +42,7 @@ __all__ = [
     "CreateWhiteboardScheduleRequest",
     "CreateWhiteboardSubscriptionRequest",
     "DecideWhiteboardScheduleRequest",
+    "EnsureAgentRuntimeRequest",
     "KnowledgeSearchRequest",
     "RunPocRequest",
     "RunWhiteboardTasksRequest",

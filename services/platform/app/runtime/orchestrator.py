@@ -1,5 +1,6 @@
 import json
 import ntpath
+import os
 import posixpath
 import re
 import uuid
@@ -13,7 +14,19 @@ from urllib.parse import urlparse
 import httpx
 from sqlalchemy import select
 
-from app.domain.models import AgentRun, AgentRunEvent, ApiKeyRecord, AuditRun, ContainerRun, Evidence, Finding, RuntimeNetwork, ValidationAttempt
+from app.domain.models import (
+    AgentRun,
+    AgentRunEvent,
+    AgentRuntime,
+    AgentTranscriptEvent,
+    ApiKeyRecord,
+    AuditRun,
+    ContainerRun,
+    Evidence,
+    Finding,
+    RuntimeNetwork,
+    ValidationAttempt,
+)
 from app.integrations.docker import DockerClient
 from app.integrations.protocols import OpenCodeAcpClient
 from app.repositories import SessionLocal
@@ -26,6 +39,29 @@ from app.settings import Settings
 
 def utc_ttl(hours: int = 24) -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+
+
+def _compact_runtime_payload(value: Any, *, max_string: int = 4000, max_items: int = 20, depth: int = 0) -> Any:
+    if depth > 4:
+        return "<truncated-depth>"
+    if isinstance(value, str):
+        return value if len(value) <= max_string else f"{value[:max_string]}...<truncated {len(value) - max_string} chars>"
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        result = [_compact_runtime_payload(item, max_string=max_string, max_items=max_items, depth=depth + 1) for item in value[:max_items]]
+        if len(value) > max_items:
+            result.append(f"<truncated {len(value) - max_items} items>")
+        return result
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                result["<truncated>"] = f"{len(value) - max_items} keys"
+                break
+            result[str(key)] = _compact_runtime_payload(item, max_string=max_string, max_items=max_items, depth=depth + 1)
+        return result
+    return str(value)
 
 
 class RuntimeOrchestrator:
@@ -253,6 +289,37 @@ class RuntimeOrchestrator:
             "before": state["summary"],
         }
 
+    async def reconcile_run_runtimes(self) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        terminal_statuses = {"completed", "failed", "cancelled"}
+        cleanup_results: list[dict[str, Any]] = []
+        async with SessionLocal() as session:
+            runtime_rows = (
+                await session.execute(
+                    select(AgentRuntime).where(
+                        AgentRuntime.cleanup_status != "cleaned",
+                    )
+                )
+            ).scalars().all()
+            audit_run_ids = {row.audit_run_id for row in runtime_rows}
+            audit_runs: dict[str, AuditRun] = {}
+            if audit_run_ids:
+                rows = (
+                    await session.execute(select(AuditRun).where(AuditRun.audit_run_id.in_(audit_run_ids)))
+                ).scalars().all()
+                audit_runs = {row.audit_run_id: row for row in rows}
+        for runtime_row in runtime_rows:
+            audit_run = audit_runs.get(runtime_row.audit_run_id)
+            expired = bool(runtime_row.ttl_expires_at and runtime_row.ttl_expires_at < now)
+            orphan = audit_run is None
+            terminal = bool(audit_run and audit_run.status in terminal_statuses and not audit_run.retain_runtime_on_failure)
+            if not (expired or orphan or terminal):
+                continue
+            reason = "expired" if expired else "orphan" if orphan else "terminal"
+            result = await self.cleanup_run(runtime_row.audit_run_id)
+            cleanup_results.append({**result, "runtime_id": runtime_row.runtime_id, "reason": reason})
+        return {"checked": len(runtime_rows), "cleaned": len(cleanup_results), "cleanup_results": cleanup_results}
+
     async def _shared_agent_input_payload(self, audit_run_id: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         payload = dict(input_payload or {})
         async with SessionLocal() as session:
@@ -348,8 +415,31 @@ class RuntimeOrchestrator:
         )
         mcp_results: list[dict[str, Any]] = []
         mcp_servers: dict[str, dict[str, Any]] = {}
+        run_runtime: dict[str, Any] | None = None
 
         try:
+            if self._acp_runtime_name(agent):
+                run_runtime = await self.ensure_agent_runtime(
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    agent_name=agent_name,
+                    workspace_host_path=workspace_host_path,
+                    allow_external_network=allow_external_network,
+                    retain_runtime_on_failure=retain_runtime_on_failure,
+                    input_payload=input_payload,
+                )
+                await self._record_agent_run_runtime(run_id, runtime_id=str(run_runtime.get("runtime_id") or ""))
+                if (run_runtime.get("endpoint_url") and (self._acp_runtime_name(agent) or "").lower() == "kimi"):
+                    session_result = await self.run_agent_session(
+                        audit_run_id=audit_run_id,
+                        project_id=project_id,
+                        agent_run_id=run_id,
+                        agent_name=agent_name,
+                        agent=agent,
+                        runtime=run_runtime,
+                        input_payload=input_payload or {},
+                    )
+                    return session_result
             for mcp_name in self._agent_required_mcp(agent, input_payload or {}):
                 mcp = self.mcp_templates.get(mcp_name)
                 transport = str(mcp.get("transport", "http"))
@@ -360,6 +450,27 @@ class RuntimeOrchestrator:
                         "mcp_stdio_configured",
                         {"mcp_name": mcp_name, "command": mcp.get("command")},
                     )
+                    continue
+
+                runtime_mcp = self._runtime_mcp_container(run_runtime, mcp["name"])
+                if runtime_mcp:
+                    await self._record_agent_event(
+                        run_id,
+                        "mcp_runtime_reused",
+                        {
+                            "mcp_name": mcp_name,
+                            "container_id": runtime_mcp.get("id"),
+                            "container_name": runtime_mcp.get("name"),
+                            "runtime_id": (run_runtime or {}).get("runtime_id"),
+                        },
+                    )
+                    mcp_results.append(runtime_mcp)
+                    if transport in {"http", "sse"}:
+                        endpoint = mcp.get("mcp_endpoint", "")
+                        mcp_servers[mcp["name"]] = {
+                            "transport": transport,
+                            "url": f"{self._mcp_base_url(runtime_mcp, mcp)}{endpoint}",
+                        }
                     continue
 
                 await self._record_agent_event(run_id, "mcp_sidecar_starting", {"mcp_name": mcp_name})
@@ -480,6 +591,7 @@ class RuntimeOrchestrator:
                 output_summary={
                     "container_id": agent_container["id"],
                     "mcp_servers": mcp_servers,
+                    "runtime_id": (run_runtime or {}).get("runtime_id"),
                     "runtime_package": runtime_package,
                     "acp_runtime": acp_runtime_name,
                     "acp_result": acp_result,
@@ -511,6 +623,7 @@ class RuntimeOrchestrator:
                 "mcp": mcp_results,
                 "mcp_servers": mcp_servers,
                 "structured_ingest": structured_ingest,
+                "runtime_id": (run_runtime or {}).get("runtime_id"),
                 "acp_runtime": acp_runtime_name,
                 "acp_status": acp_result.get("status") if acp_result else None,
                 "opencode_status": acp_result.get("status") if acp_result else None,
@@ -538,6 +651,215 @@ class RuntimeOrchestrator:
             if not retain_runtime_on_failure:
                 await self.cleanup_run(audit_run_id)
             raise
+
+    async def ensure_agent_runtime(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        agent_name: str,
+        workspace_host_path: str | None = None,
+        allow_external_network: bool = False,
+        retain_runtime_on_failure: bool = False,
+        input_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        input_payload = await self._shared_agent_input_payload(audit_run_id, input_payload or {})
+        agent = self.agent_templates.get(agent_name)
+        network_name = f"{self.settings.dynamic_container_prefix}-run-{audit_run_id}"
+        labels = self._labels(audit_run_id, project_id, role="runtime", ttl=utc_ttl())
+        await self._ensure_agent_run_network(network_name, allow_external_network=allow_external_network, labels=labels)
+        await self._connect_runtime_controllers(network_name)
+        await self._record_network(audit_run_id, network_name, "created")
+
+        existing = await self._active_agent_runtime(audit_run_id)
+        if existing:
+            await self._record_agent_runtime(
+                runtime_id=existing.runtime_id,
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                status="running",
+                network_name=existing.network_name or network_name,
+                metadata={**(existing.metadata_json or {}), "reused": True},
+            )
+            return self._agent_runtime_dict(existing)
+
+        runtime_id = str(uuid.uuid4())
+        await self._record_agent_runtime(
+            runtime_id=runtime_id,
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            status="starting",
+            runtime_kind=self._acp_runtime_name(agent) or "acp",
+            network_name=network_name,
+            ttl_expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            metadata={
+                "agent_name": agent_name,
+                "template_name": agent.get("name", agent_name),
+                "workspace_host_path": workspace_host_path,
+                "allow_external_network": allow_external_network,
+                "retain_runtime_on_failure": retain_runtime_on_failure,
+                "mode": "run-scoped-runtime-record",
+            },
+        )
+
+        mcp_results: list[dict[str, Any]] = []
+        for mcp_name in self._agent_required_mcp(agent, input_payload or {}):
+            mcp = self.mcp_templates.get(mcp_name)
+            if str(mcp.get("transport", "http")) == "stdio":
+                continue
+            mcp_results.append(
+                await self._ensure_runtime_mcp(
+                    audit_run_id=audit_run_id,
+                    project_id=project_id,
+                    runtime_id=runtime_id,
+                    network_name=network_name,
+                    workspace_host_path=workspace_host_path,
+                    template=mcp,
+                )
+            )
+
+        runner = None
+        if (self._acp_runtime_name(agent) or "").lower() == "kimi":
+            runner = await self._start_agent_runtime_runner(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                runtime_id=runtime_id,
+                network_name=network_name,
+                workspace_host_path=workspace_host_path,
+                template=agent,
+            )
+
+        runtime_containers = [*mcp_results]
+        if runner:
+            runtime_containers.append(runner)
+        await self._record_agent_runtime(
+            runtime_id=runtime_id,
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            status="running",
+            runtime_kind=self._acp_runtime_name(agent) or "acp",
+            runner_container_id=(runner or {}).get("id"),
+            runner_container_name=(runner or {}).get("name"),
+            network_name=network_name,
+            mcp_containers=mcp_results,
+            container_ids=[str(item.get("id")) for item in runtime_containers if item.get("id")],
+            endpoint_url=f"http://{runner['host']}:8080" if runner else None,
+            ttl_expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            cleanup_status="pending",
+            metadata={
+                "agent_name": agent_name,
+                "template_name": agent.get("name", agent_name),
+                "workspace_host_path": workspace_host_path,
+                "allow_external_network": allow_external_network,
+                "retain_runtime_on_failure": retain_runtime_on_failure,
+                "mode": "run-scoped-runtime-record",
+            },
+        )
+        row = await self._active_agent_runtime(audit_run_id)
+        return self._agent_runtime_dict(row) if row else {"runtime_id": runtime_id, "status": "running", "mcp_containers": mcp_results}
+
+    async def run_agent_session(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        agent_run_id: str,
+        agent_name: str,
+        agent: dict[str, Any],
+        runtime: dict[str, Any],
+        input_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        endpoint_url = str(runtime.get("endpoint_url") or "").rstrip("/")
+        if not endpoint_url:
+            raise RuntimeError("agent runtime has no endpoint_url")
+        mcp_servers: dict[str, dict[str, Any]] = {}
+        for mcp_name in self._agent_required_mcp(agent, input_payload or {}):
+            mcp = self.mcp_templates.get(mcp_name)
+            transport = str(mcp.get("transport", "http"))
+            if transport == "stdio":
+                mcp_servers[mcp["name"]] = self._stdio_mcp_server_config(mcp)
+                continue
+            runtime_mcp = self._runtime_mcp_container(runtime, mcp["name"])
+            if runtime_mcp and transport in {"http", "sse"}:
+                endpoint = mcp.get("mcp_endpoint", "")
+                mcp_servers[mcp["name"]] = {"transport": transport, "url": f"{self._mcp_base_url(runtime_mcp, mcp)}{endpoint}"}
+        await self._record_agent_event(
+            agent_run_id,
+            "agent_session_starting",
+            {"runtime_id": runtime.get("runtime_id"), "endpoint_url": endpoint_url, "mcp_servers": mcp_servers},
+        )
+        try:
+            async with httpx.AsyncClient(timeout=getattr(self.settings, "opencode_agent_timeout_seconds", 600), trust_env=False) as client:
+                response = await client.post(
+                    f"{endpoint_url}/run-session",
+                    json={
+                        "agent_run_id": agent_run_id,
+                        "audit_run_id": audit_run_id,
+                        "project_id": project_id,
+                        "runtime_id": runtime.get("runtime_id"),
+                        "input_payload": input_payload,
+                        "mcp_servers": mcp_servers,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except Exception as exc:
+            await self._record_agent_event(agent_run_id, "agent_session_failed", {"runtime_id": runtime.get("runtime_id"), "error": str(exc)})
+            await self._record_agent_run(
+                agent_run_id=agent_run_id,
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                agent_name=agent_name,
+                template_name=agent.get("name", agent_name),
+                protocol_kind=agent.get("protocol", {}).get("kind", "legacy-http"),
+                status="failed",
+                input_summary=input_payload,
+                output_summary={"runtime_id": runtime.get("runtime_id"), "mcp_servers": mcp_servers},
+                error=str(exc),
+            )
+            raise
+        final_status = "completed" if payload.get("status") == "completed" else "failed"
+        acp_session_id = str(payload.get("acp_session_id") or "") or None
+        await self._record_agent_run(
+            agent_run_id=agent_run_id,
+            audit_run_id=audit_run_id,
+            project_id=project_id,
+            agent_name=agent_name,
+            template_name=agent.get("name", agent_name),
+            protocol_kind=agent.get("protocol", {}).get("kind", "legacy-http"),
+            status=final_status,
+            input_summary=input_payload,
+            output_summary={
+                "runtime_id": runtime.get("runtime_id"),
+                "acp_session_id": acp_session_id,
+                "mcp_servers": mcp_servers,
+                "session_result": _compact_runtime_payload(payload),
+            },
+            error=payload.get("error") if final_status == "failed" else None,
+        )
+        await self._record_agent_run_runtime(agent_run_id, runtime_id=str(runtime.get("runtime_id") or ""), acp_session_id=acp_session_id)
+        await self._record_agent_event(
+            agent_run_id,
+            "agent_session_finished",
+            {
+                "runtime_id": runtime.get("runtime_id"),
+                "status": final_status,
+                "acp_session_id": acp_session_id,
+                "event_count": payload.get("event_count"),
+            },
+        )
+        return {
+            "run_id": agent_run_id,
+            "agent_run_id": agent_run_id,
+            "audit_run_id": audit_run_id,
+            "project_id": project_id,
+            "runtime_id": runtime.get("runtime_id"),
+            "acp_session_id": acp_session_id,
+            "mcp_servers": mcp_servers,
+            "acp_runtime": self._acp_runtime_name(agent),
+            "acp_status": payload.get("status"),
+            "opencode_status": payload.get("status"),
+        }
 
     async def cleanup_run(self, audit_run_id: str) -> dict[str, Any]:
         containers = await self.docker.list_containers_by_run(audit_run_id)
@@ -568,11 +890,69 @@ class RuntimeOrchestrator:
             await self._mark_network_cleaned(audit_run_id, network_name)
             removed_networks.append(network_name)
         deactivated_api_keys = await self._deactivate_mcp_api_keys(audit_run_id)
+        await self._mark_agent_runtimes_cleaned(audit_run_id, reason="cleanup_run")
         return {
             "audit_run_id": audit_run_id,
             "removed_containers": removed,
             "removed_networks": removed_networks,
             "deactivated_mcp_api_keys": deactivated_api_keys,
+        }
+
+    async def cleanup_inactive_agent_runtime(self, audit_run_id: str) -> dict[str, Any]:
+        terminal_statuses = {"completed", "failed", "cancelled"}
+        active_statuses = {"created", "queued", "starting", "running"}
+        async with SessionLocal() as session:
+            agent_rows = (
+                await session.execute(
+                    select(AgentRun).where(
+                        AgentRun.audit_run_id == audit_run_id,
+                        AgentRun.status.in_(terminal_statuses),
+                    )
+                )
+            ).scalars().all()
+            active_agent_ids = set(
+                (
+                    await session.execute(
+                        select(AgentRun.agent_run_id).where(
+                            AgentRun.audit_run_id == audit_run_id,
+                            AgentRun.status.in_(active_statuses),
+                        )
+                    )
+                ).scalars().all()
+            )
+        terminal_agent_ids = {row.agent_run_id for row in agent_rows}
+        if not terminal_agent_ids:
+            return {"audit_run_id": audit_run_id, "removed_containers": [], "skipped_containers": [], "terminal_agent_run_ids": []}
+
+        containers = await self.docker.list_containers_by_run(audit_run_id)
+        removed: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for container in containers:
+            labels = container.get("Labels") or {}
+            agent_run_id = str(labels.get("dieaudit.agent_run_id") or "")
+            cid = str(container.get("Id") or "")
+            if not cid:
+                continue
+            if not agent_run_id:
+                skipped.append({"id": cid, "names": container.get("Names", []), "reason": "missing_agent_run_label"})
+                continue
+            if agent_run_id in active_agent_ids:
+                skipped.append({"id": cid, "names": container.get("Names", []), "agent_run_id": agent_run_id, "reason": "agent_run_active"})
+                continue
+            if agent_run_id not in terminal_agent_ids:
+                skipped.append({"id": cid, "names": container.get("Names", []), "agent_run_id": agent_run_id, "reason": "agent_run_not_terminal"})
+                continue
+            log_artifact = await self._capture_and_remove_container(
+                audit_run_id=audit_run_id,
+                container_id=cid,
+                container_name=(container.get("Names") or [None])[0],
+            )
+            removed.append({"id": cid, "names": container.get("Names", []), "agent_run_id": agent_run_id, "log_artifact": log_artifact})
+        return {
+            "audit_run_id": audit_run_id,
+            "removed_containers": removed,
+            "skipped_containers": skipped,
+            "terminal_agent_run_ids": sorted(terminal_agent_ids),
         }
 
     async def containers(self, audit_run_id: str) -> list[dict[str, Any]]:
@@ -1254,6 +1634,7 @@ class RuntimeOrchestrator:
             project_id=project_id,
             agent_run_id=agent_run_id,
         )
+        self._inject_proxy_env(env)
         payload = self._container_payload(
             image=image,
             command=template.get("command"),
@@ -1272,6 +1653,117 @@ class RuntimeOrchestrator:
         await self._wait_for_mcp_http(name, template, timeout_seconds=template.get("health_timeout_seconds", 45))
         await self._record_container(audit_run_id, project_id, agent_run_id, created["Id"], name, image, "mcp", labels, "running")
         return {"id": created["Id"], "name": name, "host": name, "image": image, "role": "mcp", "template": template["name"]}
+
+    async def _ensure_runtime_mcp(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        runtime_id: str,
+        network_name: str,
+        workspace_host_path: str | None,
+        template: dict[str, Any],
+    ) -> dict[str, Any]:
+        image = template["image"]
+        name = self._runtime_container_name(
+            audit_run_id=audit_run_id,
+            role="mcp",
+            template_name=template["name"],
+            run_id=runtime_id,
+        )
+        labels = self._labels(audit_run_id, project_id, role="mcp", ttl=utc_ttl())
+        labels["dieaudit.mcp"] = template["name"]
+        labels["dieaudit.runtime_id"] = runtime_id
+
+        existing = await self._managed_container_by_name(name)
+        if existing:
+            container_id = existing["Id"]
+            await self._record_container(audit_run_id, project_id, None, container_id, name, image, "mcp", labels, "running")
+            return {"id": container_id, "name": name, "host": name, "image": image, "role": "mcp", "template": template["name"], "reused": True}
+
+        await self.docker.pull_image(image)
+        mcp_artifact_path = self.settings.artifact_root / "mcp-runs" / audit_run_id / runtime_id / template["name"]
+        mcp_artifact_path.mkdir(parents=True, exist_ok=True)
+        mounts = await self._mounts(workspace_host_path, template, artifact_host_path=mcp_artifact_path)
+        env = await self._mcp_env(template=template, audit_run_id=audit_run_id, project_id=project_id, agent_run_id=runtime_id)
+        env["DIEAUDIT_RUNTIME_ID"] = runtime_id
+        self._inject_proxy_env(env)
+        payload = self._container_payload(
+            image=image,
+            command=template.get("command"),
+            env=env,
+            labels=labels,
+            network_name=network_name,
+            aliases=[name, template["name"]],
+            mounts=mounts,
+            read_only=template.get("read_only", True),
+            healthcheck=None,
+            resources=template.get("resources"),
+        )
+        created = await self.docker.create_container(name, payload)
+        await self.docker.start_container(created["Id"])
+        await self._record_container(audit_run_id, project_id, None, created["Id"], name, image, "mcp", labels, "starting")
+        await self._wait_for_mcp_http(name, template, timeout_seconds=template.get("health_timeout_seconds", 45))
+        await self._record_container(audit_run_id, project_id, None, created["Id"], name, image, "mcp", labels, "running")
+        return {"id": created["Id"], "name": name, "host": name, "image": image, "role": "mcp", "template": template["name"]}
+
+    async def _start_agent_runtime_runner(
+        self,
+        *,
+        audit_run_id: str,
+        project_id: str,
+        runtime_id: str,
+        network_name: str,
+        workspace_host_path: str | None,
+        template: dict[str, Any],
+    ) -> dict[str, Any]:
+        image = template["image"]
+        name = self._runtime_container_name(
+            audit_run_id=audit_run_id,
+            role="runner",
+            template_name=template["name"],
+            run_id=runtime_id,
+        )
+        labels = self._labels(audit_run_id, project_id, role="agent-runner", ttl=utc_ttl())
+        labels["dieaudit.runtime_id"] = runtime_id
+        labels["dieaudit.agent"] = template["name"]
+        existing = await self._managed_container_by_name(name)
+        if existing:
+            return {"id": existing["Id"], "name": name, "host": name, "image": image, "role": "agent-runner", "template": template["name"], "reused": True}
+
+        await self.docker.pull_image(image)
+        env = {
+            **template.get("env", {}),
+            "AUDIT_RUN_ID": audit_run_id,
+            "PROJECT_ID": project_id,
+            "DIEAUDIT_RUNTIME_ID": runtime_id,
+            "AGENT_GATEWAY_URL": "http://agent-gateway:8000",
+            "PORT": "8080",
+        }
+        self._inject_proxy_env(env)
+        mounts = await self._mounts(workspace_host_path, template)
+        artifact_host_path = self.settings.artifact_root / "agent-runtimes" / audit_run_id / runtime_id
+        artifact_host_path.mkdir(parents=True, exist_ok=True)
+        artifact_target = template.get("artifact_mount", {}).get("target", "/artifacts")
+        mounts.append(self._bind_mount(await self._host_path_for(artifact_host_path), artifact_target, read_only=False))
+        payload = self._container_payload(
+            image=image,
+            command=["python", "/app/kimi_acp_runtime_server.py"],
+            env=env,
+            labels=labels,
+            network_name=network_name,
+            aliases=[name, f"kimi-runtime-{audit_run_id[:8]}"],
+            mounts=mounts,
+            read_only=template.get("read_only", True),
+            healthcheck=None,
+            resources=template.get("resources"),
+        )
+        created = await self.docker.create_container(name, payload)
+        await self.docker.start_container(created["Id"])
+        await self._record_container(audit_run_id, project_id, None, created["Id"], name, image, "agent-runner", labels, "starting")
+        await self._wait_for_http_endpoint(name, 8080, "/health", timeout_seconds=int(template.get("health_timeout_seconds") or 60))
+        await self._record_container(audit_run_id, project_id, None, created["Id"], name, image, "agent-runner", labels, "running")
+        return {"id": created["Id"], "name": name, "host": name, "image": image, "role": "agent-runner", "template": template["name"]}
 
     async def _mcp_env(self, *, template: dict[str, Any], audit_run_id: str, project_id: str, agent_run_id: str) -> dict[str, Any]:
         env = {
@@ -1370,6 +1862,7 @@ class RuntimeOrchestrator:
             "MCP_SERVERS_JSON": json.dumps(mcp_servers),
             "AGENT_INPUT_JSON": json.dumps(input_payload),
         }
+        self._inject_proxy_env(env)
         self._inject_no_proxy(env, mcp_servers)
         if runtime_config_path:
             env["OPENCODE_CONFIG"] = runtime_config_path
@@ -1708,6 +2201,145 @@ class RuntimeOrchestrator:
             session.add(AgentRunEvent(agent_run_id=agent_run_id, event_type=event_type, payload=payload))
             await session.commit()
 
+    async def record_agent_transcript_events(
+        self,
+        *,
+        agent_run_id: str,
+        runtime_id: str | None,
+        acp_session_id: str | None,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not events:
+            return {"agent_run_id": agent_run_id, "inserted": 0}
+        async with SessionLocal() as session:
+            agent_run = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
+            if not agent_run:
+                raise ValueError(f"agent run not found: {agent_run_id}")
+            if runtime_id:
+                agent_run.runtime_id = runtime_id
+            if acp_session_id:
+                agent_run.acp_session_id = acp_session_id
+            rows = []
+            for item in events:
+                rows.append(
+                    AgentTranscriptEvent(
+                        agent_run_id=agent_run_id,
+                        audit_run_id=agent_run.audit_run_id,
+                        runtime_id=str(item.get("runtime_id") or runtime_id) if item.get("runtime_id") or runtime_id else None,
+                        seq=int(item.get("seq") or 0),
+                        event_type=str(item.get("event_type") or "event")[:128],
+                        session_id=str(item.get("session_id") or acp_session_id)[:128] if item.get("session_id") or acp_session_id else None,
+                        payload=item.get("payload") or {},
+                        content_text=item.get("content_text"),
+                    )
+                )
+            session.add_all(rows)
+            await session.commit()
+        return {"agent_run_id": agent_run_id, "inserted": len(events)}
+
+    async def _active_agent_runtime(self, audit_run_id: str) -> AgentRuntime | None:
+        async with SessionLocal() as session:
+            return await session.scalar(
+                select(AgentRuntime)
+                .where(
+                    AgentRuntime.audit_run_id == audit_run_id,
+                    AgentRuntime.status.in_(("starting", "running")),
+                    AgentRuntime.cleanup_status != "cleaned",
+                )
+                .order_by(AgentRuntime.created_at.desc())
+            )
+
+    async def _record_agent_runtime(
+        self,
+        *,
+        runtime_id: str,
+        audit_run_id: str,
+        project_id: str,
+        status: str,
+        runtime_kind: str | None = None,
+        runner_container_id: str | None = None,
+        runner_container_name: str | None = None,
+        network_name: str | None = None,
+        mcp_containers: list[dict[str, Any]] | None = None,
+        container_ids: list[str] | None = None,
+        endpoint_url: str | None = None,
+        ttl_expires_at: datetime | None = None,
+        cleanup_status: str | None = None,
+        cleanup_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        async with SessionLocal() as session:
+            existing = await session.scalar(select(AgentRuntime).where(AgentRuntime.runtime_id == runtime_id))
+            if existing:
+                existing.status = status
+                existing.runtime_kind = runtime_kind or existing.runtime_kind
+                existing.runner_container_id = runner_container_id or existing.runner_container_id
+                existing.runner_container_name = runner_container_name or existing.runner_container_name
+                existing.network_name = network_name or existing.network_name
+                if mcp_containers is not None:
+                    existing.mcp_containers = mcp_containers
+                if container_ids is not None:
+                    existing.container_ids = container_ids
+                existing.endpoint_url = endpoint_url or existing.endpoint_url
+                existing.ttl_expires_at = ttl_expires_at or existing.ttl_expires_at
+                existing.cleanup_status = cleanup_status or existing.cleanup_status
+                existing.cleanup_reason = cleanup_reason if cleanup_reason is not None else existing.cleanup_reason
+                existing.metadata_json = {**(existing.metadata_json or {}), **(metadata or {})}
+            else:
+                session.add(
+                    AgentRuntime(
+                        runtime_id=runtime_id,
+                        audit_run_id=audit_run_id,
+                        project_id=project_id,
+                        status=status,
+                        runtime_kind=runtime_kind or "kimi-acp",
+                        runner_container_id=runner_container_id,
+                        runner_container_name=runner_container_name,
+                        network_name=network_name,
+                        mcp_containers=mcp_containers or [],
+                        container_ids=container_ids or [],
+                        endpoint_url=endpoint_url,
+                        ttl_expires_at=ttl_expires_at,
+                        cleanup_status=cleanup_status or "pending",
+                        cleanup_reason=cleanup_reason,
+                        metadata_json=metadata or {},
+                    )
+                )
+            await session.commit()
+
+    async def _mark_agent_runtimes_cleaned(self, audit_run_id: str, *, reason: str) -> None:
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(select(AgentRuntime).where(AgentRuntime.audit_run_id == audit_run_id))
+            ).scalars()
+            for row in rows:
+                row.status = "cleaned"
+                row.cleanup_status = "cleaned"
+                row.cleanup_reason = reason
+            await session.commit()
+
+    @staticmethod
+    def _agent_runtime_dict(row: AgentRuntime) -> dict[str, Any]:
+        return {
+            "runtime_id": row.runtime_id,
+            "audit_run_id": row.audit_run_id,
+            "project_id": row.project_id,
+            "status": row.status,
+            "runtime_kind": row.runtime_kind,
+            "runner_container_id": row.runner_container_id,
+            "runner_container_name": row.runner_container_name,
+            "network_name": row.network_name,
+            "mcp_containers": row.mcp_containers or [],
+            "container_ids": row.container_ids or [],
+            "endpoint_url": row.endpoint_url,
+            "ttl_expires_at": row.ttl_expires_at.isoformat() if row.ttl_expires_at else None,
+            "cleanup_status": row.cleanup_status,
+            "cleanup_reason": row.cleanup_reason,
+            "metadata": row.metadata_json or {},
+            "created_at": row.created_at.isoformat(),
+            "updated_at": row.updated_at.isoformat(),
+        }
+
     async def _record_audit_run(
         self,
         *,
@@ -1782,6 +2414,18 @@ class RuntimeOrchestrator:
                         error=error,
                     )
                 )
+            await session.commit()
+
+    async def _record_agent_run_runtime(self, agent_run_id: str, *, runtime_id: str | None = None, acp_session_id: str | None = None) -> None:
+        if not runtime_id and not acp_session_id:
+            return
+        async with SessionLocal() as session:
+            row = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
+            if row:
+                if runtime_id:
+                    row.runtime_id = runtime_id
+                if acp_session_id:
+                    row.acp_session_id = acp_session_id
             await session.commit()
 
     async def _record_network(self, audit_run_id: str, name: str, status: str) -> None:
@@ -2083,6 +2727,13 @@ class RuntimeOrchestrator:
         return {"Type": "bind", "Source": source, "Target": target, "ReadOnly": read_only}
 
     @staticmethod
+    def _inject_proxy_env(env: dict[str, Any]) -> None:
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            value = os.environ.get(key)
+            if value and key not in env:
+                env[key] = value
+
+    @staticmethod
     def _inject_no_proxy(env: dict[str, Any], mcp_servers: dict[str, dict[str, Any]]) -> None:
         internal_hosts = ["localhost", "127.0.0.1", "agent-gateway", "host.docker.internal"]
         for server in mcp_servers.values():
@@ -2131,11 +2782,31 @@ class RuntimeOrchestrator:
         existing = await self.docker.network_exists(network_name)
         if existing:
             internal = bool(existing.get("Internal"))
-            if internal != allow_external_network:
+            if internal == (not allow_external_network):
                 return existing
             await self._disconnect_runtime_controllers(network_name)
             await self.docker.remove_network(network_name)
         return await self.docker.create_network(network_name, internal=not allow_external_network, labels=labels)
+
+    async def _managed_container_by_name(self, name: str) -> dict[str, Any] | None:
+        try:
+            info = await self.docker.inspect_container(name)
+        except Exception:
+            return None
+        labels = ((info.get("Config") or {}).get("Labels") or {})
+        if labels.get("dieaudit.managed") != "true":
+            return None
+        state = info.get("State") or {}
+        if not state.get("Running"):
+            return None
+        return {"Id": info.get("Id"), "Names": [f"/{name}"], "State": state.get("Status"), "Labels": labels}
+
+    @staticmethod
+    def _runtime_mcp_container(runtime: dict[str, Any] | None, mcp_name: str) -> dict[str, Any] | None:
+        for item in (runtime or {}).get("mcp_containers") or []:
+            if str(item.get("template") or "") == mcp_name or str(item.get("name") or "").endswith(mcp_name):
+                return item
+        return None
 
     def _runtime_controller_targets(self) -> list[tuple[str, str]]:
         targets = [(self.settings.agent_gateway_container_name, "agent-gateway")]
@@ -2184,8 +2855,11 @@ class RuntimeOrchestrator:
 
     async def _wait_for_mcp_http(self, host: str, template: dict[str, Any], *, timeout_seconds: int = 45) -> dict[str, Any]:
         health_path = str(template.get("healthcheck_path") or "/health")
+        return await self._wait_for_http_endpoint(host, int(template.get("port", 8001)), health_path, timeout_seconds=timeout_seconds)
+
+    async def _wait_for_http_endpoint(self, host: str, port: int, health_path: str, *, timeout_seconds: int = 45) -> dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
-        url = f"http://{host}:{template.get('port', 8001)}{health_path}"
+        url = f"http://{host}:{port}{health_path}"
         last_error = ""
         async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
             while asyncio.get_running_loop().time() < deadline:
@@ -2197,7 +2871,7 @@ class RuntimeOrchestrator:
                 except Exception as exc:
                     last_error = str(exc)
                 await asyncio.sleep(1)
-        raise RuntimeError(f"MCP {template.get('name', host)} not healthy at {url}: {last_error}")
+        raise RuntimeError(f"HTTP service {host} not healthy at {url}: {last_error}")
 
     @staticmethod
     def _is_opencode_agent(template: dict[str, Any]) -> bool:

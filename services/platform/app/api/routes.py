@@ -26,13 +26,17 @@ from app.api.readiness import (
     workspace_import_readiness_check as _workspace_import_readiness_check,
 )
 from app.api.serializers import (
+    agent_runtime_to_dict as _agent_runtime_to_dict,
     agent_run_to_dict as _agent_run_to_dict,
+    agent_transcript_event_to_dict as _agent_transcript_event_to_dict,
     artifact_metadata_or_none as _artifact_metadata_or_none,
     attempt_to_dict as _attempt_to_dict,
     audit_run_to_dict as _audit_run_to_dict,
     code_analysis_task_to_dict as _code_analysis_task_to_dict,
+    deliverable_artifact_to_dict as _deliverable_artifact_to_dict,
     dependency_record_to_dict as _dependency_record_to_dict,
     evidence_to_dict as _evidence_to_dict,
+    finding_triage_decision_to_dict as _finding_triage_decision_to_dict,
     finding_markdown_reference as _finding_markdown_reference,
     finding_to_dict as _finding_to_dict,
     knowledge_chunk_from_row as _knowledge_chunk_from_row,
@@ -47,17 +51,21 @@ from app.api.serializers import (
     whiteboard_task_to_dict as _whiteboard_task_to_dict,
 )
 from app.domain.models import (
+    AgentRuntime,
     AgentRun,
     AgentRunEvent,
+    AgentTranscriptEvent,
     ArtifactRecord,
     ApiKeyRecord,
     AuditRun,
     AuditRunEvent,
     CodeAnalysisTask,
     ContainerRun,
+    DeliverableArtifact,
     DependencyRecord,
     Evidence,
     Finding,
+    FindingTriageDecision,
     KnowledgeChunk,
     KnowledgeDocument,
     PlatformAuditEvent,
@@ -75,6 +83,7 @@ from app.integrations.protocols import classify_agent_protocol, fetch_a2a_agent_
 from app.repositories import SessionLocal
 from app.schemas import (
     A2AAgentCardRequest,
+    AgentTranscriptEventsRequest,
     CodeBatchAnalysisRequest,
     CreateAuditRunRequest,
     CreateApiKeyRequest,
@@ -86,6 +95,7 @@ from app.schemas import (
     CreateWhiteboardScheduleRequest,
     CreateWhiteboardSubscriptionRequest,
     DecideWhiteboardScheduleRequest,
+    EnsureAgentRuntimeRequest,
     KnowledgeSearchRequest,
     RunPocRequest,
     RunWhiteboardTasksRequest,
@@ -851,7 +861,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             if audit_run and runtime is not None:
                 config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
                 workspace_path = config.get("workspace_host_path")
-                agent_name = str(body.agent_name or result.get("suggested_agent_name") or "opencode-source-sink-finder")
+                agent_name = str(body.agent_name or result.get("suggested_agent_name") or "kimi-source-sink-finder")
                 agent_result = await runtime.start_agent_run(
                     audit_run_id=audit_run_id,
                     project_id=audit_run["project_id"],
@@ -1939,6 +1949,110 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         except (DockerApiError, FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.post("/audit-runs/{audit_run_id}/agent-runtimes/ensure")
+    async def ensure_agent_runtime(request: Request, audit_run_id: str, body: EnsureAgentRuntimeRequest) -> dict[str, Any]:
+        principal = getattr(request.state, "auth_principal", None)
+        audit_run = await _get_audit_run(audit_run_id)
+        if audit_run:
+            _require_audit_run_access(principal, audit_run)
+            if body.project_id != audit_run["project_id"]:
+                raise HTTPException(status_code=400, detail="runtime project_id does not match audit run")
+        else:
+            await _require_project_access(principal, body.project_id)
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/agent-runtimes/ensure", method="POST", json=body.model_dump())
+        try:
+            return await runtime.ensure_agent_runtime(
+                audit_run_id=audit_run_id,
+                project_id=body.project_id,
+                agent_name=body.agent_name,
+                workspace_host_path=body.workspace_host_path,
+                allow_external_network=body.allow_external_network,
+                retain_runtime_on_failure=body.retain_runtime_on_failure,
+                input_payload=body.input_payload,
+            )
+        except (DockerApiError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/internal/agent-runs/{agent_run_id}/transcript-events")
+    async def append_agent_transcript_events(agent_run_id: str, body: AgentTranscriptEventsRequest) -> dict[str, Any]:
+        runtime = runtime_provider()
+        event_payloads = [item.model_dump() for item in body.events]
+        if runtime is not None:
+            try:
+                return await runtime.record_agent_transcript_events(
+                    agent_run_id=agent_run_id,
+                    runtime_id=body.runtime_id,
+                    acp_session_id=body.acp_session_id,
+                    events=event_payloads,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        async with SessionLocal() as session:
+            agent_run = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
+            if not agent_run:
+                raise HTTPException(status_code=404, detail="agent run not found")
+            if body.runtime_id:
+                agent_run.runtime_id = body.runtime_id
+            if body.acp_session_id:
+                agent_run.acp_session_id = body.acp_session_id
+            session.add_all(
+                [
+                    AgentTranscriptEvent(
+                        agent_run_id=agent_run_id,
+                        audit_run_id=agent_run.audit_run_id,
+                        runtime_id=item.get("runtime_id") or body.runtime_id,
+                        seq=int(item.get("seq") or 0),
+                        event_type=str(item.get("event_type") or "event"),
+                        session_id=item.get("session_id") or body.acp_session_id,
+                        payload=item.get("payload") or {},
+                        content_text=item.get("content_text"),
+                    )
+                    for item in event_payloads
+                ]
+            )
+            await session.commit()
+        return {"agent_run_id": agent_run_id, "inserted": len(event_payloads)}
+
+    @router.post("/audit-runs/{audit_run_id}/cleanup-runtime")
+    async def cleanup_agent_runtime(request: Request, audit_run_id: str) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/cleanup-runtime", method="POST")
+        return await runtime.cleanup_run(audit_run_id)
+
+    @router.get("/audit-runs/{audit_run_id}/deliverables")
+    async def audit_run_deliverables(request: Request, audit_run_id: str) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(DeliverableArtifact)
+                    .where(DeliverableArtifact.audit_run_id == audit_run_id)
+                    .order_by(DeliverableArtifact.kind.asc(), DeliverableArtifact.created_at.asc())
+                )
+            ).scalars().all()
+            runtime_rows = (
+                await session.execute(
+                    select(AgentRuntime)
+                    .where(AgentRuntime.audit_run_id == audit_run_id)
+                    .order_by(AgentRuntime.created_at.desc())
+                )
+            ).scalars().all()
+        if not rows:
+            generated = await _build_deliverable_package(audit_run_id, settings)
+            return generated
+        artifacts = [_deliverable_artifact_to_dict(row) for row in rows]
+        return {
+            "audit_run_id": audit_run_id,
+            "root": f"deliverables/{audit_run_id}",
+            "artifacts": artifacts,
+            "runtimes": [_agent_runtime_to_dict(row) for row in runtime_rows],
+        }
+
     @router.post("/audit-runs/{audit_run_id}/demo")
     async def start_demo(request: Request, audit_run_id: str = "demo-run") -> dict[str, Any]:
         _require_unrestricted_resource_scope(getattr(request.state, "auth_principal", None), "demo audit run")
@@ -2052,6 +2166,44 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
                 for row in rows
             ]
 
+    @router.get("/audit-runs/{audit_run_id}/agent-runs/{agent_run_id}/transcript-events")
+    async def audit_run_agent_run_transcript_events(
+        request: Request,
+        audit_run_id: str,
+        agent_run_id: str,
+        after_id: int = Query(default=0, ge=0),
+        limit: int = Query(default=200, ge=1, le=1000),
+    ) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        async with SessionLocal() as session:
+            agent_run = await session.scalar(
+                select(AgentRun).where(
+                    AgentRun.audit_run_id == audit_run_id,
+                    AgentRun.agent_run_id == agent_run_id,
+                )
+            )
+            if not agent_run:
+                raise HTTPException(status_code=404, detail="agent run not found")
+            rows = (
+                await session.execute(
+                    select(AgentTranscriptEvent)
+                    .where(
+                        AgentTranscriptEvent.agent_run_id == agent_run_id,
+                        AgentTranscriptEvent.id > after_id,
+                    )
+                    .order_by(AgentTranscriptEvent.id.asc())
+                    .limit(limit)
+                )
+            ).scalars().all()
+        events = [_agent_transcript_event_to_dict(row) for row in rows]
+        return {
+            "agent_run_id": agent_run_id,
+            "audit_run_id": audit_run_id,
+            "events": events,
+            "last_id": events[-1]["id"] if events else after_id,
+            "has_more": len(events) == limit,
+        }
+
     @router.get("/audit-runs/{audit_run_id}/containers")
     async def audit_run_containers(request: Request, audit_run_id: str) -> list[dict[str, Any]]:
         await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
@@ -2080,6 +2232,17 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if runtime is None:
             return await proxy_gateway(f"/audit-runs/{audit_run_id}/cleanup", method="POST")
         return await runtime.cleanup_run(audit_run_id)
+
+    @router.post("/audit-runs/{audit_run_id}/cleanup-inactive-runtime")
+    async def cleanup_inactive_audit_run_runtime(request: Request, audit_run_id: str) -> dict[str, Any]:
+        await _require_audit_run_id_access(getattr(request.state, "auth_principal", None), audit_run_id)
+        runtime = runtime_provider()
+        if runtime is None:
+            return await proxy_gateway(f"/audit-runs/{audit_run_id}/cleanup-inactive-runtime", method="POST")
+        cleanup = getattr(runtime, "cleanup_inactive_agent_runtime", None)
+        if cleanup is None:
+            raise HTTPException(status_code=400, detail="runtime does not support inactive agent cleanup")
+        return await cleanup(audit_run_id)
 
     @router.post("/audit-runs/{audit_run_id}/sandbox/poc")
     async def run_poc(request: Request, audit_run_id: str, body: RunPocRequest) -> dict[str, Any]:
@@ -2866,11 +3029,107 @@ async def _get_audit_run(audit_run_id: str) -> dict[str, Any] | None:
 
 
 async def _list_findings(audit_run_id: str) -> list[dict[str, Any]]:
+    await _sync_whiteboard_candidate_findings(audit_run_id)
     async with SessionLocal() as session:
         rows = (
             await session.execute(select(Finding).where(Finding.audit_run_id == audit_run_id).order_by(Finding.created_at.asc()))
         ).scalars()
         return [_finding_to_dict(row) for row in rows]
+
+
+async def _sync_whiteboard_candidate_findings(audit_run_id: str) -> dict[str, Any]:
+    created = 0
+    linked = 0
+    candidate_card_types = {"candidate_vulnerability", "candidate-vulnerability"}
+    async with SessionLocal() as session:
+        cards = (
+            await session.execute(
+                select(WhiteboardCard)
+                .where(WhiteboardCard.audit_run_id == audit_run_id)
+                .where(WhiteboardCard.card_type.in_(candidate_card_types))
+                .order_by(WhiteboardCard.created_at.asc())
+            )
+        ).scalars().all()
+        for card in cards:
+            if card.finding_id:
+                linked += 1
+                continue
+            metadata = card.metadata_json or {}
+            source = str(metadata.get("source") or card.author or "whiteboard")[:64]
+            identity = finding_identity(
+                title=card.title,
+                source=source,
+                file_path=card.file_path,
+                line_start=card.line_start,
+                rule_id=str(metadata.get("rule_id") or "") or None,
+            )
+            existing = await find_existing_finding(session, audit_run_id=audit_run_id, identity=identity)
+            if existing:
+                card.finding_id = existing.finding_id
+                linked += 1
+                continue
+            finding = Finding(
+                finding_id=str(uuid.uuid4()),
+                audit_run_id=audit_run_id,
+                project_id=card.project_id,
+                title=identity["title"],
+                severity=_whiteboard_finding_severity(card),
+                status="candidate",
+                file_path=identity["file_path"],
+                line_start=identity["line_start"],
+                line_end=card.line_end,
+                rule_id=identity["rule_id"],
+                description=card.content,
+                source=identity["source"],
+                raw={
+                    "whiteboard_card_id": card.card_id,
+                    "whiteboard_status": card.status,
+                    "whiteboard_author": card.author,
+                    "whiteboard_metadata": metadata,
+                    "agent_run_id": card.agent_run_id,
+                },
+            )
+            session.add(finding)
+            session.add(
+                Evidence(
+                    evidence_id=str(uuid.uuid4()),
+                    finding_id=finding.finding_id,
+                    audit_run_id=audit_run_id,
+                    kind="whiteboard-card",
+                    summary=card.content,
+                    payload={
+                        "card_id": card.card_id,
+                        "title": card.title,
+                        "confidence": card.confidence,
+                        "metadata": metadata,
+                    },
+                )
+            )
+            card.finding_id = finding.finding_id
+            created += 1
+        if created or linked:
+            session.add(
+                AuditRunEvent(
+                    audit_run_id=audit_run_id,
+                    event_type="whiteboard_findings_synced",
+                    payload={"created": created, "linked": linked, "candidate_cards": len(cards)},
+                )
+            )
+        await session.commit()
+    return {"created": created, "linked": linked}
+
+
+def _whiteboard_finding_severity(card: WhiteboardCard) -> str:
+    metadata = card.metadata_json or {}
+    for key in ("severity", "risk", "priority"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()[:32]
+    content = (card.content or "").lower()
+    for value in ("critical", "high", "medium", "low", "info"):
+        if f"severity: {value}" in content or f'"severity": "{value}"' in content:
+            return value
+    return "unknown"
 
 
 async def _list_code_analysis_tasks(audit_run_id: str) -> list[dict[str, Any]]:
@@ -3186,6 +3445,7 @@ async def _run_structure_discovery(
     audit_run: dict[str, Any],
 ) -> dict[str, Any]:
     config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
+    settings = get_settings()
     common_dir = settings.artifact_root / "common" / audit_run_id
     common_dir.mkdir(parents=True, exist_ok=True)
     structure_path = common_dir / "STRUCTURE.md"
@@ -3387,6 +3647,7 @@ def _with_shared_agent_context(payload: dict[str, Any], audit_run: dict[str, Any
     result = dict(payload or {})
     audit_run_id = str(audit_run.get("audit_run_id") or "")
     if audit_run_id:
+        settings = get_settings()
         result.setdefault(
             "structure",
             {
@@ -3698,7 +3959,19 @@ async def _run_source_sink_analysis(
     config = audit_run.get("config") if isinstance(audit_run.get("config"), dict) else {}
     max_parallel = max(1, int(config.get("max_parallel_source_sink_finders") or config.get("max_parallel_code_auditors") or 2))
     max_findings = max(1, int(config.get("max_source_sink_findings") or 50))
-    selected = findings[:max_findings]
+    selected = (await _filter_deep_dive_findings(audit_run_id, findings))[:max_findings]
+    if not selected:
+        result = {
+            "ok": True,
+            "available": True,
+            "scheduled": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": True,
+            "reason": "no findings with main-agent deep_dive triage decision",
+        }
+        await _record_pipeline_event(audit_run_id, "source_sink_analysis_skipped", result)
+        return result
     semaphore = asyncio.Semaphore(max_parallel)
 
     async def run_one(finding: dict[str, Any]) -> dict[str, Any]:
@@ -3755,7 +4028,7 @@ async def _run_source_sink_finding_internal(
         agent_result = await runtime.start_agent_run(
             audit_run_id=audit_run_id,
             project_id=project_id,
-            agent_name=str(config.get("source_sink_finder_agent_name") or "opencode-source-sink-finder"),
+            agent_name=str(config.get("source_sink_finder_agent_name") or "kimi-source-sink-finder"),
             workspace_host_path=workspace_path,
             allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
             retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
@@ -3832,9 +4105,11 @@ async def _run_whiteboard_swarm(
         await _record_pipeline_event(audit_run_id, "whiteboard_swarm_failed", result)
         return result
 
+    triage = await _triage_whiteboard_swarm_candidates(audit_run_id)
     rounds = max(1, int(override_rounds or config.get("max_whiteboard_rounds") or 3))
     max_tasks_per_round = max(1, int(override_max_tasks_per_round or config.get("max_whiteboard_tasks_per_round") or 8))
     controller_agent = str(config.get("whiteboard_swarm_agent_name") or config.get("agent_name") or "opencode-orchestrator")
+    settings = get_settings()
     async with SessionLocal() as session:
         service = WhiteboardService(settings, session)
         task = WhiteboardTask(
@@ -3857,7 +4132,13 @@ async def _run_whiteboard_swarm(
     await _record_pipeline_event(
         audit_run_id,
         "whiteboard_swarm_started",
-        {"mode": "ai-controller", "controller_agent": controller_agent, "rounds": rounds, "max_tasks_per_round": max_tasks_per_round},
+        {
+            "mode": "ai-controller",
+            "controller_agent": controller_agent,
+            "rounds": rounds,
+            "max_tasks_per_round": max_tasks_per_round,
+            "triage": triage.get("summary"),
+        },
     )
     try:
         graph = await _whiteboard_graph(audit_run_id)
@@ -3871,8 +4152,9 @@ async def _run_whiteboard_swarm(
                 input_payload={
                     "goal": (
                         "Act as the Whiteboard swarm controller. Inspect the shared Whiteboard, decide which gaps or partial chains "
-                    "deserve more work, and use whiteboard-mcp schedule_agent to launch specialized Agents. Respect the supplied "
-                    "budgets. Add cards/edges/notes for your reasoning and submit chain evidence only when complete."
+                    "deserve more work, and use whiteboard-mcp schedule_agent to launch specialized Agents only for pre-triaged "
+                    "high-value candidates. Respect the supplied budgets. Add cards/edges/notes for your reasoning and submit "
+                    "chain evidence only when complete."
                     ),
                     "long_running": True,
                     "agent_lifecycle": "long-running",
@@ -3882,16 +4164,21 @@ async def _run_whiteboard_swarm(
                     "controller_task_id": task.task_id,
                     "max_rounds": rounds,
                     "max_agent_schedules": max_tasks_per_round,
+                    "candidate_value_triage": triage,
                     "allowed_agent_names": [
-                        "opencode-source-sink-finder",
-                        "opencode-validator",
+                        "kimi-source-sink-finder",
+                        "kimi-validator",
                         "opencode-judger",
                         "opencode-poc-writer",
                         "opencode-poc-verifier",
                         "opencode-code-auditor",
                     ],
                     "instruction": (
-                        "You decide the next Agent work. Do not rely on platform gap rules. Use list_graph to inspect all cards, "
+                        "You decide the next Agent work, but you must only schedule work for card IDs listed in "
+                        "candidate_value_triage.eligible_card_ids. Treat candidate_value_triage.excluded_card_ids as appendix-only "
+                        "unless you can explicitly connect one to an eligible attack chain. Do not schedule standalone SSL/TLS "
+                        "verification, weak password hashing, default credentials, cookie flags, CSRF, debug-mode, or generic "
+                        "secret-storage hygiene findings. Use list_graph to inspect all cards, "
                         "search_cards or find_attach_points to locate related cards by keyword or filters, then use "
                         "create_card, link_cards, declare_gap, schedule_agent, and submit_chain_evidence. Card predecessor/successor "
                         "slots must use card_ids arrays, status values not_ready/finding/not_found/hint/impossible, and agent_run_id."
@@ -3937,9 +4224,207 @@ async def _run_whiteboard_swarm(
     return result
 
 
+async def _triage_whiteboard_swarm_candidates(audit_run_id: str) -> dict[str, Any]:
+    candidate_card_types = {"candidate_vulnerability", "candidate-vulnerability"}
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(WhiteboardCard)
+                .where(WhiteboardCard.audit_run_id == audit_run_id)
+                .where(WhiteboardCard.card_type.in_(candidate_card_types))
+                .order_by(WhiteboardCard.created_at.asc())
+            )
+        ).scalars().all()
+        eligible: list[dict[str, Any]] = []
+        excluded: list[dict[str, Any]] = []
+        for row in rows:
+            decision = _swarm_candidate_value_decision(row)
+            metadata = dict(row.metadata_json or {})
+            metadata["swarm_triage"] = decision
+            row.metadata_json = metadata
+            existing_decision = await session.scalar(
+                select(FindingTriageDecision).where(
+                    FindingTriageDecision.audit_run_id == audit_run_id,
+                    FindingTriageDecision.card_id == row.card_id,
+                )
+            )
+            decision_status = str(decision["decision"])
+            deep_dive_allowed = decision_status == "deep_dive"
+            poc_allowed = deep_dive_allowed and bool(decision.get("poc_allowed", True))
+            values = {
+                "project_id": row.project_id,
+                "finding_id": row.finding_id,
+                "agent_run_id": row.agent_run_id,
+                "decision_status": decision_status,
+                "decision_reason": "; ".join(decision.get("reasons") or [])[:10000],
+                "deep_dive_allowed": deep_dive_allowed,
+                "poc_allowed": poc_allowed,
+                "confidence": decision.get("confidence") or "medium",
+                "signals": decision,
+            }
+            if existing_decision:
+                for key, value in values.items():
+                    setattr(existing_decision, key, value)
+            else:
+                session.add(
+                    FindingTriageDecision(
+                        decision_id=str(uuid.uuid4()),
+                        audit_run_id=audit_run_id,
+                        card_id=row.card_id,
+                        **values,
+                    )
+                )
+            if decision["decision"] == "deep_dive":
+                eligible.append(_triage_card_summary(row, decision))
+            else:
+                excluded.append(_triage_card_summary(row, decision))
+        if rows:
+            session.add(
+                AuditRunEvent(
+                    audit_run_id=audit_run_id,
+                    event_type="whiteboard_swarm_candidates_triaged",
+                    payload={
+                        "candidate_cards": len(rows),
+                        "eligible": len(eligible),
+                        "excluded": len(excluded),
+                        "eligible_card_ids": [item["card_id"] for item in eligible],
+                        "excluded_card_ids": [item["card_id"] for item in excluded],
+                    },
+                )
+            )
+        await session.commit()
+    return {
+        "policy": (
+            "Swarm should spend agent work only on findings with realistic exploitability and direct impact. "
+            "Standalone hygiene findings are appendix-only unless connected to an attack chain."
+        ),
+        "eligible_card_ids": [item["card_id"] for item in eligible],
+        "excluded_card_ids": [item["card_id"] for item in excluded],
+        "eligible": eligible[:80],
+        "excluded": excluded[:80],
+        "summary": {"candidate_cards": len(rows), "eligible": len(eligible), "excluded": len(excluded)},
+    }
+
+
+def _triage_card_summary(card: WhiteboardCard, decision: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "card_id": card.card_id,
+        "title": card.title,
+        "file_path": card.file_path,
+        "line_start": card.line_start,
+        "decision": decision["decision"],
+        "score": decision["score"],
+        "reasons": decision["reasons"],
+    }
+
+
+def _swarm_candidate_value_decision(card: WhiteboardCard) -> dict[str, Any]:
+    text = " ".join(
+        str(item or "")
+        for item in [
+            card.title,
+            card.content,
+            card.file_path,
+            (card.metadata_json or {}).get("category"),
+            (card.metadata_json or {}).get("impact"),
+        ]
+    ).lower()
+    score = 0
+    reasons: list[str] = []
+
+    def add(pattern: str, points: int, reason: str) -> None:
+        nonlocal score
+        if pattern in text:
+            score += points
+            reasons.append(reason)
+
+    high_value = [
+        ("auth bypass", 45, "authentication bypass"),
+        ("authentication bypass", 45, "authentication bypass"),
+        ("rbac bypass", 40, "authorization bypass"),
+        ("idor", 40, "direct object authorization impact"),
+        ("ownership", 25, "resource ownership impact"),
+        ("missing authorization", 35, "authorization impact"),
+        ("sql injection", 45, "database injection"),
+        ("raw sql", 25, "raw SQL sink"),
+        ("arbitrary file write", 45, "file write primitive"),
+        ("file upload rce", 50, "upload-to-code-execution path"),
+        ("webshell", 50, "webshell/code execution path"),
+        ("ssrf", 30, "server-side request primitive"),
+        ("deserialization", 35, "deserialization primitive"),
+        ("unserialize", 35, "PHP unserialize primitive"),
+        ("jwt forgery", 40, "token forgery impact"),
+        ("jwt secret", 25, "token signing secret impact"),
+        ("mass assignment", 35, "state-changing mass assignment"),
+        ("remote sql execution", 50, "remote SQL execution path"),
+        ("dynamic table", 25, "dynamic database target"),
+    ]
+    for pattern, points, reason in high_value:
+        add(pattern, points, reason)
+
+    low_value = [
+        "ssl/tls verification",
+        "ssl verification",
+        "tls verification",
+        "weak password",
+        "double md5",
+        "md5",
+        "cookie security",
+        "httponly",
+        "samesite",
+        "csrf",
+        "debug mode",
+        "default database credentials",
+        "hardcoded default",
+        "rate limiting",
+    ]
+    low_hits = [item for item in low_value if item in text]
+    if low_hits:
+        score -= 40
+        reasons.append("standalone hygiene finding: " + ", ".join(low_hits[:3]))
+
+    metadata = card.metadata_json or {}
+    severity = str(metadata.get("severity") or metadata.get("risk") or "").lower()
+    if severity in {"critical", "high"}:
+        score += 15
+    elif severity == "medium":
+        score += 5
+
+    attack_chain_terms = [
+        "attack chain",
+        "privilege escalation",
+        "account takeover",
+        "auth bypass",
+        "rce",
+        "remote code execution",
+        "data exfiltration",
+        "source-sink",
+    ]
+    if low_hits and any(term in text for term in attack_chain_terms):
+        score += 50
+        reasons.append("low-value smell is connected to an explicit attack-chain claim")
+
+    if score >= 55:
+        decision = "deep_dive"
+    elif score >= 30:
+        decision = "evidence_only"
+    elif low_hits:
+        decision = "appendix_only"
+    else:
+        decision = "needs_human"
+    return {
+        "decision": decision,
+        "score": score,
+        "reasons": reasons or ["no strong exploitability signal"],
+        "deep_dive_allowed": decision == "deep_dive",
+        "poc_allowed": decision == "deep_dive",
+        "confidence": "high" if abs(score) >= 40 else "medium",
+    }
+
+
 async def _whiteboard_graph(audit_run_id: str) -> dict[str, Any]:
     async with SessionLocal() as session:
-        return await WhiteboardService(settings, session).graph(audit_run_id)
+        return await WhiteboardService(get_settings(), session).graph(audit_run_id)
 
 
 async def _execution_graph(audit_run: dict[str, Any]) -> dict[str, Any]:
@@ -4199,7 +4684,7 @@ async def _generate_pocs_internal(audit_run_id: str, runtime: Any) -> dict[str, 
     if not workspace_path:
         return {"ok": False, "error": "audit run has no workspace path"}
     findings = await _list_findings(audit_run_id)
-    selected = _poc_candidate_findings(findings)
+    selected = await _filter_poc_allowed_findings(audit_run_id, _poc_candidate_findings(findings))
     if not selected:
         result = {"ok": True, "scheduled": 0, "completed": 0, "failed": 0, "skipped": True, "reason": "no confirmed findings"}
         await _record_pipeline_event(audit_run_id, "poc_writing_skipped", result)
@@ -4452,7 +4937,13 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
         _report_markdown(payload),
         content_type="text/markdown; charset=utf-8",
     )
-    json_metadata = store.put_json(f"reports/{audit_run_id}/{report_id}.json", payload)
+    json_payload = _report_json_index_payload(
+        audit_run=audit_run,
+        summary=summary,
+        findings=findings,
+        finding_reports=finding_reports,
+    )
+    json_metadata = store.put_json(f"reports/{audit_run_id}/{report_id}.json", json_payload)
     summary = {
         **summary,
         "json_path": json_metadata["path"],
@@ -4502,7 +4993,114 @@ async def _generate_report_internal(audit_run_id: str, settings: Settings) -> di
         "summary": summary,
     }
     await _record_pipeline_event(audit_run_id, "report_generated", result)
+    with contextlib.suppress(Exception):
+        result["deliverables"] = await _build_deliverable_package(audit_run_id, settings)
     return result
+
+
+async def _build_deliverable_package(audit_run_id: str, settings: Settings) -> dict[str, Any]:
+    audit_run = await _get_audit_run(audit_run_id)
+    if not audit_run:
+        return {"missing": True}
+    findings = await _list_findings(audit_run_id)
+    evidence = await _list_evidence(audit_run_id)
+    attempts = await _list_validation_attempts(audit_run_id)
+    agent_runs = await _list_agent_runs(audit_run_id)
+    triage = await _list_triage_decisions(audit_run_id)
+    triage_by_finding = {str(item.get("finding_id") or ""): item for item in triage if item.get("finding_id")}
+    deep_dive_findings = [
+        finding
+        for finding in findings
+        if (triage_by_finding.get(str(finding.get("finding_id") or "")) or {}).get("decision_status") == "deep_dive"
+    ]
+    low_value_findings = [
+        finding
+        for finding in findings
+        if (triage_by_finding.get(str(finding.get("finding_id") or "")) or {}).get("decision_status")
+        in {"appendix_only", "evidence_only", "reject", "needs_human"}
+    ]
+    store = ArtifactStore(settings)
+    root = f"deliverables/{audit_run_id}"
+    written: list[dict[str, Any]] = []
+
+    def put(kind: str, relative_path: str, text: str, *, finding_id: str | None = None, title: str | None = None) -> dict[str, Any]:
+        metadata = store.put_text(relative_path, text, content_type="text/markdown; charset=utf-8")
+        written.append({**metadata, "kind": kind, "finding_id": finding_id, "title": title})
+        return metadata
+
+    main_metadata = put(
+        "main-report",
+        f"{root}/main-report.md",
+        _deliverable_main_report_markdown(
+            audit_run=audit_run,
+            findings=deep_dive_findings,
+            evidence=evidence,
+            attempts=attempts,
+            triage_by_finding=triage_by_finding,
+        ),
+        title="Main Report",
+    )
+    appendix_metadata = put(
+        "low-value-appendix",
+        f"{root}/appendix/low-value-evidence.md",
+        _deliverable_low_value_appendix_markdown(low_value_findings, triage_by_finding),
+        title="Low Value Evidence Appendix",
+    )
+    for finding in findings:
+        finding_id = str(finding.get("finding_id") or "")
+        if not finding_id:
+            continue
+        finding_evidence = [item for item in evidence if str(item.get("finding_id")) == finding_id]
+        finding_attempts = [item for item in attempts if str(item.get("finding_id")) == finding_id]
+        finding_triage = triage_by_finding.get(finding_id)
+        put(
+            "finding-report",
+            f"{root}/findings/{finding_id}/report.md",
+            _deliverable_finding_report_markdown(finding, finding_evidence, finding_attempts, finding_triage),
+            finding_id=finding_id,
+            title=str(finding.get("title") or finding_id),
+        )
+        put(
+            "finding-evidence",
+            f"{root}/findings/{finding_id}/evidence.md",
+            _deliverable_finding_evidence_markdown(finding, finding_evidence, finding_attempts),
+            finding_id=finding_id,
+            title=f"Evidence: {finding.get('title') or finding_id}",
+        )
+        poc_items = [item for item in finding_evidence if str(item.get("kind") or "").startswith("poc")]
+        put(
+            "finding-poc-index",
+            f"{root}/findings/{finding_id}/poc/README.md",
+            _deliverable_poc_index_markdown(finding, poc_items),
+            finding_id=finding_id,
+            title=f"PoC: {finding.get('title') or finding_id}",
+        )
+    index_metadata = put(
+        "index",
+        f"{root}/index.md",
+        _deliverable_index_markdown(audit_run, main_metadata, appendix_metadata, written),
+        title="Deliverable Index",
+    )
+    await _upsert_deliverable_artifacts(audit_run, written)
+    await _record_pipeline_event(
+        audit_run_id,
+        "deliverable_package_generated",
+        {
+            "root": root,
+            "artifact_count": len(written),
+            "index_path": index_metadata["path"],
+            "main_report_path": main_metadata["path"],
+        },
+    )
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(DeliverableArtifact)
+                .where(DeliverableArtifact.audit_run_id == audit_run_id)
+                .order_by(DeliverableArtifact.kind.asc(), DeliverableArtifact.created_at.asc())
+            )
+        ).scalars().all()
+    return {"audit_run_id": audit_run_id, "root": root, "artifacts": [_deliverable_artifact_to_dict(row) for row in rows]}
 
 
 async def _generate_finding_reports(
@@ -4588,6 +5186,219 @@ async def _generate_finding_reports(
             }
         )
     return reports
+
+
+async def _list_triage_decisions(audit_run_id: str) -> list[dict[str, Any]]:
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(FindingTriageDecision)
+                .where(FindingTriageDecision.audit_run_id == audit_run_id)
+                .order_by(FindingTriageDecision.created_at.asc())
+            )
+        ).scalars()
+        return [_finding_triage_decision_to_dict(row) for row in rows]
+
+
+async def _upsert_deliverable_artifacts(audit_run: dict[str, Any], artifacts: list[dict[str, Any]]) -> None:
+    async with SessionLocal() as session:
+        await session.execute(delete(DeliverableArtifact).where(DeliverableArtifact.audit_run_id == audit_run["audit_run_id"]))
+        for metadata in artifacts:
+            session.add(
+                DeliverableArtifact(
+                    artifact_id=str(uuid.uuid4()),
+                    audit_run_id=audit_run["audit_run_id"],
+                    project_id=audit_run["project_id"],
+                    finding_id=metadata.get("finding_id"),
+                    kind=str(metadata.get("kind") or "artifact"),
+                    path=str(metadata["path"]),
+                    title=metadata.get("title"),
+                    content_type=metadata.get("content_type"),
+                    size=int(metadata.get("size") or 0),
+                    sha256=metadata.get("sha256"),
+                    metadata_json={
+                        "artifact_id": metadata.get("artifact_id"),
+                        "artifact_uri": metadata.get("artifact_uri"),
+                        "relative_path": metadata.get("relative_path"),
+                        "download_url": metadata.get("download_url"),
+                    },
+                )
+            )
+        await session.commit()
+    for metadata in artifacts:
+        await _upsert_artifact_record(
+            metadata,
+            [
+                {
+                    "kind": "deliverable",
+                    "project_id": audit_run["project_id"],
+                    "audit_run_id": audit_run["audit_run_id"],
+                    "record_id": metadata.get("finding_id") or metadata.get("kind"),
+                }
+            ],
+        )
+
+
+def _deliverable_index_markdown(
+    audit_run: dict[str, Any],
+    main_metadata: dict[str, Any],
+    appendix_metadata: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> str:
+    lines = [
+        f"# Audit Deliverable Package: {audit_run['audit_run_id']}",
+        "",
+        f"- Project ID: `{audit_run.get('project_id')}`",
+        f"- Main report: `{main_metadata.get('relative_path')}`",
+        f"- Low-value appendix: `{appendix_metadata.get('relative_path')}`",
+        f"- Artifact count: `{len(artifacts)}`",
+        "",
+        "## Contents",
+        "",
+    ]
+    for item in artifacts:
+        lines.append(f"- `{item.get('kind')}` `{item.get('relative_path')}`")
+    return "\n".join(lines)
+
+
+def _deliverable_main_report_markdown(
+    *,
+    audit_run: dict[str, Any],
+    findings: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+    triage_by_finding: dict[str, dict[str, Any]],
+) -> str:
+    lines = [
+        f"# Audit Report: {audit_run['audit_run_id']}",
+        "",
+        "## Summary",
+        "",
+        f"- Deep-dive findings: `{len(findings)}`",
+        f"- Evidence records: `{len(evidence)}`",
+        f"- Validation attempts: `{len(attempts)}`",
+        "",
+        "## Findings",
+        "",
+    ]
+    if not findings:
+        lines.append("- No findings were approved for deep dive by main-agent triage.")
+    for finding in findings:
+        finding_id = str(finding.get("finding_id") or "")
+        finding_evidence = [item for item in evidence if str(item.get("finding_id")) == finding_id]
+        triage = triage_by_finding.get(finding_id) or {}
+        lines.extend(
+            [
+                f"### {finding.get('title') or finding_id}",
+                "",
+                f"- Finding ID: `{finding_id}`",
+                f"- Severity: `{finding.get('severity') or 'unknown'}`",
+                f"- Status: `{finding.get('status') or 'unknown'}`",
+                f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
+                f"- Triage: `{triage.get('decision_status') or '-'}`",
+                f"- Evidence count: `{len(finding_evidence)}`",
+                "",
+                str(finding.get("description") or "-"),
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _deliverable_low_value_appendix_markdown(findings: list[dict[str, Any]], triage_by_finding: dict[str, dict[str, Any]]) -> str:
+    lines = ["# Low-Value Evidence Appendix", ""]
+    if not findings:
+        lines.append("- No appendix-only/evidence-only findings recorded.")
+        return "\n".join(lines)
+    for finding in findings:
+        finding_id = str(finding.get("finding_id") or "")
+        triage = triage_by_finding.get(finding_id) or {}
+        lines.extend(
+            [
+                f"## {finding.get('title') or finding_id}",
+                "",
+                f"- Finding ID: `{finding_id}`",
+                f"- Decision: `{triage.get('decision_status') or '-'}`",
+                f"- Reason: {triage.get('decision_reason') or '-'}",
+                f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _deliverable_finding_report_markdown(
+    finding: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+    triage: dict[str, Any] | None,
+) -> str:
+    finding_id = str(finding.get("finding_id") or "")
+    lines = [
+        f"# Finding Report: {finding.get('title') or finding_id}",
+        "",
+        f"- Finding ID: `{finding_id}`",
+        f"- Severity: `{finding.get('severity') or 'unknown'}`",
+        f"- Status: `{finding.get('status') or 'unknown'}`",
+        f"- Triage: `{(triage or {}).get('decision_status') or '-'}`",
+        f"- Triage reason: {(triage or {}).get('decision_reason') or '-'}",
+        f"- Location: `{finding.get('file_path') or '-'}`:{finding.get('line_start') or '-'}",
+        "",
+        "## Description",
+        "",
+        str(finding.get("description") or "-"),
+        "",
+        "## Evidence Summary",
+        "",
+    ]
+    lines.extend([f"- `{item.get('kind')}` {item.get('summary') or item.get('evidence_id')}" for item in evidence] or ["- None."])
+    lines.extend(["", "## Validation", ""])
+    lines.extend([f"- Round `{item.get('round_index')}` status `{item.get('status')}`" for item in attempts] or ["- None."])
+    return "\n".join(lines)
+
+
+def _deliverable_finding_evidence_markdown(
+    finding: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+) -> str:
+    lines = [f"# Evidence: {finding.get('title') or finding.get('finding_id')}", ""]
+    for item in evidence:
+        lines.extend(
+            [
+                f"## {item.get('kind') or item.get('evidence_id')}",
+                "",
+                f"- Evidence ID: `{item.get('evidence_id')}`",
+                f"- Artifact: `{item.get('artifact_path') or '-'}`",
+                "",
+                str(item.get("summary") or "-"),
+                "",
+            ]
+        )
+    if not evidence:
+        lines.append("- No evidence records.")
+    if attempts:
+        lines.extend(["", "## Validation Logs", ""])
+        for item in attempts:
+            lines.append(f"- `{item.get('attempt_id')}` round `{item.get('round_index')}` status `{item.get('status')}`")
+    return "\n".join(lines)
+
+
+def _deliverable_poc_index_markdown(finding: dict[str, Any], poc_items: list[dict[str, Any]]) -> str:
+    lines = [f"# PoC Index: {finding.get('title') or finding.get('finding_id')}", ""]
+    if not poc_items:
+        lines.append("- No PoC artifact registered for this finding.")
+        return "\n".join(lines)
+    for item in poc_items:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        lines.extend(
+            [
+                f"- `{item.get('kind')}` {item.get('summary') or item.get('evidence_id')}",
+                f"  - Artifact: `{item.get('artifact_path') or payload.get('path') or '-'}`",
+                f"  - AgentRun: `{payload.get('agent_run_id') or '-'}`",
+            ]
+        )
+    return "\n".join(lines)
 
 
 async def _extract_agent_structured_list(agent_run_id: str, key: str) -> list[dict[str, Any]]:
@@ -4973,6 +5784,48 @@ def _poc_candidate_findings(findings: list[dict[str, Any]]) -> list[dict[str, An
     return [item for item in findings if str(item.get("status") or "").lower() == "needs_review"]
 
 
+async def _filter_deep_dive_findings(audit_run_id: str, findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not findings:
+        return []
+    finding_ids = [str(item.get("finding_id") or "") for item in findings if item.get("finding_id")]
+    if not finding_ids:
+        return []
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(FindingTriageDecision).where(
+                    FindingTriageDecision.audit_run_id == audit_run_id,
+                    FindingTriageDecision.finding_id.in_(finding_ids),
+                    FindingTriageDecision.decision_status == "deep_dive",
+                    FindingTriageDecision.deep_dive_allowed == True,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+    allowed = {str(row.finding_id) for row in rows if row.finding_id}
+    return [item for item in findings if str(item.get("finding_id") or "") in allowed]
+
+
+async def _filter_poc_allowed_findings(audit_run_id: str, findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not findings:
+        return []
+    finding_ids = [str(item.get("finding_id") or "") for item in findings if item.get("finding_id")]
+    if not finding_ids:
+        return []
+    async with SessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(FindingTriageDecision).where(
+                    FindingTriageDecision.audit_run_id == audit_run_id,
+                    FindingTriageDecision.finding_id.in_(finding_ids),
+                    FindingTriageDecision.decision_status == "deep_dive",
+                    FindingTriageDecision.poc_allowed == True,  # noqa: E712
+                )
+            )
+        ).scalars().all()
+    allowed = {str(row.finding_id) for row in rows if row.finding_id}
+    return [item for item in findings if str(item.get("finding_id") or "") in allowed]
+
+
 def _finding_artifact_contract(audit_run_id: str, finding_id: str, stage: str) -> dict[str, Any]:
     return {
         "finding_directory": f"findings/{audit_run_id}/{finding_id}",
@@ -5210,6 +6063,43 @@ def _finding_report_markdown(payload: dict[str, Any]) -> str:
 def _safe_report_name(value: str) -> str:
     name = "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-")
     return "-".join(part for part in name.split("-") if part)[:80] or "artifact"
+
+
+def _report_json_index_payload(
+    *,
+    audit_run: dict[str, Any],
+    summary: dict[str, Any],
+    findings: list[dict[str, Any]],
+    finding_reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    reports_by_finding = {str(item.get("finding_id") or ""): item for item in finding_reports}
+    finding_index: list[dict[str, Any]] = []
+    for finding in findings:
+        finding_id = str(finding.get("finding_id") or "")
+        report = reports_by_finding.get(finding_id) or {}
+        finding_index.append(
+            {
+                "finding_id": finding_id,
+                "title": finding.get("title"),
+                "severity": finding.get("severity"),
+                "status": finding.get("status"),
+                "file_path": finding.get("file_path"),
+                "line_start": finding.get("line_start"),
+                "line_end": finding.get("line_end"),
+                "source": finding.get("source"),
+                "report_id": report.get("report_id"),
+                "markdown_path": report.get("markdown_path"),
+                "json_path": report.get("json_path"),
+            }
+        )
+    compact_summary = dict(summary)
+    compact_summary.pop("finding_reports", None)
+    return {
+        "audit_run": audit_run,
+        "summary": compact_summary,
+        "finding_index": finding_index,
+        "finding_reports": finding_reports,
+    }
 
 
 def _report_summary(

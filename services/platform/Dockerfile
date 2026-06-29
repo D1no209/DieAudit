@@ -16,17 +16,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 ENV DOTNET_ROOT=/opt/dotnet \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     PATH="/root/.dotnet/tools:/opt/dotnet:${PATH}"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl default-jre-headless git jadx unzip wget \
+RUN apt-get update -o Acquire::Retries=5 \
+    && apt-get install -y --fix-missing -o Acquire::Retries=5 --no-install-recommends bash ca-certificates curl default-jre-headless git libicu76 unzip wget \
     && mkdir -p /opt/cfr /opt/dotnet \
-    && wget -q -O /opt/cfr/cfr.jar https://www.benf.org/other/cfr/cfr-0.152.jar \
+    && wget --tries=5 -q -O /opt/cfr/cfr.jar https://www.benf.org/other/cfr/cfr-0.152.jar \
     && printf '#!/bin/sh\nexec java -jar /opt/cfr/cfr.jar "$@"\n' > /usr/local/bin/cfr \
     && chmod +x /usr/local/bin/cfr \
-    && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
-    && sh /tmp/dotnet-install.sh --channel 8.0 --install-dir /opt/dotnet \
-    && dotnet tool install --global ilspycmd \
+    && curl --retry 5 --retry-delay 2 -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+    && bash /tmp/dotnet-install.sh --channel 8.0 --install-dir /opt/dotnet \
+    && (dotnet tool install --global ilspycmd || true) \
     && rm -rf /var/lib/apt/lists/* /tmp/dotnet-install.sh
 
 COPY services/platform/requirements.txt /app/requirements.txt

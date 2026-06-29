@@ -258,6 +258,7 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
         "structure-discovery",
         "agent-audit",
         "code-analysis",
+        "value-triage",
         "whiteboard-swarm",
         "validation-judgement",
         "feedback-loop",
