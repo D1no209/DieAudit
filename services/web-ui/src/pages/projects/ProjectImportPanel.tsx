@@ -1,69 +1,76 @@
-import { Button, Card, Form, Input, Tabs, Upload } from "antd";
-import type { FormInstance } from "antd/es/form";
-import type { UploadFile } from "antd/es/upload/interface";
+import { Button, Field, FileDropzone, Input, Panel, Tabs, fieldValue } from "../../ui";
 
 type Props = {
-  gitForm: FormInstance;
   loading: boolean;
-  zipFiles: UploadFile[];
-  zipForm: FormInstance;
+  zipFiles: File[];
   onCreateGitProject: (values: { name: string; git_url: string; ref?: string }) => void;
-  onSetZipFiles: (files: UploadFile[]) => void;
+  onSetZipFiles: (files: File[]) => void;
   onUploadZipProject: (values: { name: string }) => void;
 };
 
-export function ProjectImportPanel({
-  gitForm,
-  loading,
-  zipFiles,
-  zipForm,
-  onCreateGitProject,
-  onSetZipFiles,
-  onUploadZipProject,
-}: Props) {
+export function ProjectImportPanel({ loading, zipFiles, onCreateGitProject, onSetZipFiles, onUploadZipProject }: Props) {
   return (
-    <Card title="Import Project">
+    <Panel title="Import Project">
       <Tabs
         items={[
           {
             key: "git",
             label: "Git",
             children: (
-              <Form form={gitForm} layout="vertical" onFinish={onCreateGitProject}>
-                <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-                  <Input />
-                </Form.Item>
-                <Form.Item name="git_url" label="Git URL" rules={[{ required: true }]}>
-                  <Input />
-                </Form.Item>
-                <Form.Item name="ref" label="Ref">
-                  <Input />
-                </Form.Item>
-                <Button htmlType="submit" type="primary" loading={loading}>
+              <form
+                className="grid gap-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const formData = new FormData(event.currentTarget);
+                  onCreateGitProject({
+                    name: fieldValue(formData, "name") || "",
+                    git_url: fieldValue(formData, "git_url") || "",
+                    ref: fieldValue(formData, "ref"),
+                  });
+                  event.currentTarget.reset();
+                }}
+              >
+                <Field label="Name">
+                  <Input name="name" required />
+                </Field>
+                <Field label="Git URL">
+                  <Input name="git_url" required />
+                </Field>
+                <Field label="Ref">
+                  <Input name="ref" />
+                </Field>
+                <Button type="submit" variant="primary" loading={loading}>
                   导入 Git
                 </Button>
-              </Form>
+              </form>
             ),
           },
           {
             key: "zip",
             label: "Zip",
             children: (
-              <Form form={zipForm} layout="vertical" onFinish={onUploadZipProject}>
-                <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-                  <Input />
-                </Form.Item>
-                <Upload beforeUpload={() => false} maxCount={1} fileList={zipFiles} onChange={({ fileList }) => onSetZipFiles(fileList)}>
-                  <Button>选择 zip</Button>
-                </Upload>
-                <Button className="form-action" htmlType="submit" type="primary" loading={loading}>
+              <form
+                className="grid gap-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const formData = new FormData(event.currentTarget);
+                  onUploadZipProject({ name: fieldValue(formData, "name") || "" });
+                  event.currentTarget.reset();
+                }}
+              >
+                <Field label="Name">
+                  <Input name="name" required />
+                </Field>
+                <FileDropzone accept=".zip,application/zip" onFilesChange={onSetZipFiles} />
+                {zipFiles[0] ? <p className="text-sm text-slate-600">Selected: {zipFiles[0].name}</p> : null}
+                <Button type="submit" variant="primary" loading={loading}>
                   上传 Zip
                 </Button>
-              </Form>
+              </form>
             ),
           },
         ]}
       />
-    </Card>
+    </Panel>
   );
 }

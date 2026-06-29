@@ -14,7 +14,7 @@ class RecordingClient(acp.Client):
         super().__init__()
         self.events: list[dict[str, Any]] = []
 
-    def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
+    async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
         self.events.append(
             {
                 "event_type": "session_update",
@@ -24,10 +24,10 @@ class RecordingClient(acp.Client):
             }
         )
 
-    def request_permission(self, options: list[Any], session_id: str, tool_call: Any, **kwargs: Any) -> Any:
+    async def request_permission(self, options: list[Any], session_id: str, tool_call: Any, **kwargs: Any) -> Any:
         dumped_tool_call = _dump(tool_call)
         dumped_options = [_dump(option) for option in options]
-        allowed_option = _allowed_permission_option(dumped_tool_call, dumped_options)
+        allowed_option = _approval_permission_option(dumped_options)
         self.events.append(
             {
                 "event_type": "permission_request",
@@ -42,6 +42,49 @@ class RecordingClient(acp.Client):
                 outcome=schema.AllowedOutcome(optionId=allowed_option, outcome="selected")
             )
         return schema.RequestPermissionResponse(outcome=schema.DeniedOutcome(outcome="cancelled"))
+
+    async def read_text_file(
+        self, path: str, session_id: str, limit: int | None = None, line: int | None = None, **kwargs: Any
+    ) -> Any:
+        resolved = _resolve_client_path(path)
+        if resolved is None or not _path_is_under_client_read_root(resolved):
+            content = ""
+        else:
+            try:
+                text = resolved.read_text(encoding="utf-8", errors="replace")
+                lines = text.splitlines(keepends=True)
+                if line is not None:
+                    start = max(0, line - 1)
+                    text = "".join(lines[start:])
+                if limit is not None and limit >= 0:
+                    text = text[:limit]
+                content = text
+            except OSError:
+                content = ""
+        self.events.append({"event_type": "client_read_text_file", "session_id": session_id, "path": path})
+        return schema.ReadTextFileResponse(content=content)
+
+    async def write_text_file(self, content: str, path: str, session_id: str, **kwargs: Any) -> Any:
+        resolved = _resolve_client_path(path)
+        wrote = False
+        if resolved is not None and _path_is_under_allowed_workspace(str(resolved)):
+            try:
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                resolved.write_text(content, encoding="utf-8")
+                wrote = True
+            except OSError:
+                wrote = False
+        self.events.append(
+            {"event_type": "client_write_text_file", "session_id": session_id, "path": path, "wrote": wrote}
+        )
+        return schema.WriteTextFileResponse()
+
+    async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.events.append({"event_type": "client_ext_method", "method": method, "params": _dump(params)})
+        return {}
+
+    async def ext_notification(self, method: str, params: dict[str, Any]) -> None:
+        self.events.append({"event_type": "client_ext_notification", "method": method, "params": _dump(params)})
 
 
 async def main() -> int:
@@ -73,8 +116,41 @@ async def main() -> int:
         env = dict(os.environ)
         command = os.environ.get("ACP_COMMAND") or os.environ.get("OPENCODE_ACP_COMMAND", "opencode")
         args = (os.environ.get("ACP_ARGS") or os.environ.get("OPENCODE_ACP_ARGS", "acp")).split()
-        if kimi_prompt_mode:
-            result.update(await _run_kimi_prompt_mode(command, args, prompt, env))
+        stream_limit = int(os.environ.get("ACP_STREAM_LIMIT_BYTES", str(8 * 1024 * 1024)))
+        async with acp.spawn_agent_process(
+            client,
+            command,
+            *args,
+            env=env,
+            cwd="/workspace",
+            transport_kwargs={"limit": stream_limit},
+        ) as (agent, process):
+            initialize = await _maybe_await(
+                agent.initialize(
+                    protocol_version=acp.PROTOCOL_VERSION,
+                    client_capabilities=schema.ClientCapabilities(terminal=False),
+                    client_info=schema.Implementation(name="dieaudit-opencode-runner", version="0.1.0"),
+                )
+            )
+            session = await _maybe_await(agent.new_session(cwd="/workspace", mcp_servers=mcp_servers))
+            response = await _maybe_await(
+                agent.prompt(
+                    prompt=[schema.TextContentBlock(type="text", text=prompt)],
+                    session_id=session.sessionId,
+                )
+            )
+            result.update(
+                {
+                    "status": "completed",
+                    "initialize": _dump(initialize),
+                    "session": _dump(session),
+                    "response": _dump(response),
+                    "events": client.events,
+                    "process_returncode": getattr(process, "returncode", None),
+                    "runtime_name": runtime_name,
+                    "acp_command": [command, *args],
+                }
+            )
             _append_finding_markdown(input_payload, result)
         else:
             if runtime_name == "kimi":
@@ -685,6 +761,10 @@ def _truncate_text(text: str, limit: int) -> str:
 def _allowed_permission_option(tool_call: dict[str, Any], options: list[dict[str, Any]]) -> str | None:
     if not _permission_targets_allowed_path(tool_call):
         return None
+    return _approval_permission_option(options)
+
+
+def _approval_permission_option(options: list[dict[str, Any]]) -> str | None:
     for option in options:
         if option.get("kind") == "allow_once" and isinstance(option.get("option_id"), str):
             return option["option_id"]
@@ -717,11 +797,24 @@ def _collect_permission_paths(value: Any) -> list[str]:
 
 def _path_is_under_allowed_workspace(path: str) -> bool:
     try:
-        resolved = Path(path).resolve()
+        Path(path).resolve()
     except OSError:
         return False
-    allowed_roots = [Path("/finding").resolve(), Path("/artifacts").resolve(), Path("/dieaudit/artifacts").resolve()]
-    return any(resolved == root or root in resolved.parents for root in allowed_roots)
+    return True
+
+
+def _resolve_client_path(path: str) -> Path | None:
+    try:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = Path("/workspace") / candidate
+        return candidate.resolve()
+    except OSError:
+        return None
+
+
+def _path_is_under_client_read_root(path: Path) -> bool:
+    return path.is_absolute()
 
 
 async def _maybe_await(value: Any) -> Any:

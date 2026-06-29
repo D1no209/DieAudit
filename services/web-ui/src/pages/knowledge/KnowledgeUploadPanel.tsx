@@ -1,36 +1,36 @@
-import { Button, Card, Form, Input, Upload } from "antd";
-import type { FormInstance } from "antd/es/form";
-import type { UploadFile } from "antd/es/upload/interface";
+import { Button, Field, FileDropzone, Input, Panel, fieldValue } from "../../ui";
 
 type Props = {
-  files: UploadFile[];
-  form: FormInstance;
+  files: File[];
   loading: boolean;
   selectedProjectId?: string;
-  onSetFiles: (files: UploadFile[]) => void;
+  onSetFiles: (files: File[]) => void;
   onUpload: (values: { title: string; scope?: string; project_id?: string }) => void;
 };
 
-export function KnowledgeUploadPanel({ files, form, loading, selectedProjectId, onSetFiles, onUpload }: Props) {
+export function KnowledgeUploadPanel({ files, loading, selectedProjectId, onSetFiles, onUpload }: Props) {
   return (
-    <Card title="Upload Document">
-      <Form form={form} layout="vertical" onFinish={onUpload}>
-        <Form.Item name="title" label="Title" rules={[{ required: true }]}>
-          <Input />
-        </Form.Item>
-        <Form.Item name="scope" label="Scope" initialValue="global">
-          <Input placeholder="global or project" />
-        </Form.Item>
-        <Form.Item name="project_id" label="Project ID">
-          <Input placeholder={selectedProjectId || "optional for project scope"} />
-        </Form.Item>
-        <Upload beforeUpload={() => false} maxCount={1} fileList={files} onChange={({ fileList }) => onSetFiles(fileList)}>
-          <Button>选择文档</Button>
-        </Upload>
-        <Button className="form-action" htmlType="submit" type="primary" loading={loading}>
-          上传并索引
-        </Button>
-      </Form>
-    </Card>
+    <Panel title="Upload Document">
+      <form
+        className="grid gap-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const formData = new FormData(event.currentTarget);
+          onUpload({
+            title: fieldValue(formData, "title") || "",
+            scope: fieldValue(formData, "scope"),
+            project_id: fieldValue(formData, "project_id"),
+          });
+          event.currentTarget.reset();
+        }}
+      >
+        <Field label="Title"><Input name="title" required /></Field>
+        <Field label="Scope"><Input name="scope" defaultValue="global" placeholder="global or project" /></Field>
+        <Field label="Project ID"><Input name="project_id" placeholder={selectedProjectId || "optional for project scope"} /></Field>
+        <FileDropzone onFilesChange={onSetFiles} />
+        {files[0] ? <p className="text-sm text-slate-600">Selected: {files[0].name}</p> : null}
+        <Button type="submit" variant="primary" loading={loading}>上传并索引</Button>
+      </form>
+    </Panel>
   );
 }

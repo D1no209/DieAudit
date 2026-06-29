@@ -1,10 +1,7 @@
-import { Layout } from "antd";
 import type { ReactNode } from "react";
 import type { AppView, NavigationGroup, NavigationItem } from "../navigation";
 import { AppHeader } from "./AppHeader";
 import { AppNavigation } from "./AppNavigation";
-
-const { Content } = Layout;
 
 type Props = {
   activeView: AppView;
@@ -34,7 +31,7 @@ export function AppShell({
   onViewChange,
 }: Props) {
   return (
-    <Layout className="app-shell">
+    <div className="min-h-dvh bg-slate-100">
       <AppHeader
         activeView={activeView}
         apiKey={apiKey}
@@ -45,13 +42,13 @@ export function AppShell({
         onSaveApiKey={onSaveApiKey}
         onViewChange={onViewChange}
       />
-      <Layout className="main-layout">
+      <div className="flex min-h-[calc(100dvh-76px)]">
         <AppNavigation activeView={activeView} groups={navigationGroups} onViewChange={onViewChange} />
-        <Content className="app-content">
+        <main className="mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8">
           {alerts}
           {children}
-        </Content>
-      </Layout>
-    </Layout>
+        </main>
+      </div>
+    </div>
   );
 }

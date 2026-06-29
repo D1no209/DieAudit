@@ -1,64 +1,34 @@
-import { Card, Empty, Space, Table, Tag, Typography } from "antd";
-import type { ColumnsType } from "antd/es/table";
 import type { CodeAnalysisTask } from "../../types";
-
-const { Text } = Typography;
+import { Badge, DataTable, EmptyState, Panel, type DataColumn } from "../../ui";
+import { statusTone } from "../../utils/format";
 
 type Props = {
   tasks: CodeAnalysisTask[];
 };
 
-const statusColor: Record<string, string> = {
-  completed: "green",
-  created: "default",
-  failed: "red",
-  running: "blue",
-};
-
 export function CodeAnalysisTasksPanel({ tasks }: Props) {
-  const columns: ColumnsType<CodeAnalysisTask> = [
-    {
-      title: "Focus",
-      dataIndex: "focus",
-      key: "focus",
-      width: 180,
-      render: (value: string) => <Tag>{value}</Tag>,
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      width: 120,
-      render: (value: string) => <Tag color={statusColor[value] || "default"}>{value}</Tag>,
-    },
+  const columns: DataColumn<CodeAnalysisTask>[] = [
+    { title: "Focus", dataIndex: "focus", width: 180, render: (value) => <Badge>{String(value || "-")}</Badge> },
+    { title: "Status", dataIndex: "status", width: 120, render: (value) => <Badge tone={statusTone(String(value))}>{String(value || "-")}</Badge> },
     {
       title: "Files",
-      key: "files",
       render: (_, row) => (
-        <Space direction="vertical" size={2}>
-          <Text>{row.file_paths.length} files</Text>
-          <Text type="secondary" ellipsis>
-            {row.file_paths.slice(0, 4).join(", ")}
-          </Text>
-        </Space>
+        <span className="grid gap-1">
+          <span>{row.file_paths.length} files</span>
+          <span className="truncate text-xs text-slate-500">{row.file_paths.slice(0, 4).join(", ")}</span>
+        </span>
       ),
     },
-    {
-      title: "AgentRun",
-      dataIndex: "agent_run_id",
-      key: "agent_run_id",
-      width: 260,
-      render: (value?: string) => <Text code>{value || "-"}</Text>,
-    },
+    { title: "AgentRun", dataIndex: "agent_run_id", width: 260, render: (value) => <code className="text-xs">{String(value || "-")}</code> },
   ];
 
   return (
-    <Card className="section" title={`Code Batch Analysis (${tasks.length})`}>
+    <Panel title={`Code Batch Analysis (${tasks.length})`}>
       {tasks.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No code analysis tasks have been planned." />
+        <EmptyState description="No code analysis tasks have been planned." />
       ) : (
-        <Table rowKey="task_id" size="small" pagination={{ pageSize: 6 }} columns={columns} dataSource={tasks} />
+        <DataTable getRowKey={(row) => row.task_id} columns={columns} data={tasks} pagination={{ pageSize: 6 }} />
       )}
-    </Card>
+    </Panel>
   );
 }

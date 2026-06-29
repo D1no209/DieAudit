@@ -1,9 +1,8 @@
-import { BranchesOutlined, ClockCircleOutlined, NodeIndexOutlined, PlayCircleOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Descriptions, Empty, List, Space, Tabs, Tag, Timeline, Typography } from "antd";
+import { Clock, GitBranch, Network, PlayCircle } from "lucide-react";
 import type { AuditRun, WhiteboardGraph } from "../types";
+import { Alert, Badge, Button, EmptyState, MetricCard, Panel, Tabs } from "../ui";
+import { statusTone } from "../utils/format";
 import { PageHeader } from "../components/PageHeader";
-
-const { Paragraph, Text } = Typography;
 
 type Props = {
   auditRun?: AuditRun;
@@ -23,24 +22,9 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
   const scheduleRequests = whiteboard?.schedule_requests || [];
   const workingTasks = tasks.filter((task) => ["running", "queued", "agent_queued", "scheduled"].includes(task.status));
   const waitingTasks = tasks.filter((task) => ["waiting", "blocked"].includes(task.status) || task.wait_reason);
-  const renderCandidates = (items?: WhiteboardGraph["cards"][number]["expected_predecessors"]) => {
-    if (!items?.length) {
-      return null;
-    }
-    return (
-      <Space wrap>
-        {items.map((item, index) => (
-          <Tag key={`${item.title || "candidate"}-${index}`}>
-            {item.status}: {item.title || item.card_ids?.join(", ") || "candidate"}
-            {item.agent_run_id ? ` · ${item.agent_run_id.slice(0, 8)}` : ""}
-          </Tag>
-        ))}
-      </Space>
-    );
-  };
   const pageActions = (
-    <div className="action-bar">
-      <Button icon={<PlayCircleOutlined />} loading={loading} disabled={!auditRun} onClick={onRunWhiteboardSwarm}>
+    <div className="flex flex-wrap gap-2">
+      <Button icon={<PlayCircle className="h-4 w-4" />} loading={loading} disabled={!auditRun} onClick={onRunWhiteboardSwarm}>
         运行 Whiteboard Swarm
       </Button>
     </div>
@@ -49,100 +33,86 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
   return (
     <>
       <PageHeader title="Whiteboard" actions={pageActions} />
-      {!auditRun && (
-        <Alert
-          className="section"
-          type="info"
-          showIcon
-          message="No active AuditRun"
-          description="Create or select an audit run before using the shared Whiteboard."
-        />
-      )}
-      <div className="content-grid section">
-        <Card title="Graph Summary">
-          <Space wrap>
-            <Tag icon={<NodeIndexOutlined />}>{cards.length} cards</Tag>
-            <Tag>{edges.length} edges</Tag>
-            <Tag>{tasks.length} tasks</Tag>
-            <Tag>{events.length} events</Tag>
-            <Tag>{notifications.filter((item) => item.status === "pending").length} pending notices</Tag>
-            <Tag>{evidence.length} evidence</Tag>
-          </Space>
-          <Paragraph className="panel-description">
-            {whiteboard?.snapshot || "Whiteboard snapshot will appear after the first refresh."}
-          </Paragraph>
-        </Card>
-        <Card title="Agent Queues">
-          <Descriptions column={2} size="small">
-            <Descriptions.Item label="Working">{workingTasks.length}</Descriptions.Item>
-            <Descriptions.Item label="Waiting">{waitingTasks.length}</Descriptions.Item>
-            <Descriptions.Item label="Subscriptions">{subscriptions.length}</Descriptions.Item>
-            <Descriptions.Item label="Requests">{scheduleRequests.length}</Descriptions.Item>
-          </Descriptions>
-          <List
-            size="small"
-            dataSource={workingTasks.slice(0, 5)}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No working agents" /> }}
-            renderItem={(task) => (
-              <List.Item>
-                <List.Item.Meta title={`${task.agent_role} · ${task.agent_name}`} description={task.prompt || task.task_id} />
-                <Tag color="processing">{task.status}</Tag>
-              </List.Item>
-            )}
-          />
-        </Card>
+      {!auditRun ? (
+        <Alert className="mb-5" tone="processing" title="No active AuditRun" description="Create or select an audit run before using the shared Whiteboard." />
+      ) : null}
+      <div className="mb-5 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <MetricCard label="Cards" value={cards.length} />
+        <MetricCard label="Edges" value={edges.length} />
+        <MetricCard label="Tasks" value={tasks.length} />
+        <MetricCard label="Events" value={events.length} />
+        <MetricCard label="Pending notices" value={notifications.filter((item) => item.status === "pending").length} />
+        <MetricCard label="Evidence" value={evidence.length} />
       </div>
-      <div className="content-grid section">
-        <Card title="Open Gaps">
-          <List
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No open gaps" /> }}
-            dataSource={cards.filter((card) => card.card_type === "gap" && ["open", "needs_agent", "agent_queued"].includes(card.status))}
-            renderItem={(card) => (
-              <List.Item>
-                <List.Item.Meta title={card.title} description={card.content || card.card_id} />
-                <Tag>{card.status}</Tag>
-              </List.Item>
-            )}
-          />
-        </Card>
-        <Card title="Card Links">
-          <List
-            size="small"
-            dataSource={edges.slice(0, 8)}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No card links" /> }}
-            renderItem={(edge) => (
-              <List.Item>
-                <List.Item.Meta title={`${edge.source_card_id.slice(0, 8)} -> ${edge.target_card_id.slice(0, 8)}`} description={edge.rationale || edge.edge_id} />
-                <Tag icon={<BranchesOutlined />}>{edge.edge_type}</Tag>
-              </List.Item>
-            )}
-          />
-        </Card>
+
+      <div className="mb-5 grid gap-4 xl:grid-cols-2">
+        <Panel title="Graph Summary">
+          <p className="text-sm leading-6 text-slate-600">{whiteboard?.snapshot || "Whiteboard snapshot will appear after the first refresh."}</p>
+        </Panel>
+        <Panel title="Agent Queues">
+          <div className="mb-4 grid gap-3 sm:grid-cols-4">
+            <QueueStat label="Working" value={workingTasks.length} />
+            <QueueStat label="Waiting" value={waitingTasks.length} />
+            <QueueStat label="Subscriptions" value={subscriptions.length} />
+            <QueueStat label="Requests" value={scheduleRequests.length} />
+          </div>
+          {workingTasks.length ? (
+            <div className="grid gap-2">
+              {workingTasks.slice(0, 5).map((task) => (
+                <CompactRow key={task.task_id} title={`${task.agent_role} · ${task.agent_name}`} detail={task.prompt || task.task_id}>
+                  <Badge tone="processing">{task.status}</Badge>
+                </CompactRow>
+              ))}
+            </div>
+          ) : (
+            <EmptyState description="No working agents" />
+          )}
+        </Panel>
       </div>
-      <Card className="section">
+
+      <div className="mb-5 grid gap-4 xl:grid-cols-2">
+        <Panel title="Open Gaps">
+          <Rows
+            empty="No open gaps"
+            items={cards.filter((card) => card.card_type === "gap" && ["open", "needs_agent", "agent_queued"].includes(card.status))}
+            render={(card) => <CompactRow key={card.card_id} title={card.title} detail={card.content || card.card_id}><Badge tone={statusTone(card.status)}>{card.status}</Badge></CompactRow>}
+          />
+        </Panel>
+        <Panel title="Card Links">
+          <Rows
+            empty="No card links"
+            items={edges.slice(0, 8)}
+            render={(edge) => (
+              <CompactRow key={edge.edge_id} title={`${edge.source_card_id.slice(0, 8)} -> ${edge.target_card_id.slice(0, 8)}`} detail={edge.rationale || edge.edge_id}>
+                <Badge>{edge.edge_type}</Badge>
+              </CompactRow>
+            )}
+          />
+        </Panel>
+      </div>
+
+      <Panel>
         <Tabs
           items={[
             {
               key: "cards",
               label: "Cards",
               children: (
-                <List
-                  dataSource={cards}
-                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No cards yet" /> }}
-                  renderItem={(card) => (
-                    <List.Item>
-                      <List.Item.Meta
-                        title={<Space><Text strong>{card.title}</Text><Tag>{card.card_type}</Tag><Tag>{card.status}</Tag></Space>}
-                        description={
-                          <>
-                            <Paragraph>{card.content || "No content"}</Paragraph>
-                            {renderCandidates(card.expected_predecessors)}
-                            {renderCandidates(card.possible_successors)}
-                            <Text type="secondary">{card.file_path || card.finding_id || card.card_id}</Text>
-                          </>
-                        }
-                      />
-                    </List.Item>
+                <Rows
+                  empty="No cards yet"
+                  items={cards}
+                  render={(card) => (
+                    <article key={card.card_id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        <strong className="text-slate-900">{card.title}</strong>
+                        <Badge>{card.card_type}</Badge>
+                        <Badge tone={statusTone(card.status)}>{card.status}</Badge>
+                      </div>
+                      <p className="text-sm leading-6 text-slate-600">{card.content || "No content"}</p>
+                      {renderCandidates(card.expected_predecessors)}
+                      {renderCandidates(card.possible_successors)}
+                      <p className="mt-2 text-xs text-slate-500">{card.file_path || card.finding_id || card.card_id}</p>
+                    </article>
                   )}
                 />
               ),
@@ -151,14 +121,13 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
               key: "edges",
               label: "Edges",
               children: (
-                <List
-                  dataSource={edges}
-                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No edges yet" /> }}
-                  renderItem={(edge) => (
-                    <List.Item>
-                      <List.Item.Meta title={`${edge.source_card_id} -> ${edge.target_card_id}`} description={edge.rationale || edge.edge_id} />
-                      <Tag>{edge.edge_type}</Tag>
-                    </List.Item>
+                <Rows
+                  empty="No edges yet"
+                  items={edges}
+                  render={(edge) => (
+                    <CompactRow key={edge.edge_id} title={`${edge.source_card_id} -> ${edge.target_card_id}`} detail={edge.rationale || edge.edge_id}>
+                      <Badge>{edge.edge_type}</Badge>
+                    </CompactRow>
                   )}
                 />
               ),
@@ -167,29 +136,17 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
               key: "tasks",
               label: "Agents",
               children: (
-                <List
-                  dataSource={tasks}
-                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No swarm tasks yet" /> }}
-                  renderItem={(task) => (
-                    <List.Item>
-                      <List.Item.Meta
-                        title={<Space><Text strong>{task.agent_role}</Text><Tag>{task.agent_name}</Tag><Tag>{task.task_group || "default"}</Tag></Space>}
-                        description={
-                          <>
-                            <Paragraph>{task.prompt || task.task_id}</Paragraph>
-                            <Text type="secondary">
-                              {task.parent_task_id ? `parent ${task.parent_task_id.slice(0, 8)} · ` : ""}
-                              {task.card_id || task.gap_card_id || task.agent_run_id || task.task_id}
-                            </Text>
-                          </>
-                        }
-                      />
-                      <Space>
-                        <Tag>{task.status}</Tag>
-                        {task.wait_reason && <Tag icon={<ClockCircleOutlined />}>{task.wait_reason}</Tag>}
-                        <Tag>r{task.round_index}/a{task.attempt_index}</Tag>
-                      </Space>
-                    </List.Item>
+                <Rows
+                  empty="No swarm tasks yet"
+                  items={tasks}
+                  render={(task) => (
+                    <CompactRow key={task.task_id} title={task.agent_role} detail={task.prompt || task.task_id}>
+                      <Badge>{task.agent_name}</Badge>
+                      <Badge>{task.task_group || "default"}</Badge>
+                      <Badge tone={statusTone(task.status)}>{task.status}</Badge>
+                      {task.wait_reason ? <Badge tone="warning"><Clock className="h-3 w-3" />{task.wait_reason}</Badge> : null}
+                      <Badge>r{task.round_index}/a{task.attempt_index}</Badge>
+                    </CompactRow>
                   )}
                 />
               ),
@@ -198,19 +155,15 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
               key: "events",
               label: "Events",
               children: (
-                <Timeline
-                  items={events.map((event) => ({
-                    children: (
-                      <Space direction="vertical" size={2}>
-                        <Space wrap>
-                          <Text strong>{event.summary || event.event_id}</Text>
-                          <Tag>{event.entity_type}</Tag>
-                          <Tag>{event.event_type}</Tag>
-                        </Space>
-                        <Text type="secondary">{event.created_at || event.entity_id}</Text>
-                      </Space>
-                    ),
-                  }))}
+                <Rows
+                  empty="No events yet"
+                  items={events}
+                  render={(event) => (
+                    <CompactRow key={event.event_id} title={event.summary || event.event_id} detail={event.created_at || event.entity_id}>
+                      <Badge>{event.entity_type}</Badge>
+                      <Badge>{event.event_type}</Badge>
+                    </CompactRow>
+                  )}
                 />
               ),
             },
@@ -218,29 +171,21 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
               key: "notifications",
               label: "Listeners",
               children: (
-                <div className="content-grid">
-                  <List
-                    header={<Text strong>Subscriptions</Text>}
-                    dataSource={subscriptions}
-                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No subscriptions" /> }}
-                    renderItem={(item) => (
-                      <List.Item>
-                        <List.Item.Meta title={item.subscriber_agent_run_id || item.subscriber_task_id || item.subscription_id} description={JSON.stringify(item.filter || {})} />
-                        <Tag>{item.status}</Tag>
-                      </List.Item>
-                    )}
-                  />
-                  <List
-                    header={<Text strong>Notifications</Text>}
-                    dataSource={notifications}
-                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No notifications" /> }}
-                    renderItem={(item) => (
-                      <List.Item>
-                        <List.Item.Meta title={item.summary || item.notification_id} description={item.subscriber_agent_run_id || item.event_id} />
-                        <Tag>{item.status}</Tag>
-                      </List.Item>
-                    )}
-                  />
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <Panel title="Subscriptions">
+                    <Rows
+                      empty="No subscriptions"
+                      items={subscriptions}
+                      render={(item) => <CompactRow key={item.subscription_id} title={item.subscriber_agent_run_id || item.subscriber_task_id || item.subscription_id} detail={JSON.stringify(item.filter || {})}><Badge>{item.status}</Badge></CompactRow>}
+                    />
+                  </Panel>
+                  <Panel title="Notifications">
+                    <Rows
+                      empty="No notifications"
+                      items={notifications}
+                      render={(item) => <CompactRow key={item.notification_id} title={item.summary || item.notification_id} detail={item.subscriber_agent_run_id || item.event_id}><Badge>{item.status}</Badge></CompactRow>}
+                    />
+                  </Panel>
                 </div>
               ),
             },
@@ -248,17 +193,14 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
               key: "requests",
               label: "Requests",
               children: (
-                <List
-                  dataSource={scheduleRequests}
-                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No schedule requests" /> }}
-                  renderItem={(item) => (
-                    <List.Item>
-                      <List.Item.Meta title={item.goal} description={item.reason || item.requested_by_agent_run_id || item.request_id} />
-                      <Space>
-                        {item.suggested_agent_name && <Tag>{item.suggested_agent_name}</Tag>}
-                        <Tag>{item.status}</Tag>
-                      </Space>
-                    </List.Item>
+                <Rows
+                  empty="No schedule requests"
+                  items={scheduleRequests}
+                  render={(item) => (
+                    <CompactRow key={item.request_id} title={item.goal} detail={item.reason || item.requested_by_agent_run_id || item.request_id}>
+                      {item.suggested_agent_name ? <Badge>{item.suggested_agent_name}</Badge> : null}
+                      <Badge tone={statusTone(item.status)}>{item.status}</Badge>
+                    </CompactRow>
                   )}
                 />
               ),
@@ -267,20 +209,56 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
               key: "evidence",
               label: "Evidence",
               children: (
-                <List
-                  dataSource={evidence}
-                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No whiteboard evidence yet" /> }}
-                  renderItem={(item) => (
-                    <List.Item>
-                      <List.Item.Meta title={item.summary || item.evidence_id} description={item.artifact_path || item.finding_id} />
-                    </List.Item>
-                  )}
+                <Rows
+                  empty="No whiteboard evidence yet"
+                  items={evidence}
+                  render={(item) => <CompactRow key={item.evidence_id} title={item.summary || item.evidence_id} detail={item.artifact_path || item.finding_id} />}
                 />
               ),
             },
           ]}
         />
-      </Card>
+      </Panel>
     </>
+  );
+}
+
+function QueueStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="text-xs font-medium text-slate-500">{label}</div>
+      <div className="mt-1 text-xl font-semibold text-slate-950">{value}</div>
+    </div>
+  );
+}
+
+function CompactRow({ children, detail, title }: { children?: React.ReactNode; detail?: React.ReactNode; title: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3">
+      <div className="min-w-0">
+        <div className="font-medium text-slate-900">{title}</div>
+        {detail ? <div className="mt-1 max-w-[72ch] truncate text-sm text-slate-500">{detail}</div> : null}
+      </div>
+      {children ? <div className="flex flex-wrap gap-1">{children}</div> : null}
+    </div>
+  );
+}
+
+function Rows<T>({ empty, items, render }: { empty: string; items: T[]; render: (item: T) => React.ReactNode }) {
+  if (!items.length) return <EmptyState description={empty} />;
+  return <div className="grid gap-3">{items.map(render)}</div>;
+}
+
+function renderCandidates(items?: WhiteboardGraph["cards"][number]["expected_predecessors"]) {
+  if (!items?.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1">
+      {items.map((item, index) => (
+        <Badge key={`${item.title || "candidate"}-${index}`}>
+          {item.status}: {item.title || item.card_ids?.join(", ") || "candidate"}
+          {item.agent_run_id ? ` · ${item.agent_run_id.slice(0, 8)}` : ""}
+        </Badge>
+      ))}
+    </div>
   );
 }

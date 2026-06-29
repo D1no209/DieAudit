@@ -1,17 +1,14 @@
-import { Tabs } from "antd";
-import type { ColumnsType } from "antd/es/table";
-import type { FormInstance } from "antd/es/form";
 import type { ApiKeyRecord, PlatformAuditEvent, RuntimePolicy, StorageSummary } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { Tabs, type DataColumn } from "../ui";
 import { ApiKeysPanel } from "./admin/ApiKeysPanel";
 import { PlatformAuditPanel } from "./admin/PlatformAuditPanel";
 
 type Props = {
-  apiKeyColumns: ColumnsType<ApiKeyRecord>;
-  apiKeyForm: FormInstance;
+  apiKeyColumns: DataColumn<ApiKeyRecord>[];
   apiKeys: ApiKeyRecord[];
   loading: boolean;
-  platformAuditColumns: ColumnsType<PlatformAuditEvent>;
+  platformAuditColumns: DataColumn<PlatformAuditEvent>[];
   platformAuditEvents: PlatformAuditEvent[];
   runtimePolicy?: RuntimePolicy;
   storageSummary?: StorageSummary;
@@ -22,7 +19,6 @@ type Props = {
 
 export function AdminPage({
   apiKeyColumns,
-  apiKeyForm,
   apiKeys,
   loading,
   platformAuditColumns,
@@ -37,7 +33,6 @@ export function AdminPage({
     <>
       <PageHeader title="Admin" />
       <Tabs
-        className="section"
         items={[
           {
             key: "platform-audit",
@@ -60,7 +55,6 @@ export function AdminPage({
             children: (
               <ApiKeysPanel
                 apiKeyColumns={apiKeyColumns}
-                apiKeyForm={apiKeyForm}
                 apiKeys={apiKeys}
                 loading={loading}
                 onCreateManagedApiKey={onCreateManagedApiKey}

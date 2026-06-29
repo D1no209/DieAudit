@@ -126,6 +126,49 @@ def test_agent_run_network_recreated_when_external_policy_changes(monkeypatch) -
     asyncio.run(_run_agent_network_policy_upgrade_test(monkeypatch))
 
 
+def test_agent_run_network_reuses_matching_internal_policy(monkeypatch) -> None:
+    asyncio.run(_run_agent_network_policy_reuse_test(monkeypatch))
+
+
+async def _run_agent_network_policy_reuse_test(monkeypatch) -> None:
+    orchestrator = _orchestrator()
+    events = []
+    existing = {
+        "Name": "dieaudit-run-1",
+        "Internal": True,
+        "Labels": {"dieaudit.managed": "true"},
+    }
+
+    async def fake_network_exists(name):
+        return existing if name == "dieaudit-run-1" else None
+
+    async def fake_create_network(name, *, internal=True, labels=None):
+        events.append(("create_network", name, internal))
+        return {"Name": name, "Internal": internal, "Labels": labels or {}}
+
+    async def fake_disconnect_network(name, container):
+        events.append(("disconnect_network", name, container))
+
+    async def fake_remove_network(name):
+        events.append(("remove_network", name))
+
+    orchestrator.docker = SimpleNamespace(
+        network_exists=fake_network_exists,
+        create_network=fake_create_network,
+        disconnect_network=fake_disconnect_network,
+        remove_network=fake_remove_network,
+    )
+
+    network = await orchestrator._ensure_agent_run_network(
+        "dieaudit-run-1",
+        allow_external_network=False,
+        labels={"dieaudit.managed": "true"},
+    )
+
+    assert network is existing
+    assert events == []
+
+
 async def _run_agent_network_policy_upgrade_test(monkeypatch) -> None:
     orchestrator = _orchestrator()
     events = []
@@ -189,6 +232,10 @@ def test_mcp_platform_api_env_uses_scoped_sidecar_key(monkeypatch) -> None:
 
 def test_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch) -> None:
     asyncio.run(_run_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch))
+
+
+def test_cleanup_inactive_agent_runtime_only_removes_terminal_agent_containers(monkeypatch) -> None:
+    asyncio.run(_run_cleanup_inactive_agent_runtime_only_removes_terminal_agent_containers(monkeypatch))
 
 
 def test_validator_scaling_stops_starting_agents_after_cancel(monkeypatch) -> None:
@@ -362,6 +409,67 @@ async def _run_cleanup_deactivates_scoped_mcp_sidecar_keys(monkeypatch) -> None:
     assert rows[1].deactivated_at is None
     assert rows[2].status == "active"
     assert rows[2].deactivated_at is None
+
+
+async def _run_cleanup_inactive_agent_runtime_only_removes_terminal_agent_containers(monkeypatch) -> None:
+    import app.runtime.orchestrator as orchestrator_module
+
+    orchestrator = _orchestrator()
+    terminal_agents = [
+        SimpleNamespace(agent_run_id="agent-completed", status="completed"),
+        SimpleNamespace(agent_run_id="agent-failed", status="failed"),
+    ]
+    active_agent_ids = ["agent-running"]
+    removed: list[str] = []
+
+    class FakeTerminalResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return terminal_agents
+
+    class FakeActiveResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return active_agent_ids
+
+    class FakeSession:
+        calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def execute(self, _statement):
+            self.__class__.calls += 1
+            return FakeTerminalResult() if self.__class__.calls == 1 else FakeActiveResult()
+
+    async def fake_list_containers_by_run(_audit_run_id):
+        return [
+            {"Id": "container-completed", "Names": ["/completed"], "Labels": {"dieaudit.agent_run_id": "agent-completed"}},
+            {"Id": "container-failed", "Names": ["/failed"], "Labels": {"dieaudit.agent_run_id": "agent-failed"}},
+            {"Id": "container-running", "Names": ["/running"], "Labels": {"dieaudit.agent_run_id": "agent-running"}},
+            {"Id": "container-missing", "Names": ["/missing"], "Labels": {}},
+        ]
+
+    async def fake_capture_and_remove_container(**kwargs):
+        removed.append(kwargs["container_id"])
+        return f"/logs/{kwargs['container_id']}.log"
+
+    monkeypatch.setattr(orchestrator_module, "SessionLocal", lambda: FakeSession())
+    orchestrator.docker = SimpleNamespace(list_containers_by_run=fake_list_containers_by_run)
+    orchestrator._capture_and_remove_container = fake_capture_and_remove_container  # type: ignore[method-assign]
+
+    result = await orchestrator.cleanup_inactive_agent_runtime("run-1")
+
+    assert removed == ["container-completed", "container-failed"]
+    assert [item["id"] for item in result["removed_containers"]] == ["container-completed", "container-failed"]
+    assert {item["id"] for item in result["skipped_containers"]} == {"container-running", "container-missing"}
 
 
 async def _run_mcp_platform_api_env_test(monkeypatch) -> None:

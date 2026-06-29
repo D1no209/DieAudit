@@ -155,6 +155,11 @@ class AgentOutputIngestor:
 
     def _extract_structured_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
+        for candidate in self._candidate_texts(payload):
+            if "findings" in candidate or "evidence" in candidate:
+                parsed = self._parse_json_from_text(candidate)
+                if parsed is not None:
+                    return parsed, warnings
         for candidate in self._walk(payload):
             if isinstance(candidate, dict) and ("findings" in candidate or "evidence" in candidate):
                 return candidate, warnings
@@ -164,6 +169,47 @@ class AgentOutputIngestor:
                     return parsed, warnings
         warnings.append({"kind": "structured_output_not_found"})
         return {}, warnings
+
+    def _candidate_texts(self, payload: dict[str, Any]) -> list[str]:
+        events = payload.get("events")
+        if not isinstance(events, list):
+            return []
+        by_kind: dict[str, list[str]] = {}
+        all_text: list[str] = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            update = event.get("update")
+            if not isinstance(update, dict):
+                continue
+            kind = str(update.get("session_update") or "")
+            pieces = self._content_text_pieces(update.get("content"))
+            if not pieces:
+                continue
+            by_kind.setdefault(kind, []).extend(pieces)
+            all_text.extend(pieces)
+        candidates: list[str] = []
+        for kind in ("agent_message_chunk", "agent_thought_chunk", "tool_call_update"):
+            pieces = by_kind.get(kind) or []
+            if pieces:
+                candidates.append("".join(pieces))
+        if all_text:
+            candidates.append("".join(all_text))
+        return candidates
+
+    def _content_text_pieces(self, value: Any) -> list[str]:
+        pieces: list[str] = []
+        if isinstance(value, dict):
+            text = value.get("text")
+            if isinstance(text, str):
+                pieces.append(text)
+            content = value.get("content")
+            if content is not value:
+                pieces.extend(self._content_text_pieces(content))
+        elif isinstance(value, list):
+            for item in value:
+                pieces.extend(self._content_text_pieces(item))
+        return pieces
 
     @staticmethod
     def _normalize_finding_item(item: dict[str, Any], *, index: int, warnings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -201,20 +247,34 @@ class AgentOutputIngestor:
     def _parse_json_from_text(text: str) -> dict[str, Any] | None:
         stripped = text.strip()
         candidates = [stripped]
-        fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, flags=re.DOTALL)
+        fenced = re.findall(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.DOTALL)
         candidates.extend(fenced)
         first = stripped.find("{")
         last = stripped.rfind("}")
         if first >= 0 and last > first:
             candidates.append(stripped[first : last + 1])
         for candidate in candidates:
-            try:
-                parsed = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
+            parsed = AgentOutputIngestor._parse_json_candidate(candidate)
             if isinstance(parsed, dict):
                 return parsed
         return None
+
+    @staticmethod
+    def _parse_json_candidate(candidate: str) -> Any:
+        decoder = json.JSONDecoder()
+        for text in (candidate, AgentOutputIngestor._repair_json_text(candidate)):
+            stripped = text.lstrip()
+            try:
+                parsed, _ = decoder.raw_decode(stripped)
+                return parsed
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    @staticmethod
+    def _repair_json_text(text: str) -> str:
+        repaired = re.sub(r'(?<!\\)\\(?!\\)(?!["/bfnrtu])', r"\\\\", text)
+        return re.sub(r'(?<!\\)\\{2}(?!["\\/bfnrtu])', r"\\\\", repaired)
 
     @staticmethod
     def _finding_evidence_items(item: dict[str, Any]) -> list[dict[str, Any]]:

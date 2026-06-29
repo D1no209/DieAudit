@@ -191,6 +191,31 @@ class PipelineExecutor:
                 steps.append({"step": "code-analysis", "result": code_result})
                 await self.record_audit_run_event(audit_run_id, "pipeline_step_skipped", {"step": "code-analysis", "reason": code_result["reason"]})
 
+            await self.set_pipeline_state(audit_run_id, stage="value-triage", status="running")
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_started",
+                {
+                    "step": "value-triage",
+                    "policy": (
+                        "Main-agent value triage runs before whiteboard swarm so standalone hygiene findings "
+                        "do not trigger deeper agent work."
+                    ),
+                },
+            )
+            triage_result = {
+                "ok": True,
+                "mode": "pre-swarm",
+                "policy": "exclude standalone low-impact hygiene findings from swarm scheduling",
+            }
+            steps.append({"step": "value-triage", "result": triage_result})
+            await self.record_audit_run_event(
+                audit_run_id,
+                "pipeline_step_completed",
+                {"step": "value-triage", "result": triage_result},
+            )
+            await self.raise_if_cancelled(audit_run_id)
+
             if self._whiteboard_swarm_enabled(audit_run):
                 await self.set_pipeline_state(audit_run_id, stage="whiteboard-swarm", status="running")
                 await self.record_audit_run_event(audit_run_id, "pipeline_step_started", {"step": "whiteboard-swarm"})

@@ -1,16 +1,15 @@
-import { Card, Table } from "antd";
-import type { ColumnsType } from "antd/es/table";
 import type { WorkerHeartbeat } from "../../types";
+import { DataTable, Panel, type DataColumn } from "../../ui";
 
 type Props = {
-  workerColumns: ColumnsType<WorkerHeartbeat>;
+  workerColumns: DataColumn<WorkerHeartbeat>[];
   workerHeartbeats: WorkerHeartbeat[];
 };
 
 export function WorkerHeartbeatPanel({ workerColumns, workerHeartbeats }: Props) {
   return (
-    <Card title="Workflow Workers">
-      <Table rowKey="worker_id" columns={workerColumns} dataSource={workerHeartbeats} pagination={false} size="small" />
-    </Card>
+    <Panel title="Workflow Workers">
+      <DataTable getRowKey={(row) => row.worker_id} columns={workerColumns} data={workerHeartbeats} pagination={false} />
+    </Panel>
   );
 }

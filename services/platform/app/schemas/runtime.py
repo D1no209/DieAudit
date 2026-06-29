@@ -13,6 +13,30 @@ class StartAgentRunRequest(BaseModel):
     input_payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class EnsureAgentRuntimeRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    agent_name: str = Field(default="opencode-orchestrator")
+    workspace_host_path: str | None = None
+    allow_external_network: bool = False
+    retain_runtime_on_failure: bool = False
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentTranscriptEventInput(BaseModel):
+    seq: int = Field(ge=0)
+    event_type: str = Field(min_length=1, max_length=128)
+    session_id: str | None = Field(default=None, max_length=128)
+    runtime_id: str | None = Field(default=None, max_length=128)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    content_text: str | None = None
+
+
+class AgentTranscriptEventsRequest(BaseModel):
+    runtime_id: str | None = Field(default=None, max_length=128)
+    acp_session_id: str | None = Field(default=None, max_length=128)
+    events: list[AgentTranscriptEventInput] = Field(default_factory=list)
+
+
 class CreateProjectRequest(BaseModel):
     name: str = Field(min_length=1)
     git_url: str | None = None

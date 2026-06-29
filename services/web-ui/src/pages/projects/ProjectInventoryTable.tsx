@@ -1,9 +1,9 @@
-import { Card, Table } from "antd";
-import type { ColumnsType } from "antd/es/table";
 import type { Project } from "../../types";
+import type { DataColumn } from "../../ui";
+import { DataTable, Panel } from "../../ui";
 
 type Props = {
-  projectColumns: ColumnsType<Project>;
+  projectColumns: DataColumn<Project>[];
   projects: Project[];
   selectedProjectId?: string;
   onSelectProject: (projectId: string) => void;
@@ -11,19 +11,15 @@ type Props = {
 
 export function ProjectInventoryTable({ projectColumns, projects, selectedProjectId, onSelectProject }: Props) {
   return (
-    <Card className="section" title="Project Inventory">
-      <Table
-        rowKey="project_id"
-        size="small"
+    <Panel title="Project Inventory">
+      <DataTable
+        getRowKey={(row) => row.project_id}
         columns={projectColumns}
-        dataSource={projects}
+        data={projects}
         pagination={{ pageSize: 10 }}
-        rowSelection={{
-          type: "radio",
-          selectedRowKeys: selectedProjectId ? [selectedProjectId] : [],
-          onChange: ([key]) => onSelectProject(String(key)),
-        }}
+        selectedRowKey={selectedProjectId}
+        onRowClick={(row) => onSelectProject(row.project_id)}
       />
-    </Card>
+    </Panel>
   );
 }

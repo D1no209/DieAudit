@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM oven/bun:1.3.14-alpine AS build
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
@@ -9,10 +9,10 @@ ENV HTTP_PROXY=${HTTP_PROXY} \
     NO_PROXY=${NO_PROXY} \
     no_proxy=${NO_PROXY}
 WORKDIR /app
-COPY services/web-ui/package.json services/web-ui/package-lock.json ./
-RUN npm ci
+COPY services/web-ui/package.json services/web-ui/bun.lock ./
+RUN bun install --frozen-lockfile
 COPY services/web-ui/ ./
-RUN npm run build
+RUN bun run build
 
 FROM nginx:1.27-alpine
 COPY --from=build /app/dist /usr/share/nginx/html

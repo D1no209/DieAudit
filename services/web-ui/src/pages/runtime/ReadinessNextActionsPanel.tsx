@@ -1,7 +1,5 @@
-import { Alert, Card, List, Typography } from "antd";
 import type { RuntimeReadiness } from "../../types";
-
-const { Text } = Typography;
+import { Alert, Panel } from "../../ui";
 
 type Props = {
   runtimeReadiness?: RuntimeReadiness;
@@ -12,41 +10,34 @@ export function ReadinessNextActionsPanel({ runtimeReadiness }: Props) {
 
   if (!runtimeReadiness) {
     return (
-      <Card title="Next Actions">
-        <Alert type="warning" showIcon message="Readiness data is unavailable." />
-      </Card>
+      <Panel title="Next Actions">
+        <Alert tone="warning" title="Readiness data is unavailable." />
+      </Panel>
     );
   }
 
   if (actions.length === 0) {
     return (
-      <Card title="Next Actions">
-        <Alert type="success" showIcon message="No production readiness actions are currently required." />
-      </Card>
+      <Panel title="Next Actions">
+        <Alert tone="success" title="No production readiness actions are currently required." />
+      </Panel>
     );
   }
 
   return (
-    <Card title="Next Actions">
-      <List
-        dataSource={actions}
-        renderItem={(item, index) => (
-          <List.Item>
-            <List.Item.Meta
-              title={`${index + 1}. ${item.title || item.id || "Readiness action"}`}
-              description={
-                <div className="readiness-remediation">
-                  {(item.remediation || []).map((line) => (
-                    <Text key={line} type="secondary">
-                      {line}
-                    </Text>
-                  ))}
-                </div>
-              }
-            />
-          </List.Item>
-        )}
-      />
-    </Card>
+    <Panel title="Next Actions">
+      <div className="grid gap-3">
+        {actions.map((item, index) => (
+          <div key={item.id || index} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="font-medium text-slate-900">{index + 1}. {item.title || item.id || "Readiness action"}</div>
+            {item.remediation?.length ? (
+              <ul className="mt-2 list-disc pl-5 text-sm text-slate-600">
+                {item.remediation.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </Panel>
   );
 }

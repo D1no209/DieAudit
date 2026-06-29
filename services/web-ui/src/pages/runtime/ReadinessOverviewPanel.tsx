@@ -1,7 +1,5 @@
-import { Alert, Card, Space, Statistic, Tag, Typography } from "antd";
 import type { RuntimeReadiness } from "../../types";
-
-const { Text } = Typography;
+import { Alert, Badge, MetricCard, Panel } from "../../ui";
 
 type Props = {
   runtimeReadiness?: RuntimeReadiness;
@@ -10,32 +8,30 @@ type Props = {
 export function ReadinessOverviewPanel({ runtimeReadiness }: Props) {
   if (!runtimeReadiness) {
     return (
-      <Card title="Production Readiness">
-        <Alert type="warning" showIcon message="Readiness data is unavailable." />
-      </Card>
+      <Panel title="Production Readiness">
+        <Alert tone="warning" title="Readiness data is unavailable." />
+      </Panel>
     );
   }
 
   return (
-    <Card title="Production Readiness">
-      <Space direction="vertical" size={12} className="drawer-stack">
-        <Space wrap>
-          <Statistic title="Status" value={runtimeReadiness.ok ? "Ready" : "Not Ready"} />
-          <Statistic title="Blocking" value={runtimeReadiness.summary?.fail ?? 0} />
-          <Statistic title="Warnings" value={runtimeReadiness.summary?.warn ?? 0} />
-          <Statistic title="Passing" value={runtimeReadiness.summary?.pass ?? 0} />
-        </Space>
-        <Space wrap>
-          {(runtimeReadiness.blocking_checks || []).slice(0, 4).map((item) => (
-            <Tag key={item.id} color="red">
-              {item.title}
-            </Tag>
+    <Panel title="Production Readiness">
+      <div className="grid gap-3 md:grid-cols-4">
+        <MetricCard label="Status" value={runtimeReadiness.ok ? "Ready" : "Not Ready"} />
+        <MetricCard label="Blocking" value={runtimeReadiness.summary?.fail ?? 0} />
+        <MetricCard label="Warnings" value={runtimeReadiness.summary?.warn ?? 0} />
+        <MetricCard label="Passing" value={runtimeReadiness.summary?.pass ?? 0} />
+      </div>
+      {runtimeReadiness.blocking_checks?.length ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {runtimeReadiness.blocking_checks.slice(0, 4).map((item) => (
+            <Badge key={item.id} tone="danger">{item.title}</Badge>
           ))}
-        </Space>
-        {!runtimeReadiness.ok && (
-          <Text type="secondary">Resolve blocking checks before exposing the platform beyond a trusted local deployment.</Text>
-        )}
-      </Space>
-    </Card>
+        </div>
+      ) : null}
+      {!runtimeReadiness.ok ? (
+        <p className="mt-3 text-sm text-slate-500">Resolve blocking checks before exposing the platform beyond a trusted local deployment.</p>
+      ) : null}
+    </Panel>
   );
 }

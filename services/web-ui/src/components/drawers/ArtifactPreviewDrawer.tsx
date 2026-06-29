@@ -1,13 +1,8 @@
-import { Drawer } from "antd";
+import { Drawer } from "../../ui";
 
-type Props = {
-  preview?: { title: string; body: string };
-  onClose: () => void;
-};
-
-export function ArtifactPreviewDrawer({ preview, onClose }: Props) {
+export function ArtifactPreviewDrawer({ preview, onClose }: { preview?: { title: string; body: string }; onClose: () => void }) {
   return (
-    <Drawer title={`Artifact Preview - ${preview?.title || ""}`} open={Boolean(preview)} width={920} onClose={onClose}>
+    <Drawer open={Boolean(preview)} onOpenChange={(open) => !open && onClose()} title={preview?.title || "Artifact Preview"}>
       <pre>{preview?.body || ""}</pre>
     </Drawer>
   );

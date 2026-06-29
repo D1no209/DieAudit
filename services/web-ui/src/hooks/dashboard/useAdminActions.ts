@@ -1,7 +1,7 @@
-import { message } from "antd";
 import { API_KEY_STORAGE_KEY } from "../../api";
 import * as dashboardApi from "../../client/dashboardApi";
 import type { AppView } from "../../navigation";
+import { toast } from "../../ui/toast";
 import { parseCsvList, parseScopes } from "../../utils/format";
 import type { DashboardStateController } from "../useDashboardState";
 
@@ -13,7 +13,6 @@ type DashboardRunner = {
 export function useAdminActions(dashboardState: DashboardStateController, runner: DashboardRunner, activeView: AppView) {
   const {
     apiKey,
-    apiKeyForm,
     setApiKeys,
     setLastResponse,
     setPlatformAuditEvents,
@@ -41,7 +40,6 @@ export function useAdminActions(dashboardState: DashboardStateController, runner
         },
       });
       setLastResponse(result);
-      apiKeyForm.resetFields();
       const rows = await dashboardApi.listApiKeys();
       setApiKeys(rows);
     });
@@ -60,10 +58,10 @@ export function useAdminActions(dashboardState: DashboardStateController, runner
     const normalized = apiKey.trim();
     if (normalized) {
       window.localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
-      message.success("API Key saved locally");
+      toast.success("API Key saved locally");
     } else {
       window.localStorage.removeItem(API_KEY_STORAGE_KEY);
-      message.warning("API Key removed");
+      toast.warning("API Key removed");
     }
     runner.refreshCurrentView(activeView);
   }

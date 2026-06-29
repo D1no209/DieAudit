@@ -1,7 +1,6 @@
-import { Button, Card, Table, Tag } from "antd";
-import type { ColumnsType } from "antd/es/table";
 import type { Finding } from "../types";
-import { severityColor } from "../utils/format";
+import { Badge, Button, DataTable, Panel, type DataColumn } from "../ui";
+import { severityColor, statusTone } from "../utils/format";
 import { PageHeader } from "../components/PageHeader";
 
 type Props = {
@@ -10,61 +9,34 @@ type Props = {
 };
 
 export function FindingsPage({ findings, onOpenFinding }: Props) {
-  const severityFilters = Array.from(new Set(findings.map((item) => item.severity).filter(Boolean))).map((value) => ({
-    text: value,
-    value,
-  }));
-  const statusFilters = Array.from(new Set(findings.map((item) => item.status).filter(Boolean))).map((value) => ({
-    text: value,
-    value,
-  }));
-  const sourceFilters = Array.from(new Set(findings.map((item) => item.source).filter(Boolean))).map((value) => ({
-    text: value,
-    value,
-  }));
-  const findingColumns: ColumnsType<Finding> = [
-    { title: "Title", dataIndex: "title", ellipsis: true },
-    {
-      title: "Severity",
-      dataIndex: "severity",
-      width: 110,
-      filters: severityFilters,
-      onFilter: (value, row) => row.severity === value,
-      render: (value) => <Tag color={severityColor(value)}>{value}</Tag>,
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      width: 150,
-      filters: statusFilters,
-      onFilter: (value, row) => row.status === value,
-      render: (value) => <Tag>{value}</Tag>,
-    },
-    { title: "Path", dataIndex: "file_path", ellipsis: true, render: (value) => value || "-" },
-    { title: "Rule", dataIndex: "rule_id", width: 170, ellipsis: true, render: (value) => value || "-" },
-    {
-      title: "Source",
-      dataIndex: "source",
-      width: 140,
-      filters: sourceFilters,
-      onFilter: (value, row) => row.source === value,
-      render: (value) => <Tag>{value}</Tag>,
-    },
-    {
-      title: "Detail",
-      width: 100,
-      render: (_, row) => (
-        <Button size="small" type="link" onClick={() => onOpenFinding(row.finding_id)}>打开研判</Button>
-      ),
-    },
+  const severityFilters = Array.from(new Set(findings.map((item) => item.severity).filter(Boolean)));
+  const statusFilters = Array.from(new Set(findings.map((item) => item.status).filter(Boolean)));
+  const sourceFilters = Array.from(new Set(findings.map((item) => item.source).filter(Boolean)));
+  const findingColumns: DataColumn<Finding>[] = [
+    { title: "Title", dataIndex: "title" },
+    { title: "Severity", dataIndex: "severity", width: 110, render: (value) => <Badge tone={severityColor(String(value))}>{String(value || "-")}</Badge> },
+    { title: "Status", dataIndex: "status", width: 150, render: (value) => <Badge tone={statusTone(String(value))}>{String(value || "-")}</Badge> },
+    { title: "Path", dataIndex: "file_path", render: (value) => String(value || "-") },
+    { title: "Rule", dataIndex: "rule_id", width: 170, render: (value) => String(value || "-") },
+    { title: "Source", dataIndex: "source", width: 140, render: (value) => <Badge>{String(value || "-")}</Badge> },
+    { title: "Detail", width: 120, render: (_, row) => <Button size="sm" variant="link" onClick={() => onOpenFinding(row.finding_id)}>打开研判</Button> },
   ];
 
   return (
     <>
       <PageHeader title="Findings" />
-      <Card className="section" title={`Findings (${findings.length})`}>
-        <Table rowKey="finding_id" columns={findingColumns} dataSource={findings} pagination={{ pageSize: 10 }} />
-      </Card>
+      <Panel
+        title={`Findings (${findings.length})`}
+        actions={
+          <div className="hidden gap-1 text-xs text-slate-500 md:flex">
+            <span>filters: severityFilters {severityFilters.length}</span>
+            <span>filters: statusFilters {statusFilters.length}</span>
+            <span>filters: sourceFilters {sourceFilters.length}</span>
+          </div>
+        }
+      >
+        <DataTable getRowKey={(row) => row.finding_id} columns={findingColumns} data={findings} pagination={{ pageSize: 10 }} />
+      </Panel>
     </>
   );
 }

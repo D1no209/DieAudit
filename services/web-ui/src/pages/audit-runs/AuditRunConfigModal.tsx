@@ -1,6 +1,6 @@
-import { CheckSquareOutlined, SettingOutlined } from "@ant-design/icons";
-import { Checkbox, Collapse, Form, Input, InputNumber, Modal, Space, Switch, Typography } from "antd";
+import { Settings } from "lucide-react";
 import type { CreateAuditRunPayload } from "../../types";
+import { Accordion, Button, CheckboxGroup, Dialog, Field, Input, NumberInput, SwitchField, Textarea, checkedFieldValue, fieldValue, numberFieldValue } from "../../ui";
 
 const agentOptions = [
   { label: "Orchestrator", value: "orchestrator" },
@@ -65,197 +65,163 @@ type Props = {
 };
 
 export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props) {
-  const [form] = Form.useForm<CreateAuditRunPayload>();
-
-  function submit() {
-    form
-      .validateFields()
-      .then((values) => {
-        const preflight = values.preflight_prompt?.trim();
-        onSubmit({
-          ...values,
-          preflight_prompt: preflight,
-          input_payload: {
-            goal: preflight || defaultGoal,
-          },
-        });
-      })
-      .catch(() => undefined);
-  }
-
   return (
-    <Modal
-      title={
-        <Space>
-          <SettingOutlined />
-          <span>审计任务配置</span>
-        </Space>
-      }
-      open={open}
-      width={900}
-      confirmLoading={loading}
-      okText="创建 AuditRun"
-      cancelText="取消"
-      onCancel={onCancel}
-      onOk={submit}
-      afterOpenChange={(visible) => {
-        if (visible) {
-          form.setFieldsValue(defaultPayload);
-        }
-      }}
-    >
-      <Form form={form} layout="vertical" initialValues={defaultPayload}>
-        <Form.Item name="preflight_prompt" label="预引导提示词">
-          <Input.TextArea rows={4} />
-        </Form.Item>
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title={<span className="inline-flex items-center gap-2"><Settings className="h-4 w-4" />审计任务配置</span>}>
+      <form
+        className="grid gap-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const formData = new FormData(event.currentTarget);
+          const preflight = fieldValue(formData, "preflight_prompt")?.trim();
+          onSubmit({
+            agent_name: fieldValue(formData, "agent_name"),
+            enabled_agents: formData.getAll("enabled_agents").map(String),
+            preflight_prompt: preflight,
+            validator_rounds: numberFieldValue(formData, "validator_rounds"),
+            max_parallel_validators: numberFieldValue(formData, "max_parallel_validators"),
+            validator_agent_name: fieldValue(formData, "validator_agent_name"),
+            enable_validation_judgement: checkedFieldValue(formData, "enable_validation_judgement"),
+            validation_judgement_agent_name: fieldValue(formData, "validation_judgement_agent_name"),
+            enable_feedback_loop: checkedFieldValue(formData, "enable_feedback_loop"),
+            max_feedback_rounds: numberFieldValue(formData, "max_feedback_rounds"),
+            enable_code_batch_analysis: checkedFieldValue(formData, "enable_code_batch_analysis"),
+            enable_batch_internal_semgrep: checkedFieldValue(formData, "enable_batch_internal_semgrep"),
+            enable_batch_internal_sca: checkedFieldValue(formData, "enable_batch_internal_sca"),
+            max_code_audit_tasks: numberFieldValue(formData, "max_code_audit_tasks"),
+            max_files_per_code_audit_task: numberFieldValue(formData, "max_files_per_code_audit_task"),
+            max_parallel_code_auditors: numberFieldValue(formData, "max_parallel_code_auditors"),
+            code_auditor_agent_name: fieldValue(formData, "code_auditor_agent_name"),
+            enable_source_sink_analysis: checkedFieldValue(formData, "enable_source_sink_analysis"),
+            source_sink_finder_agent_name: fieldValue(formData, "source_sink_finder_agent_name"),
+            max_parallel_source_sink_finders: numberFieldValue(formData, "max_parallel_source_sink_finders"),
+            max_source_sink_findings: numberFieldValue(formData, "max_source_sink_findings"),
+            enable_validators: checkedFieldValue(formData, "enable_validators"),
+            enable_judgement: checkedFieldValue(formData, "enable_judgement"),
+            judger_agent_name: fieldValue(formData, "judger_agent_name"),
+            max_parallel_judgers: numberFieldValue(formData, "max_parallel_judgers"),
+            enable_poc_writing: checkedFieldValue(formData, "enable_poc_writing"),
+            poc_writer_agent_name: fieldValue(formData, "poc_writer_agent_name"),
+            max_parallel_poc_writers: numberFieldValue(formData, "max_parallel_poc_writers"),
+            max_poc_findings: numberFieldValue(formData, "max_poc_findings"),
+            enable_poc_verification: checkedFieldValue(formData, "enable_poc_verification"),
+            poc_verifier_agent_name: fieldValue(formData, "poc_verifier_agent_name"),
+            max_parallel_poc_verifiers: numberFieldValue(formData, "max_parallel_poc_verifiers"),
+            enable_decompilation: checkedFieldValue(formData, "enable_decompilation"),
+            decompiled_source_dir: fieldValue(formData, "decompiled_source_dir"),
+            decompile_max_artifact_size_mb: numberFieldValue(formData, "decompile_max_artifact_size_mb"),
+            decompile_timeout_seconds: numberFieldValue(formData, "decompile_timeout_seconds"),
+            decompile_max_artifacts: numberFieldValue(formData, "decompile_max_artifacts"),
+            allow_external_network: checkedFieldValue(formData, "allow_external_network"),
+            retain_runtime_on_failure: checkedFieldValue(formData, "retain_runtime_on_failure"),
+            start_agent: checkedFieldValue(formData, "start_agent"),
+            input_payload: { goal: preflight || defaultGoal },
+          });
+        }}
+      >
+        <Field label="预引导提示词">
+          <Textarea name="preflight_prompt" defaultValue={defaultPayload.preflight_prompt} rows={4} />
+        </Field>
 
-        <Collapse
-          defaultActiveKey={["agents", "parallel"]}
+        <Accordion
           items={[
             {
               key: "agents",
-              label: "Agent Swarm",
+              title: "Agent Swarm",
               children: (
-                <>
-                  <Form.Item name="enabled_agents" label="启用 Agent">
-                    <Checkbox.Group options={agentOptions} />
-                  </Form.Item>
-                  <div className="form-grid">
-                    <Form.Item name="agent_name" label="Orchestrator 模板">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name="code_auditor_agent_name" label="Code Auditor 模板">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name="source_sink_finder_agent_name" label="Trace Worker 模板">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name="validation_judgement_agent_name" label="Validation-Judgement 模板">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name="poc_writer_agent_name" label="PoC Writer 模板">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name="poc_verifier_agent_name" label="PoC Verifier 模板">
-                      <Input />
-                    </Form.Item>
+                <div className="grid gap-4">
+                  <Field label="启用 Agent">
+                    <CheckboxGroup name="enabled_agents" defaultValue={defaultPayload.enabled_agents} options={agentOptions} />
+                  </Field>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <TextField name="agent_name" label="Orchestrator 模板" />
+                    <TextField name="code_auditor_agent_name" label="Code Auditor 模板" />
+                    <TextField name="source_sink_finder_agent_name" label="Trace Worker 模板" />
+                    <TextField name="validation_judgement_agent_name" label="Validation-Judgement 模板" />
+                    <TextField name="poc_writer_agent_name" label="PoC Writer 模板" />
+                    <TextField name="poc_verifier_agent_name" label="PoC Verifier 模板" />
                   </div>
-                </>
+                </div>
               ),
             },
             {
               key: "parallel",
-              label: "并发与轮次",
+              title: "并发与轮次",
               children: (
-                <div className="form-grid">
-                  <Form.Item name="validator_rounds" label="确认轮次">
-                    <InputNumber min={1} max={20} />
-                  </Form.Item>
-                  <Form.Item name="max_parallel_validators" label="确认并发">
-                    <InputNumber min={1} max={20} />
-                  </Form.Item>
-                  <Form.Item name="max_parallel_code_auditors" label="Code Auditor 并发">
-                    <InputNumber min={1} max={20} />
-                  </Form.Item>
-                  <Form.Item name="max_parallel_source_sink_finders" label="Trace Worker 并发">
-                    <InputNumber min={1} max={20} />
-                  </Form.Item>
-                  <Form.Item name="max_feedback_rounds" label="反馈轮数">
-                    <InputNumber min={0} max={10} />
-                  </Form.Item>
-                  <Form.Item name="max_parallel_poc_writers" label="PoC Writer 并发">
-                    <InputNumber min={1} max={20} />
-                  </Form.Item>
-                  <Form.Item name="max_parallel_poc_verifiers" label="PoC Verifier 并发">
-                    <InputNumber min={1} max={20} />
-                  </Form.Item>
-                  <Form.Item name="max_code_audit_tasks" label="代码分析任务数">
-                    <InputNumber min={1} max={100} />
-                  </Form.Item>
-                  <Form.Item name="max_files_per_code_audit_task" label="每任务文件数">
-                    <InputNumber min={1} max={200} />
-                  </Form.Item>
-                  <Form.Item name="max_source_sink_findings" label="Trace Candidate 上限">
-                    <InputNumber min={1} max={500} />
-                  </Form.Item>
-                  <Form.Item name="max_poc_findings" label="PoC Finding 上限">
-                    <InputNumber min={1} max={500} />
-                  </Form.Item>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <NumberField name="validator_rounds" label="确认轮次" min={1} max={20} />
+                  <NumberField name="max_parallel_validators" label="确认并发" min={1} max={20} />
+                  <NumberField name="max_parallel_code_auditors" label="Code Auditor 并发" min={1} max={20} />
+                  <NumberField name="max_parallel_source_sink_finders" label="Trace Worker 并发" min={1} max={20} />
+                  <NumberField name="max_feedback_rounds" label="反馈轮数" min={0} max={10} />
+                  <NumberField name="max_parallel_poc_writers" label="PoC Writer 并发" min={1} max={20} />
+                  <NumberField name="max_parallel_poc_verifiers" label="PoC Verifier 并发" min={1} max={20} />
+                  <NumberField name="max_code_audit_tasks" label="代码分析任务数" min={1} max={100} />
+                  <NumberField name="max_files_per_code_audit_task" label="每任务文件数" min={1} max={200} />
+                  <NumberField name="max_source_sink_findings" label="Trace Candidate 上限" min={1} max={500} />
+                  <NumberField name="max_poc_findings" label="PoC Finding 上限" min={1} max={500} />
                 </div>
               ),
             },
             {
               key: "stages",
-              label: "阶段开关",
+              title: "阶段开关",
               children: (
-                <div className="switch-grid">
-                  <Form.Item name="enable_code_batch_analysis" label="代码批量分析" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="enable_batch_internal_semgrep" label="Batch 内置 Semgrep" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="enable_batch_internal_sca" label="Batch 内置 SCA" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="enable_validation_judgement" label="Validation-Judgement" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="enable_feedback_loop" label="反馈调节" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="enable_poc_writing" label="PoC Writer" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="enable_poc_verification" label="PoC Verifier" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                  <Form.Item name="start_agent" label="创建后立即跑 Orchestrator" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <SwitchField name="enable_code_batch_analysis" label="代码批量分析" defaultChecked={defaultPayload.enable_code_batch_analysis} />
+                  <SwitchField name="enable_batch_internal_semgrep" label="Batch 内置 Semgrep" defaultChecked={defaultPayload.enable_batch_internal_semgrep} />
+                  <SwitchField name="enable_batch_internal_sca" label="Batch 内置 SCA" defaultChecked={defaultPayload.enable_batch_internal_sca} />
+                  <SwitchField name="enable_validation_judgement" label="Validation-Judgement" defaultChecked={defaultPayload.enable_validation_judgement} />
+                  <SwitchField name="enable_feedback_loop" label="反馈调节" defaultChecked={defaultPayload.enable_feedback_loop} />
+                  <SwitchField name="enable_poc_writing" label="PoC Writer" defaultChecked={defaultPayload.enable_poc_writing} />
+                  <SwitchField name="enable_poc_verification" label="PoC Verifier" defaultChecked={defaultPayload.enable_poc_verification} />
+                  <SwitchField name="start_agent" label="创建后立即跑 Orchestrator" defaultChecked={defaultPayload.start_agent} />
                 </div>
               ),
             },
             {
               key: "runtime",
-              label: "源码准备与运行策略",
+              title: "源码准备与运行策略",
               children: (
-                <>
-                  <div className="switch-grid">
-                    <Form.Item name="enable_decompilation" label="自动反编译" valuePropName="checked">
-                      <Switch />
-                    </Form.Item>
-                    <Form.Item name="allow_external_network" label="允许外网" valuePropName="checked">
-                      <Switch />
-                    </Form.Item>
-                    <Form.Item name="retain_runtime_on_failure" label="失败保留运行现场" valuePropName="checked">
-                      <Switch />
-                    </Form.Item>
+                <div className="grid gap-4">
+                  <div className="grid gap-2 md:grid-cols-3">
+                    <SwitchField name="enable_decompilation" label="自动反编译" defaultChecked={defaultPayload.enable_decompilation} />
+                    <SwitchField name="allow_external_network" label="允许外网" defaultChecked={defaultPayload.allow_external_network} />
+                    <SwitchField name="retain_runtime_on_failure" label="失败保留运行现场" defaultChecked={defaultPayload.retain_runtime_on_failure} />
                   </div>
-                  <div className="form-grid">
-                    <Form.Item name="decompiled_source_dir" label="反编译输出目录">
-                      <Input />
-                    </Form.Item>
-                    <Form.Item name="decompile_max_artifact_size_mb" label="单包大小 MB">
-                      <InputNumber min={1} max={4096} />
-                    </Form.Item>
-                    <Form.Item name="decompile_timeout_seconds" label="反编译超时秒数">
-                      <InputNumber min={1} max={7200} />
-                    </Form.Item>
-                    <Form.Item name="decompile_max_artifacts" label="反编译包数量">
-                      <InputNumber min={1} max={500} />
-                    </Form.Item>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <TextField name="decompiled_source_dir" label="反编译输出目录" />
+                    <NumberField name="decompile_max_artifact_size_mb" label="单包大小 MB" min={1} max={4096} />
+                    <NumberField name="decompile_timeout_seconds" label="反编译超时秒数" min={1} max={7200} />
+                    <NumberField name="decompile_max_artifacts" label="反编译包数量" min={1} max={500} />
                   </div>
-                </>
+                </div>
               ),
             },
           ]}
         />
 
-        <Typography.Paragraph className="muted-note">
-          <CheckSquareOutlined /> 创建后可在 Audit Runs 页面点击“一键闭环”，按上述配置执行多 Agent 审计流程。
-        </Typography.Paragraph>
-      </Form>
-    </Modal>
+        <p className="text-sm text-slate-500">创建后可在 Audit Runs 页面点击“一键闭环”，按上述配置执行多 Agent 审计流程。</p>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onCancel}>取消</Button>
+          <Button type="submit" variant="primary" loading={loading}>创建 AuditRun</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function TextField({ label, name }: { label: string; name: keyof typeof defaultPayload }) {
+  return (
+    <Field label={label}>
+      <Input name={name} defaultValue={String(defaultPayload[name] || "")} />
+    </Field>
+  );
+}
+
+function NumberField({ label, max, min, name }: { label: string; max: number; min: number; name: keyof typeof defaultPayload }) {
+  return (
+    <Field label={label}>
+      <NumberInput name={name} min={min} max={max} defaultValue={Number(defaultPayload[name] || 0)} />
+    </Field>
   );
 }

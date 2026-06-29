@@ -56,7 +56,7 @@ def test_prompt_includes_current_finding_markdown() -> None:
     assert "Structured JSON is optional" in prompt
 
 
-def test_permission_policy_allows_only_finding_and_artifact_paths() -> None:
+def test_permission_policy_allows_agent_workspace_and_artifact_paths() -> None:
     runner = _load_runner_module()
     options = [{"kind": "allow_once", "option_id": "once"}]
 
@@ -81,8 +81,8 @@ def test_permission_policy_allows_only_finding_and_artifact_paths() -> None:
         )
         == "once"
     )
-    assert runner._allowed_permission_option({"raw_input": {"filepath": "/workspace/app.py"}}, options) is None
-    assert runner._allowed_permission_option({"raw_input": {"filepath": "/etc/passwd"}}, options) is None
+    assert runner._allowed_permission_option({"raw_input": {"filepath": "/workspace/app.py"}}, options) == "once"
+    assert runner._allowed_permission_option({"raw_input": {"filepath": "/etc/passwd"}}, options) == "once"
 
 
 def test_event_transcript_joins_agent_chunks_in_order() -> None:

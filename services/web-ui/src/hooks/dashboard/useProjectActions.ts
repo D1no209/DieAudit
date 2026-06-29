@@ -1,6 +1,6 @@
-import { message } from "antd";
 import * as dashboardApi from "../../client/dashboardApi";
 import type { CreateAuditRunPayload } from "../../types";
+import { toast } from "../../ui/toast";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
@@ -11,13 +11,11 @@ type DashboardRunner = {
 
 export function useProjectActions(dashboardState: DashboardStateController, runner: DashboardRunner) {
   const {
-    gitForm,
     selectedProjectId,
     setLastResponse,
     setSelectedProjectId,
     setZipFiles,
     zipFiles,
-    zipForm,
   } = dashboardState;
 
   async function createGitProject(values: { name: string; git_url: string; ref?: string }) {
@@ -25,15 +23,14 @@ export function useProjectActions(dashboardState: DashboardStateController, runn
       const result = await dashboardApi.createGitProject(values);
       setLastResponse(result);
       setSelectedProjectId(result.project.project_id);
-      gitForm.resetFields();
       await runner.refreshProjects(result.project.project_id);
     });
   }
 
   async function uploadZipProject(values: { name: string }) {
-    const zipFile = zipFiles[0]?.originFileObj;
+    const zipFile = zipFiles[0];
     if (!zipFile) {
-      message.error("请选择 zip 文件");
+      toast.error("请选择 zip 文件");
       return;
     }
     await runner.runAction(async () => {
@@ -43,7 +40,6 @@ export function useProjectActions(dashboardState: DashboardStateController, runn
       const result = await dashboardApi.uploadZipProject(formData);
       setLastResponse(result);
       setSelectedProjectId(result.project.project_id);
-      zipForm.resetFields();
       setZipFiles([]);
       await runner.refreshProjects(result.project.project_id);
     });
@@ -51,7 +47,7 @@ export function useProjectActions(dashboardState: DashboardStateController, runn
 
   async function startAudit(payload: CreateAuditRunPayload) {
     if (!selectedProjectId) {
-      message.error("请选择项目");
+      toast.error("请选择项目");
       return;
     }
     await runner.runAction(async () => {

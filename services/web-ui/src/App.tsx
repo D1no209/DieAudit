@@ -1,4 +1,4 @@
-import { ConfigProvider, theme } from "antd";
+import { MotionConfig } from "motion/react";
 import { AuditContextBar } from "./components/AuditContextBar";
 import { AppDrawers } from "./components/AppDrawers";
 import { AppShell } from "./components/AppShell";
@@ -7,6 +7,7 @@ import { useAppRoute } from "./hooks/useAppRoute";
 import { useDashboardController } from "./hooks/useDashboardController";
 import { navigationGroups, navigationItems } from "./navigation";
 import { AppRoutes } from "./routes/AppRoutes";
+import { ToastHost } from "./ui/ToastHost";
 
 export function App() {
   const [activeView, setActiveView] = useAppRoute();
@@ -14,7 +15,7 @@ export function App() {
   const { actions, state } = dashboard;
 
   return (
-    <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm }}>
+    <MotionConfig reducedMotion="user">
       <AppShell
         activeView={activeView}
         alerts={<AppStatusAlerts apiKey={state.apiKey} authStatus={state.authStatus} error={state.error} />}
@@ -46,6 +47,7 @@ export function App() {
           onCloseContainerLogs={() => actions.setContainerLogs(undefined)}
         />
       </AppShell>
-    </ConfigProvider>
+      <ToastHost />
+    </MotionConfig>
   );
 }

@@ -316,7 +316,7 @@ def test_web_ui_build_runs_typecheck() -> None:
     package_json = json.loads(read_source("services/web-ui/package.json"))
 
     assert "typecheck" in package_json["scripts"]
-    assert "npm run typecheck" in package_json["scripts"]["build"]
+    assert "bun run typecheck" in package_json["scripts"]["build"]
 
 
 def test_dashboard_api_client_uses_typed_json_boundaries() -> None:

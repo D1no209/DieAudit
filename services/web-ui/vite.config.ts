@@ -1,15 +1,10 @@
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+  plugins: [tailwindcss()],
   build: {
     chunkSizeWarningLimit: 1000,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          antd: ["antd", "@ant-design/icons"],
-        },
-      },
-    },
   },
   server: {
     host: "0.0.0.0",

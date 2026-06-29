@@ -29,6 +29,18 @@ providers:
     base_url: http://host.docker.internal:8000/v1
     api_key_env: LOCAL_LLM_API_KEY
     default_model: qwen2.5-coder
+  deepseek:
+    type: openai-compatible
+    name: DeepSeek
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    default_model: deepseek-v4-pro
+    models:
+      deepseek-v4-pro:
+        name: deepseek-v4-pro
+        limit:
+          context: 1000000
+          output: 8192
   openai:
     type: openai
     api_key_env: OPENAI_API_KEY
@@ -36,9 +48,9 @@ providers:
 profiles:
   orchestrator-long-context:
     provider: deepseek
-    model: deepseek-v4-flash
+    model: deepseek-v4-pro
     temperature: 0.1
   auditor-strong:
     provider: deepseek
-    model: deepseek-v4-flash
+    model: deepseek-v4-pro
     temperature: 0.1

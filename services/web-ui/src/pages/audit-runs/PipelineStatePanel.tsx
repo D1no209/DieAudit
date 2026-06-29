@@ -1,7 +1,5 @@
-import { Alert, Card, List, Space, Tag, Typography } from "antd";
 import type { PipelineStatus } from "../../types";
-
-const { Text } = Typography;
+import { Alert, Badge, EmptyState, Panel } from "../../ui";
 
 type Props = {
   pipelineStatus?: PipelineStatus;
@@ -13,49 +11,41 @@ export function PipelineStatePanel({ pipelineStatus }: Props) {
   );
 
   return (
-    <Card title="Pipeline State">
-      <Space direction="vertical" size={16} className="drawer-stack">
-        {pipelineStatus?.current?.status === "completed_with_warnings" && (
-          <Alert type="warning" showIcon message="Pipeline completed with warnings" />
-        )}
-        {warningEvents.length > 0 && (
+    <Panel title="Pipeline State">
+      <div className="grid gap-4">
+        {pipelineStatus?.current?.status === "completed_with_warnings" ? <Alert tone="warning" title="Pipeline completed with warnings" /> : null}
+        {warningEvents.length > 0 ? (
           <Alert
-            type="warning"
-            showIcon
-            message={`${warningEvents.length} warning or failure event(s) recorded`}
+            tone="warning"
+            title={`${warningEvents.length} warning or failure event(s) recorded`}
             description={warningEvents.slice(0, 3).map((item) => item.event_type).join(", ")}
           />
-        )}
-        <Space wrap>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
           {Object.entries(pipelineStatus?.counts?.findings || {}).map(([status, count]) => (
-            <Tag key={status}>
-              {status}: {count}
-            </Tag>
+            <Badge key={status}>{status}: {count}</Badge>
           ))}
           {Object.entries(pipelineStatus?.counts?.validation_attempts || {}).map(([status, count]) => (
-            <Tag key={`attempt-${status}`}>
-              attempt {status}: {count}
-            </Tag>
+            <Badge key={`attempt-${status}`}>attempt {status}: {count}</Badge>
           ))}
-          <Tag>reports: {pipelineStatus?.counts?.reports ?? 0}</Tag>
-        </Space>
-        <List
-          dataSource={pipelineStatus?.events || []}
-          renderItem={(item) => (
-            <List.Item>
-              <List.Item.Meta
-                title={
-                  <Space>
-                    <Tag>{item.event_type}</Tag>
-                    <Text>{item.created_at}</Text>
-                  </Space>
-                }
-                description={<pre>{JSON.stringify(item.payload || {}, null, 2)}</pre>}
-              />
-            </List.Item>
-          )}
-        />
-      </Space>
-    </Card>
+          <Badge>reports: {pipelineStatus?.counts?.reports ?? 0}</Badge>
+        </div>
+        {(pipelineStatus?.events || []).length ? (
+          <div className="grid gap-3">
+            {(pipelineStatus?.events || []).map((item) => (
+              <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <Badge>{item.event_type}</Badge>
+                  <span className="text-xs text-slate-500">{item.created_at}</span>
+                </div>
+                <pre>{JSON.stringify(item.payload || {}, null, 2)}</pre>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState description="No pipeline events yet" />
+        )}
+      </div>
+    </Panel>
   );
 }

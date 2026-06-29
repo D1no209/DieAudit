@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Alert } from "antd";
 import type { AuditRun, CodeAnalysisTask, CreateAuditRunPayload, PipelineStatus, Project } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { Alert } from "../ui";
 import { AuditRunActionBar } from "./audit-runs/AuditRunActionBar";
 import { AuditRunConfigModal } from "./audit-runs/AuditRunConfigModal";
 import { AuditRunSummary } from "./audit-runs/AuditRunSummary";
@@ -72,10 +72,9 @@ export function AuditRunsPage({
       <PageHeader title="Audit Runs" actions={pageActions} />
       {!selectedProject && (
         <Alert
-          className="section"
-          type="warning"
-          showIcon
-          message="未选择项目"
+          className="mb-5"
+          tone="warning"
+          title="未选择项目"
           description="请先在 Projects 页面导入并选择一个项目。"
         />
       )}
@@ -88,18 +87,17 @@ export function AuditRunsPage({
         selectedProject={selectedProject}
       />
 
-      {pipelineStatus?.current?.error && <Alert className="section" type="error" showIcon message={pipelineStatus.current.error} />}
+      {pipelineStatus?.current?.error && <Alert className="mb-5" tone="danger" title={pipelineStatus.current.error} />}
       {pipelineStatus?.runtime_control?.cancel_requested && (
         <Alert
-          className="section"
-          type="warning"
-          showIcon
-          message="取消已请求"
+          className="mb-5"
+          tone="warning"
+          title="取消已请求"
           description={`${pipelineStatus.runtime_control.cancel_reason || "cancel_requested"} ${pipelineStatus.runtime_control.cancel_requested_at || ""}`}
         />
       )}
 
-      <div className="content-grid section">
+      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(360px,0.9fr)_minmax(480px,1.1fr)]">
         <RunContextPanel auditRun={auditRun} lastResponse={lastResponse} selectedProject={selectedProject} />
         <PipelineStatePanel pipelineStatus={pipelineStatus} />
       </div>

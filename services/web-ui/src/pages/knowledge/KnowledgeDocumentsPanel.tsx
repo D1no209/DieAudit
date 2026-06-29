@@ -1,16 +1,15 @@
-import { Card, Table } from "antd";
-import type { ColumnsType } from "antd/es/table";
 import type { KnowledgeDocument } from "../../types";
+import { DataTable, Panel, type DataColumn } from "../../ui";
 
 type Props = {
-  columns: ColumnsType<KnowledgeDocument>;
+  columns: DataColumn<KnowledgeDocument>[];
   documents: KnowledgeDocument[];
 };
 
 export function KnowledgeDocumentsPanel({ columns, documents }: Props) {
   return (
-    <Card title="Indexed Documents">
-      <Table rowKey="document_id" columns={columns} dataSource={documents} pagination={{ pageSize: 6 }} />
-    </Card>
+    <Panel title="Indexed Documents">
+      <DataTable getRowKey={(row) => row.document_id} columns={columns} data={documents} pagination={{ pageSize: 6 }} />
+    </Panel>
   );
 }

@@ -1,11 +1,11 @@
-import type { ColumnsType } from "antd/es/table";
 import type { RuntimeReadiness, WorkerHeartbeat } from "../types";
+import type { DataColumn } from "../ui";
 import { PageHeader } from "../components/PageHeader";
 import { RuntimeReadinessPanel } from "./runtime/RuntimeReadinessPanel";
 
 type Props = {
   runtimeReadiness?: RuntimeReadiness;
-  workerColumns: ColumnsType<WorkerHeartbeat>;
+  workerColumns: DataColumn<WorkerHeartbeat>[];
   workerHeartbeats: WorkerHeartbeat[];
 };
 

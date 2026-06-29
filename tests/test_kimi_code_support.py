@@ -36,7 +36,7 @@ def test_kimi_code_agent_templates_use_stdio_acp() -> None:
         assert template["protocol"]["kind"] == "agent-client-protocol"
         assert template["protocol"]["transport"] == "stdio"
         assert template["protocol"]["runtime"] == "kimi"
-        assert template["protocol"]["stdio_command"] == ["bunx", "@moonshot-ai/kimi-code", "acp"]
+        assert template["protocol"]["stdio_command"] == ["kimi-code", "acp"]
         assert template["runtime_mount"]["target"] == "/dieaudit/runtime"
         assert "whiteboard-mcp" in template.get("required_mcp", [])
 
@@ -45,9 +45,11 @@ def test_kimi_code_agent_is_dockerized() -> None:
     dockerfile = read_source("services/agents/kimi-code-agent/Dockerfile")
     compose = read_source("docker-compose.yml")
 
-    assert "ACP_ARGS=\"@moonshot-ai/kimi-code acp\"" in dockerfile
+    assert 'ACP_ARGS="acp"' in dockerfile
     assert "bunx --version" in dockerfile
     assert "COPY services/agents/opencode-agent/opencode_acp_runner.py /app/acp_runner.py" in dockerfile
+    assert "COPY services/agents/opencode-agent/kimi_acp_runtime_server.py /app/kimi_acp_runtime_server.py" in dockerfile
+    assert "uvicorn" in dockerfile
     assert "kimi-code-agent-image:" in compose
     assert "dieaudit/kimi-code-agent:local" in compose
 

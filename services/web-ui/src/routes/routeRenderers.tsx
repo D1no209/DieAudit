@@ -32,17 +32,15 @@ export function renderOverviewRoute({ state }: DashboardController) {
   );
 }
 
-export function renderProjectsRoute({ actions, columns, forms, state }: DashboardController) {
+export function renderProjectsRoute({ actions, columns, state }: DashboardController) {
   return (
     <ProjectsPage
-      gitForm={forms.gitForm}
       loading={state.loading}
       projectColumns={columns.projectColumns}
       projects={state.projects}
       selectedProject={state.selectedProject}
       selectedProjectId={state.selectedProjectId}
       zipFiles={state.zipFiles}
-      zipForm={forms.zipForm}
       onCreateGitProject={actions.createGitProject}
       onSelectProject={actions.setSelectedProjectId}
       onSetZipFiles={actions.setZipFiles}
@@ -180,16 +178,14 @@ export function renderRuntimeSandboxRoute({ actions, state }: DashboardControlle
   );
 }
 
-export function renderKnowledgeRoute({ actions, columns, forms, state }: DashboardController) {
+export function renderKnowledgeRoute({ actions, columns, state }: DashboardController) {
   return (
     <KnowledgePage
       knowledgeColumns={columns.knowledgeColumns}
       knowledgeDocuments={state.knowledgeDocuments}
       knowledgeFiles={state.knowledgeFiles}
       knowledgeMatches={state.knowledgeMatches}
-      knowledgeSearchForm={forms.knowledgeSearchForm}
       knowledgeStatus={state.knowledgeStatus}
-      knowledgeUploadForm={forms.knowledgeUploadForm}
       loading={state.loading}
       selectedProjectId={state.selectedProjectId}
       onSearchKnowledge={actions.searchKnowledge}
@@ -199,11 +195,10 @@ export function renderKnowledgeRoute({ actions, columns, forms, state }: Dashboa
   );
 }
 
-export function renderAdminRoute({ actions, columns, forms, state }: DashboardController) {
+export function renderAdminRoute({ actions, columns, state }: DashboardController) {
   return (
     <AdminPage
       apiKeyColumns={columns.apiKeyColumns}
-      apiKeyForm={forms.apiKeyForm}
       apiKeys={state.apiKeys}
       loading={state.loading}
       platformAuditColumns={columns.platformAuditColumns}

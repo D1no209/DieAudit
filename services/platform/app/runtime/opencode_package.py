@@ -94,13 +94,13 @@ class OpenCodeRuntimePackageBuilder:
             "instructions": [f"./instructions/{instruction_target.name}"],
             "mcp": mcp_config,
             "tools": {
-                "edit": False,
-                "write": False,
+                "edit": True,
+                "write": True,
             },
             "permission": {
-                "edit": "deny",
+                "edit": "allow",
                 "bash": "allow",
-                "webfetch": "deny",
+                "webfetch": "allow",
             },
         }
 
@@ -162,10 +162,16 @@ class OpenCodeRuntimePackageBuilder:
             }
             api_key_env = model_config.get("api_key_env")
             if api_key_env:
-                env["KIMI_MODEL_API_KEY"] = os.environ.get(api_key_env, "")
+                api_key = os.environ.get(api_key_env, "")
+                env["KIMI_MODEL_API_KEY"] = api_key
+                env[str(api_key_env)] = api_key
             base_url = (provider.get("options") or {}).get("baseURL")
             if base_url:
                 env["KIMI_MODEL_BASE_URL"] = str(base_url)
+            if env["KIMI_MODEL_PROVIDER_TYPE"] == "openai":
+                env["OPENAI_API_KEY"] = env["KIMI_MODEL_API_KEY"]
+                if base_url:
+                    env["OPENAI_BASE_URL"] = str(base_url)
             limits = ((provider.get("models") or {}).get(model) or {}).get("limit") or {}
             if limits.get("context"):
                 env["KIMI_MODEL_MAX_CONTEXT_SIZE"] = str(limits["context"])

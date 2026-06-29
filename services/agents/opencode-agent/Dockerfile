@@ -1,4 +1,5 @@
 FROM python:3.12-slim-bookworm
+COPY --from=ghcr.io/astral-sh/uv:0.5.31 /uv /uvx /usr/local/bin/
 
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
@@ -16,7 +17,7 @@ ENV no_proxy=${NO_PROXY}
 ENV PATH=/root/.opencode/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
-RUN pip install --no-cache-dir agent-client-protocol==0.10.1
+RUN uv pip install --system --no-cache agent-client-protocol==0.10.1
 
 RUN python -c "import os, tarfile, urllib.request; \
 version=os.environ.get('OPENCODE_VERSION', '${OPENCODE_VERSION}'); \
