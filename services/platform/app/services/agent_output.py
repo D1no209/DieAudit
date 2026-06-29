@@ -73,6 +73,8 @@ class AgentOutputIngestor:
                     rule_id=identity["rule_id"],
                     description=str(item["description"]),
                     source=identity["source"],
+                    metadata_json=item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                    raw_result={**item, "agent_run_id": agent_run_id},
                     raw={**item, "agent_run_id": agent_run_id},
                 )
                 session.add(finding)
@@ -110,6 +112,7 @@ class AgentOutputIngestor:
                     AgentRunEvent(
                         agent_run_id=agent_run_id,
                         event_type="structured_output_parse_warnings",
+                        payload_json={"warnings": warnings},
                         payload={"warnings": warnings},
                     )
                 )
@@ -119,6 +122,14 @@ class AgentOutputIngestor:
                     AgentRunEvent(
                         agent_run_id=agent_run_id,
                         event_type="structured_output_ingested",
+                        payload_json={
+                            "summary": summary,
+                            "structured_parse_status": parse_status,
+                            "structured_parse_warnings": warnings,
+                            "findings_created": len(created_findings),
+                            "findings_skipped": skipped_duplicates,
+                            "evidence_created": len(created_evidence),
+                        },
                         payload={
                             "summary": summary,
                             "structured_parse_status": parse_status,
@@ -243,6 +254,10 @@ class AgentOutputIngestor:
         audit_run_id: str,
         default_kind: str,
     ) -> Evidence:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else item
+        artifact_ids = item.get("artifact_ids")
+        if not isinstance(artifact_ids, list):
+            artifact_ids = []
         return Evidence(
             evidence_id=str(uuid.uuid4()),
             finding_id=finding_id,
@@ -250,7 +265,9 @@ class AgentOutputIngestor:
             kind=str(item.get("kind") or default_kind),
             summary=str(item["summary"]) if item.get("summary") else None,
             artifact_path=str(item["artifact_path"]) if item.get("artifact_path") else None,
-            payload=item.get("payload") if isinstance(item.get("payload"), dict) else item,
+            artifact_ids=[str(value) for value in artifact_ids],
+            payload_json=payload,
+            payload=payload,
         )
 
 

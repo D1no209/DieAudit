@@ -16,17 +16,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 ENV DOTNET_ROOT=/opt/dotnet \
-    PATH="/root/.dotnet/tools:/opt/dotnet:${PATH}"
+    PATH="/root/.dotnet/tools:/opt/dotnet:${PATH}" \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl default-jre-headless git jadx unzip wget \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl default-jre-headless git libicu72 unzip wget \
+    && (apt-get install -y --no-install-recommends jadx || printf '#!/bin/sh\necho "jadx is not installed in this image" >&2\nexit 127\n' > /usr/local/bin/jadx) \
+    && chmod +x /usr/local/bin/jadx \
     && mkdir -p /opt/cfr /opt/dotnet \
     && wget -q -O /opt/cfr/cfr.jar https://www.benf.org/other/cfr/cfr-0.152.jar \
     && printf '#!/bin/sh\nexec java -jar /opt/cfr/cfr.jar "$@"\n' > /usr/local/bin/cfr \
     && chmod +x /usr/local/bin/cfr \
     && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
-    && sh /tmp/dotnet-install.sh --channel 8.0 --install-dir /opt/dotnet \
-    && dotnet tool install --global ilspycmd \
+    && bash /tmp/dotnet-install.sh --channel 8.0 --install-dir /opt/dotnet \
+    && (dotnet tool install --global ilspycmd || printf '#!/bin/sh\necho "ilspycmd is not installed in this image" >&2\nexit 127\n' > /usr/local/bin/ilspycmd) \
+    && chmod +x /usr/local/bin/ilspycmd \
     && rm -rf /var/lib/apt/lists/* /tmp/dotnet-install.sh
 
 COPY services/platform/requirements.txt /app/requirements.txt

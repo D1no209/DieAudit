@@ -26,10 +26,18 @@ class AuditRun(TimestampMixin, Base):
     project_id: Mapped[str] = mapped_column(String(128), index=True)
     snapshot_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="created")
+    pipeline_status: Mapped[str] = mapped_column(String(32), default="created", index=True)
+    current_stage: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(default=False, index=True)
+    workspace_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     validator_rounds: Mapped[int] = mapped_column(Integer, default=1)
     max_parallel_validators: Mapped[int] = mapped_column(Integer, default=2)
     allow_external_network: Mapped[bool] = mapped_column(default=False)
     retain_runtime_on_failure: Mapped[bool] = mapped_column(default=False)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    input_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
@@ -145,6 +153,8 @@ class AgentRun(TimestampMixin, Base):
     template_name: Mapped[str] = mapped_column(String(128))
     protocol_kind: Mapped[str] = mapped_column(String(64), default="legacy-http")
     status: Mapped[str] = mapped_column(String(32), default="created")
+    input_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    output_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     input_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     output_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -159,6 +169,7 @@ class AgentRunEvent(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     agent_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.agent_run_id"), index=True)
     event_type: Mapped[str] = mapped_column(String(128), index=True)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     agent_run: Mapped[AgentRun] = relationship(back_populates="events")
@@ -204,6 +215,8 @@ class Finding(TimestampMixin, Base):
     rule_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(64), default="agent")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    raw_result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     raw: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
@@ -216,6 +229,8 @@ class Evidence(TimestampMixin, Base):
     kind: Mapped[str] = mapped_column(String(64))
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 

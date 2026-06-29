@@ -89,6 +89,8 @@ services:
         condition: service_started
       web-api:
         condition: service_healthy
+      legacy-platform-api:
+        condition: service_healthy
       agent-gateway:
         condition: service_healthy
     networks:
@@ -142,6 +144,48 @@ services:
       timeout: 3s
       retries: 20
 
+  legacy-platform-api:
+    <<: *platform-service
+    image: dieaudit/platform:local
+    build:
+      context: .
+      dockerfile: services/platform/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    profiles: ["core", "demo"]
+    container_name: dieaudit-legacy-platform-api
+    volumes:
+      - ./configs:/app/configs
+      - ./services/platform/app:/app/app:ro
+      - ./data/workspaces:/dieaudit/workspaces
+      - ./data/artifacts:/dieaudit/artifacts
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: web-api
+      AGENT_GATEWAY_URL: http://agent-gateway:8000
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      agent-gateway:
+        condition: service_healthy
+    ports:
+      - "${LEGACY_PLATFORM_API_PORT:-18080}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
   workflow-worker:
     <<: *platform-service
     image: dieaudit/workflow-worker:local
@@ -172,16 +216,21 @@ services:
 
   agent-gateway:
     <<: *platform-service
-    image: dieaudit/agent-gateway:local
+    image: dieaudit/platform:local
     build:
       context: .
-      dockerfile: services/agent-gateway/Dockerfile
+      dockerfile: services/platform/Dockerfile
       args:
         HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
         HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     profiles: ["core", "demo"]
     container_name: dieaudit-agent-gateway
+    volumes:
+      - ./configs:/app/configs
+      - ./services/platform/app:/app/app:ro
+      - ./data/workspaces:/dieaudit/workspaces
+      - ./data/artifacts:/dieaudit/artifacts
     environment:
       <<: *platform-env
       SERVICE_NAME: agent-gateway
@@ -205,6 +254,45 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
+
+  legacy-workflow-worker:
+    <<: *platform-service
+    image: dieaudit/platform:local
+    build:
+      context: .
+      dockerfile: services/platform/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    profiles: ["core", "demo"]
+    container_name: dieaudit-legacy-workflow-worker
+    volumes:
+      - ./configs:/app/configs
+      - ./services/platform/app:/app/app:ro
+      - ./data/workspaces:/dieaudit/workspaces
+      - ./data/artifacts:/dieaudit/artifacts
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: workflow-worker
+      RUNTIME_CONTROLLER_CONTAINER_NAME: dieaudit-legacy-workflow-worker
+      AGENT_GATEWAY_URL: http://agent-gateway:8000
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+      docker-socket-proxy:
+        condition: service_started
+      legacy-platform-api:
+        condition: service_healthy
+      agent-gateway:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
 
   workspace-engine:
     <<: *platform-service

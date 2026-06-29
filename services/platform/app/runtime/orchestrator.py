@@ -1705,7 +1705,7 @@ class RuntimeOrchestrator:
 
     async def _record_agent_event(self, agent_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         async with SessionLocal() as session:
-            session.add(AgentRunEvent(agent_run_id=agent_run_id, event_type=event_type, payload=payload))
+            session.add(AgentRunEvent(agent_run_id=agent_run_id, event_type=event_type, payload_json=payload, payload=payload))
             await session.commit()
 
     async def _record_audit_run(
@@ -1762,6 +1762,7 @@ class RuntimeOrchestrator:
             existing = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
             if existing:
                 existing.status = status
+                existing.output_payload = output_summary or existing.output_payload
                 existing.output_summary = output_summary or existing.output_summary
                 existing.error = error
                 if artifact_path:
@@ -1776,6 +1777,8 @@ class RuntimeOrchestrator:
                         template_name=template_name,
                         protocol_kind=protocol_kind,
                         status=status,
+                        input_payload=input_summary or {},
+                        output_payload=output_summary or {},
                         input_summary=input_summary or {},
                         output_summary=output_summary or {},
                         artifact_path=artifact_path,

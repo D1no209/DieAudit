@@ -65,13 +65,15 @@ class WorkspaceService:
         except WorkspaceImportError:
             shutil.rmtree(workspace_path, ignore_errors=True)
             raise
-        return self._snapshot_result(
-            project_id=project_id,
-            snapshot_id=snapshot_id,
-            workspace_path=workspace_path,
-            source_ref=filename,
-            source_type="zip",
-        )
+        return {
+            "snapshot_id": snapshot_id,
+            "project_id": project_id,
+            "source_type": "zip",
+            "source_ref": filename,
+            "workspace_path": str(workspace_path),
+            "artifact_path": str(archive_source),
+            "content_hash": self._sha256(archive_source),
+        }
 
     def _snapshot_result(
         self,

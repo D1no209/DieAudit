@@ -37,6 +37,8 @@ import type {
 
 type JsonObject = Record<string, unknown>;
 
+const unsupportedSplitServiceAction = "当前 split-service 运行模式尚未实现此操作。";
+
 function postJson<T = unknown>(path: string, body?: unknown) {
   return readJson<T>(path, {
     method: "POST",
@@ -45,189 +47,215 @@ function postJson<T = unknown>(path: string, body?: unknown) {
   });
 }
 
+function unsupported<T = JsonObject>(feature: string): Promise<T> {
+  return Promise.reject(new Error(`${feature}: ${unsupportedSplitServiceAction}`));
+}
+
 export function getPlatformBootstrap() {
-  return Promise.all([readJson<ApiHealth>("/api/health"), readJson<AuthStatus>("/api/auth/status")]);
+  return Promise.all([
+    readJson<ApiHealth>("/api/health"),
+    readJson<{ authenticated?: boolean; api_key_header?: string; service?: string }>("/api/bff/session").then((session) => ({
+      enabled: false,
+      api_key_header: session.api_key_header,
+      service: session.service,
+    })),
+  ]);
 }
 
 export function getDockerHealth() {
-  return readJson<DockerHealth>("/gateway/runtime/docker/health");
+  return readJson<DockerHealth>("/gateway/internal/runtime/docker/health").catch(() => ({ ok: false, status: "unavailable" }));
 }
 
 export function listProjects() {
-  return readJson<Project[]>("/gateway/projects");
+  return readJson<Project[]>("/api/bff/projects");
 }
 
 export function getManagedRuntime() {
-  return readJson<ManagedRuntime>("/gateway/runtime/managed");
+  return readJson<ManagedRuntime>("/api/bff/runtime/managed");
 }
 
 export function getStorageSummary() {
-  return readJson<StorageSummary>("/gateway/runtime/storage");
+  return Promise.resolve<StorageSummary>({});
 }
 
 export function getRuntimePolicy() {
-  return readJson<RuntimePolicy>("/gateway/runtime/policy");
+  return Promise.resolve<RuntimePolicy>({});
 }
 
 export function getRuntimeReadiness() {
-  return readJson<RuntimeReadiness>("/gateway/runtime/readiness");
+  return readJson<RuntimeReadiness>("/api/bff/runtime/readiness").then((readiness) => ({
+    ...readiness,
+    summary: {
+      fail: readiness.ok ? 0 : 1,
+      warn: 0,
+      pass: readiness.ok ? 1 : 0,
+      ...readiness.summary,
+    },
+    blocking_checks: readiness.blocking_checks || [],
+    warning_checks: readiness.warning_checks || [],
+    next_actions: readiness.next_actions || [],
+  }));
 }
 
 export function getWorkerHeartbeats() {
-  return readJson<WorkerHeartbeatsResponse>("/gateway/runtime/workers");
+  return Promise.resolve<WorkerHeartbeatsResponse>({ workers: [] });
 }
 
 export function getSandboxCapabilities() {
-  return readJson<SandboxCapabilities>("/gateway/runtime/sandbox/capabilities");
-}
-
-export function listApiKeys() {
-  return readJson<ApiKeyRecord[]>("/gateway/auth/api-keys");
-}
-
-export function listPlatformAuditEvents() {
-  return readJson<PlatformAuditEvent[]>("/gateway/platform/audit-events?limit=100");
-}
-
-export function listKnowledgeDocuments() {
-  return readJson<KnowledgeDocument[]>("/gateway/knowledge/documents");
-}
-
-export function getKnowledgeStatus() {
-  return readJson<KnowledgeStatus>("/gateway/knowledge/status");
-}
-
-export async function getAuditRunBundle(auditRunId: string) {
-  const [run, agents, findings, codeAnalysisTasks, dependencies, containers, reports, pipeline, whiteboard, executionGraph] = await Promise.all([
-    readJson<AuditRun>(`/gateway/audit-runs/${auditRunId}`),
-    readJson<AgentRun[]>(`/gateway/audit-runs/${auditRunId}/agent-runs`),
-    readJson<Finding[]>(`/gateway/audit-runs/${auditRunId}/findings`),
-    readJson<CodeAnalysisTask[]>(`/gateway/audit-runs/${auditRunId}/code-analysis/tasks`).catch(() => []),
-    readJson<DependencyInventory>(`/gateway/audit-runs/${auditRunId}/dependencies`).catch(() => undefined),
-    readJson<ContainerRow[]>(`/gateway/audit-runs/${auditRunId}/containers`),
-    readJson<ReportArtifact[]>(`/gateway/audit-runs/${auditRunId}/reports`),
-    readJson<PipelineStatus>(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
-    readJson<WhiteboardGraph>(`/gateway/audit-runs/${auditRunId}/whiteboard`).catch(() => undefined),
-    readJson<ExecutionGraph>(`/gateway/audit-runs/${auditRunId}/execution-graph`).catch(() => undefined),
-  ]);
-  return { agents, codeAnalysisTasks, containers, dependencies, executionGraph, findings, pipeline, reports, run, whiteboard };
-}
-
-export function createGitProject(values: { name: string; git_url: string; ref?: string }) {
-  return postJson<ProjectMutationResponse>("/gateway/projects", values);
-}
-
-export function uploadZipProject(formData: FormData) {
-  return readJson<ProjectMutationResponse>("/gateway/projects/upload-zip", { method: "POST", body: formData });
-}
-
-export function createAuditRun(projectId: string, payload: CreateAuditRunPayload) {
-  return postJson<CreateAuditRunResponse>(`/gateway/projects/${projectId}/audit-runs`, payload);
-}
-
-export function runSca(auditRunId: string) {
-  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/sca`, { method: "POST" });
-}
-
-export function runCodeAnalysis(auditRunId: string) {
-  return postJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/code-analysis`, {
-    max_tasks: 8,
-    max_files_per_task: 25,
-    max_parallel_agents: 2,
-    agent_name: "opencode-code-auditor",
+  return Promise.resolve<SandboxCapabilities>({
+    ok: false,
+    sandbox_execution_available: false,
+    reason: "当前 split-service BFF 尚未暴露 sandbox capabilities。",
+    warnings: ["Sandbox actions are unavailable in this split-service skeleton."],
   });
 }
 
+export function listApiKeys() {
+  return Promise.resolve<ApiKeyRecord[]>([]);
+}
+
+export function listPlatformAuditEvents() {
+  return readJson<PlatformAuditEvent[]>("/api/bff/admin/audit-events");
+}
+
+export function listKnowledgeDocuments() {
+  return readJson<KnowledgeDocument[]>("/api/bff/knowledge/documents");
+}
+
+export function getKnowledgeStatus() {
+  return readJson<KnowledgeStatus>("/api/bff/knowledge/status");
+}
+
+export async function getAuditRunBundle(auditRunId: string) {
+  const [run, executionGraph] = await Promise.all([
+    readJson<AuditRun>(`/api/bff/audit-runs/${auditRunId}`),
+    readJson<ExecutionGraph>(`/api/bff/audit-runs/${auditRunId}/graph`).catch(() => undefined),
+  ]);
+  return {
+    agents: [] as AgentRun[],
+    codeAnalysisTasks: [] as CodeAnalysisTask[],
+    containers: [] as ContainerRow[],
+    dependencies: undefined as DependencyInventory | undefined,
+    executionGraph,
+    findings: [] as Finding[],
+    pipeline: { audit_run: run, events: [] } as PipelineStatus,
+    reports: [] as ReportArtifact[],
+    run,
+    whiteboard: undefined as WhiteboardGraph | undefined,
+  };
+}
+
+export function createGitProject(values: { name: string; git_url: string; ref?: string }) {
+  return postJson<Project>("/api/bff/projects", values).then((project) => ({ project }));
+}
+
+export function uploadZipProject(formData: FormData) {
+  const name = String(formData.get("name") || "Uploaded project");
+  return postJson<Project>("/api/bff/projects", { name, metadata: { upload_zip_unavailable: true } }).then((project) => ({ project }));
+}
+
+export function createAuditRun(projectId: string, payload: CreateAuditRunPayload) {
+  const config = { ...payload };
+  return postJson<AuditRun>("/api/bff/audit-runs", {
+    project_id: projectId,
+    enabled_agents: payload.enabled_agents || [],
+    allow_external_network: Boolean(payload.allow_external_network),
+    retain_runtime_on_failure: Boolean(payload.retain_runtime_on_failure),
+    input_payload: payload.input_payload || {},
+    config,
+  }).then((audit_run) => ({ audit_run }));
+}
+
+export function runSca(auditRunId: string) {
+  return unsupported(`SCA (${auditRunId})`);
+}
+
+export function runCodeAnalysis(auditRunId: string) {
+  return unsupported(`Code analysis (${auditRunId})`);
+}
+
 export function runPipeline(auditRunId: string) {
-  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/run-pipeline`, { method: "POST" });
+  return postJson<JsonObject>(`/api/bff/audit-runs/${auditRunId}/start`, { force: false });
 }
 
 export function runJudge(auditRunId: string) {
-  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/judge`, { method: "POST" });
+  return unsupported(`Judgement (${auditRunId})`);
 }
 
 export function runWhiteboardSwarm(auditRunId: string) {
-  return postJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/whiteboard/tasks/run`, {});
+  return unsupported(`Whiteboard swarm (${auditRunId})`);
 }
 
 export function generateReport(auditRunId: string) {
-  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/report`, { method: "POST" });
+  return unsupported(`Report generation (${auditRunId})`);
 }
 
 export function runSandboxPoc(auditRunId: string, body: Record<string, unknown>) {
-  return postJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/sandbox/poc`, body);
+  return unsupported(`Sandbox PoC (${auditRunId})`);
 }
 
 export function startSandboxService(auditRunId: string, body: Record<string, unknown>) {
-  return postJson<SandboxServiceResponse>(`/gateway/audit-runs/${auditRunId}/sandbox/service`, body);
+  return unsupported<SandboxServiceResponse>(`Sandbox service (${auditRunId})`);
 }
 
 export function getFinding(findingId: string) {
-  return readJson<FindingDetail>(`/gateway/findings/${findingId}`);
+  return unsupported<FindingDetail>(`Finding detail (${findingId})`);
 }
 
 export function runFindingPoc(findingId: string, body: Record<string, unknown>) {
-  return postJson<FindingPocResponse>(`/gateway/findings/${findingId}/poc`, body);
+  return unsupported<FindingPocResponse>(`Finding PoC (${findingId})`);
 }
 
 export function getAgentEvents(auditRunId: string, agentRunId: string) {
-  return readJson<AgentRunEvent[]>(`/gateway/audit-runs/${auditRunId}/agent-runs/${agentRunId}/events`);
+  return Promise.resolve<AgentRunEvent[]>([]);
 }
 
-export async function getContainerLogs(auditRunId: string, containerId: string) {
-  const response = await fetch(
-    `/gateway/audit-runs/${auditRunId}/containers/${encodeURIComponent(containerId)}/logs`,
-    withAuth(),
-  );
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(formatHttpError(text, response.statusText));
-  }
-  return text;
+export function getContainerLogs(auditRunId: string, containerId: string) {
+  return unsupported<string>(`Container logs (${auditRunId}/${containerId})`);
 }
 
 export function cleanupAuditRun(auditRunId: string) {
-  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/cleanup`, { method: "POST" });
+  return unsupported(`Runtime cleanup (${auditRunId})`);
 }
 
 export function cancelAuditRun(auditRunId: string) {
-  return readJson<JsonObject>(`/gateway/audit-runs/${auditRunId}/cancel`, { method: "POST" });
+  return postJson<JsonObject>(`/api/bff/audit-runs/${auditRunId}/cancel`, { reason: "cancelled by user" });
 }
 
 export function cleanupExpiredRuntime() {
-  return readJson<JsonObject>("/gateway/runtime/cleanup-expired", { method: "POST" });
+  return unsupported("Expired runtime cleanup");
 }
 
 export function previewLocalStorageCleanup() {
-  return postJson<JsonObject>("/gateway/runtime/storage/cleanup", { dry_run: true });
+  return Promise.resolve<JsonObject>({ ok: true, dry_run: true, unavailable: true });
 }
 
 export function cleanupPlatformAuditEvents() {
-  return readJson<JsonObject>("/gateway/platform/audit-events", { method: "DELETE" });
+  return unsupported("Platform audit event cleanup");
 }
 
 export function createManagedApiKey(body: Record<string, unknown>) {
-  return postJson<ApiKeyRecord>("/gateway/auth/api-keys", body);
+  return unsupported<ApiKeyRecord>("API key creation");
 }
 
 export function deactivateManagedApiKey(keyId: string) {
-  return readJson<ApiKeyRecord>(`/gateway/auth/api-keys/${keyId}/deactivate`, { method: "POST" });
+  return unsupported<ApiKeyRecord>(`API key deactivation (${keyId})`);
 }
 
 export function uploadKnowledgeDocument(formData: FormData) {
-  return readJson<KnowledgeDocumentMutationResponse>("/gateway/knowledge/documents", { method: "POST", body: formData });
+  return unsupported<KnowledgeDocumentMutationResponse>("Knowledge upload");
 }
 
 export function searchKnowledge(body: Record<string, unknown>) {
-  return postJson<KnowledgeSearchResponse>("/gateway/knowledge/search", body);
+  return Promise.resolve<KnowledgeSearchResponse>({ query: String(body.query || ""), matches: [] });
 }
 
 export function reindexKnowledgeDocument(documentId: string) {
-  return readJson<KnowledgeDocumentMutationResponse>(`/gateway/knowledge/documents/${documentId}/reindex`, { method: "POST" });
+  return unsupported<KnowledgeDocumentMutationResponse>(`Knowledge reindex (${documentId})`);
 }
 
 export function deleteKnowledgeDocument(documentId: string) {
-  return readJson<KnowledgeDocumentMutationResponse>(`/gateway/knowledge/documents/${documentId}`, { method: "DELETE" });
+  return unsupported<KnowledgeDocumentMutationResponse>(`Knowledge delete (${documentId})`);
 }
 
 export async function fetchArtifactBlob(url: string) {

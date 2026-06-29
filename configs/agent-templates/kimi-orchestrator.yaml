@@ -10,7 +10,7 @@ model_profile: orchestrator-long-context
 protocol:
   kind: agent-client-protocol
   transport: stdio
-  stdio_command: ["bunx", "@moonshot-ai/kimi-code", "acp"]
+  stdio_command: ["kimi", "acp"]
   runtime: kimi
 workspace_mount:
   target: /workspace
