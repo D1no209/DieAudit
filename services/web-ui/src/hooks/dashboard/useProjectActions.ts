@@ -4,7 +4,7 @@ import { toast } from "../../ui/toast";
 import type { DashboardStateController } from "../useDashboardState";
 
 type DashboardRunner = {
-  refreshProjects: (preferredProjectId?: string) => Promise<void>;
+  refreshProjects: (preferredProjectId?: string) => Promise<string | undefined>;
   refreshAuditRun: (auditRunId: string) => Promise<void>;
   runAction: (action: () => Promise<void>) => Promise<void>;
 };

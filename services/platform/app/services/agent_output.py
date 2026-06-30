@@ -110,6 +110,7 @@ class AgentOutputIngestor:
                     AgentRunEvent(
                         agent_run_id=agent_run_id,
                         event_type="structured_output_parse_warnings",
+                        payload_json={"warnings": warnings},
                         payload={"warnings": warnings},
                     )
                 )
@@ -119,6 +120,14 @@ class AgentOutputIngestor:
                     AgentRunEvent(
                         agent_run_id=agent_run_id,
                         event_type="structured_output_ingested",
+                        payload_json={
+                            "summary": summary,
+                            "structured_parse_status": parse_status,
+                            "structured_parse_warnings": warnings,
+                            "findings_created": len(created_findings),
+                            "findings_skipped": skipped_duplicates,
+                            "evidence_created": len(created_evidence),
+                        },
                         payload={
                             "summary": summary,
                             "structured_parse_status": parse_status,

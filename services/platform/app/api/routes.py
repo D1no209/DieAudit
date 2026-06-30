@@ -630,6 +630,19 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             ).scalars()
             return [_snapshot_to_dict(row) for row in rows]
 
+    @router.get("/projects/{project_id}/audit-runs")
+    async def list_project_audit_runs(request: Request, project_id: str) -> list[dict[str, Any]]:
+        await _require_project_access(getattr(request.state, "auth_principal", None), project_id)
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(AuditRun)
+                    .where(AuditRun.project_id == project_id)
+                    .order_by(AuditRun.created_at.desc())
+                )
+            ).scalars()
+            return [_audit_run_to_dict(row) for row in rows]
+
     @router.post("/projects/{project_id}/audit-runs")
     async def create_audit_run(request: Request, project_id: str, body: CreateAuditRunRequest) -> dict[str, Any]:
         principal = getattr(request.state, "auth_principal", None)
@@ -645,58 +658,64 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             input_payload = dict(body.input_payload or {})
             if body.preflight_prompt:
                 input_payload["preflight_prompt"] = body.preflight_prompt
+            audit_config = {
+                "agent_name": body.agent_name,
+                "enabled_agents": body.enabled_agents,
+                "preflight_prompt": body.preflight_prompt,
+                "input_payload": input_payload,
+                "workspace_host_path": snapshot.workspace_path,
+                "enable_code_batch_analysis": body.enable_code_batch_analysis,
+                "enable_batch_internal_semgrep": body.enable_batch_internal_semgrep,
+                "enable_batch_internal_sca": body.enable_batch_internal_sca,
+                "max_code_audit_tasks": body.max_code_audit_tasks,
+                "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
+                "max_parallel_code_auditors": body.max_parallel_code_auditors,
+                "code_auditor_agent_name": body.code_auditor_agent_name,
+                "enable_source_sink_analysis": body.enable_source_sink_analysis,
+                "source_sink_finder_agent_name": body.source_sink_finder_agent_name,
+                "max_parallel_source_sink_finders": body.max_parallel_source_sink_finders,
+                "max_source_sink_findings": body.max_source_sink_findings,
+                "enable_validators": body.enable_validators,
+                "validator_agent_name": body.validator_agent_name,
+                "enable_validation_judgement": body.enable_validation_judgement,
+                "validation_judgement_agent_name": body.validation_judgement_agent_name,
+                "enable_judgement": body.enable_judgement,
+                "judger_agent_name": body.judger_agent_name,
+                "max_parallel_judgers": body.max_parallel_judgers,
+                "enable_poc_writing": body.enable_poc_writing,
+                "poc_writer_agent_name": body.poc_writer_agent_name,
+                "max_parallel_poc_writers": body.max_parallel_poc_writers,
+                "max_poc_findings": body.max_poc_findings,
+                "enable_poc_verification": body.enable_poc_verification,
+                "poc_verifier_agent_name": body.poc_verifier_agent_name,
+                "max_parallel_poc_verifiers": body.max_parallel_poc_verifiers,
+                "enable_decompilation": body.enable_decompilation,
+                "decompiled_source_dir": body.decompiled_source_dir,
+                "decompile_max_artifact_size_mb": body.decompile_max_artifact_size_mb,
+                "decompile_timeout_seconds": body.decompile_timeout_seconds,
+                "decompile_max_artifacts": body.decompile_max_artifacts,
+                "enable_feedback_loop": body.enable_feedback_loop,
+                "max_feedback_rounds": body.max_feedback_rounds,
+                "enable_whiteboard": True,
+                "enable_whiteboard_swarm": True,
+                "max_whiteboard_rounds": 3,
+                "max_whiteboard_tasks_per_round": 8,
+            }
             audit_run = AuditRun(
                 audit_run_id=audit_run_id,
                 project_id=project_id,
                 snapshot_id=snapshot.snapshot_id,
                 status="starting" if body.start_agent else "created",
+                pipeline_status="pending",
+                workspace_path=snapshot.workspace_path,
                 validator_rounds=body.validator_rounds,
                 max_parallel_validators=body.max_parallel_validators,
                 allow_external_network=body.allow_external_network,
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
-                config={
-                    "agent_name": body.agent_name,
-                    "enabled_agents": body.enabled_agents,
-                    "preflight_prompt": body.preflight_prompt,
-                    "input_payload": input_payload,
-                    "workspace_host_path": snapshot.workspace_path,
-                    "enable_code_batch_analysis": body.enable_code_batch_analysis,
-                    "enable_batch_internal_semgrep": body.enable_batch_internal_semgrep,
-                    "enable_batch_internal_sca": body.enable_batch_internal_sca,
-                    "max_code_audit_tasks": body.max_code_audit_tasks,
-                    "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
-                    "max_parallel_code_auditors": body.max_parallel_code_auditors,
-                    "code_auditor_agent_name": body.code_auditor_agent_name,
-                    "enable_source_sink_analysis": body.enable_source_sink_analysis,
-                    "source_sink_finder_agent_name": body.source_sink_finder_agent_name,
-                    "max_parallel_source_sink_finders": body.max_parallel_source_sink_finders,
-                    "max_source_sink_findings": body.max_source_sink_findings,
-                    "enable_validators": body.enable_validators,
-                    "validator_agent_name": body.validator_agent_name,
-                    "enable_validation_judgement": body.enable_validation_judgement,
-                    "validation_judgement_agent_name": body.validation_judgement_agent_name,
-                    "enable_judgement": body.enable_judgement,
-                    "judger_agent_name": body.judger_agent_name,
-                    "max_parallel_judgers": body.max_parallel_judgers,
-                    "enable_poc_writing": body.enable_poc_writing,
-                    "poc_writer_agent_name": body.poc_writer_agent_name,
-                    "max_parallel_poc_writers": body.max_parallel_poc_writers,
-                    "max_poc_findings": body.max_poc_findings,
-                    "enable_poc_verification": body.enable_poc_verification,
-                    "poc_verifier_agent_name": body.poc_verifier_agent_name,
-                    "max_parallel_poc_verifiers": body.max_parallel_poc_verifiers,
-                    "enable_decompilation": body.enable_decompilation,
-                    "decompiled_source_dir": body.decompiled_source_dir,
-                    "decompile_max_artifact_size_mb": body.decompile_max_artifact_size_mb,
-                    "decompile_timeout_seconds": body.decompile_timeout_seconds,
-                    "decompile_max_artifacts": body.decompile_max_artifacts,
-                    "enable_feedback_loop": body.enable_feedback_loop,
-                    "max_feedback_rounds": body.max_feedback_rounds,
-                    "enable_whiteboard": True,
-                    "enable_whiteboard_swarm": True,
-                    "max_whiteboard_rounds": 3,
-                    "max_whiteboard_tasks_per_round": 8,
-                },
+                config_json=audit_config,
+                input_payload=input_payload,
+                metadata_json={},
+                config=audit_config,
             )
             session.add(audit_run)
             await session.commit()
@@ -2924,8 +2943,19 @@ def _metadata_id_set(value: Any) -> set[str]:
 
 async def _record_snapshot(snapshot: dict[str, Any]) -> None:
     async with SessionLocal() as session:
-        session.add(
-            ProjectSnapshot(
+        existing = await session.scalar(select(ProjectSnapshot).where(ProjectSnapshot.snapshot_id == snapshot["snapshot_id"]))
+        if existing:
+            existing.project_id = snapshot["project_id"]
+            existing.source_type = snapshot["source_type"]
+            existing.source_ref = snapshot.get("source_ref")
+            existing.workspace_path = snapshot["workspace_path"]
+            existing.artifact_path = snapshot.get("artifact_path")
+            existing.content_hash = snapshot.get("content_hash")
+            existing.status = "ready"
+            existing.metadata_json = existing.metadata_json or {}
+        else:
+            session.add(
+                ProjectSnapshot(
                 snapshot_id=snapshot["snapshot_id"],
                 project_id=snapshot["project_id"],
                 source_type=snapshot["source_type"],
@@ -2936,7 +2966,7 @@ async def _record_snapshot(snapshot: dict[str, Any]) -> None:
                 status="ready",
                 metadata_json={},
             )
-        )
+            )
         await session.commit()
 
 
@@ -3292,7 +3322,7 @@ async def _record_pipeline_event(audit_run_id: str, event_type: str, payload: di
             select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
         )
         if agent_run:
-            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload=payload))
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload_json=payload, payload=payload))
             await session.commit()
 
 
@@ -3328,6 +3358,9 @@ async def _set_pipeline_state(
             state["error"] = error
         config["pipeline_state"] = state
         audit_run.config = config
+        audit_run.config_json = config
+        audit_run.pipeline_status = status
+        audit_run.current_stage = stage
         await session.commit()
 
 
@@ -3343,7 +3376,7 @@ async def _record_pipeline_summary(audit_run_id: str, summary: dict[str, Any]) -
             select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
         )
         if agent_run:
-            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type="pipeline_summary", payload=summary))
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type="pipeline_summary", payload_json=summary, payload=summary))
         await session.commit()
 
 

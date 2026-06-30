@@ -1,4 +1,4 @@
-import { API_KEY_HEADER_STORAGE_KEY, API_KEY_STORAGE_KEY, API_KEY_HEADER, formatHttpError } from "../api";
+import { API_KEY_HEADER_STORAGE_KEY, API_KEY_HEADER, formatHttpError, getStoredApiKey } from "../api";
 
 export type BffError = {
   error: {
@@ -32,7 +32,7 @@ export async function bffRequest<T>(path: string, options?: RequestInit): Promis
 
 export function withBffAuth(options?: RequestInit): RequestInit {
   const headers = new Headers(options?.headers);
-  const apiKey = window.localStorage.getItem(API_KEY_STORAGE_KEY);
+  const apiKey = getStoredApiKey();
   if (apiKey) {
     headers.set(apiKeyHeaderName(), apiKey);
   }

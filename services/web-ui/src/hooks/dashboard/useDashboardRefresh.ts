@@ -1,4 +1,4 @@
-import { API_KEY_STORAGE_KEY, rememberApiKeyHeaderName } from "../../api";
+import { clearStoredApiKey, getStoredApiKey, rememberApiKeyHeaderName } from "../../api";
 import * as dashboardApi from "../../client/dashboardApi";
 import type { AppView } from "../../navigation";
 import type { DashboardStateController } from "../useDashboardState";
@@ -12,6 +12,8 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setApiHealth,
     setApiKeys,
     setAuditRun,
+    setApiKey,
+    setAuthPrincipal,
     setAuthStatus,
     setCodeAnalysisTasks,
     setContainers,
@@ -56,9 +58,26 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setApiHealth(api);
     setAuthStatus(auth);
     rememberApiKeyHeaderName(auth?.api_key_header);
-    const hasLocalApiKey = Boolean((window.localStorage.getItem(API_KEY_STORAGE_KEY) || "").trim());
-    if (auth?.enabled && !hasLocalApiKey) {
+    const hasLocalApiKey = Boolean(getStoredApiKey().trim());
+    if (!auth?.enabled) {
+      setAuthPrincipal(undefined);
+      return true;
+    }
+    if (!hasLocalApiKey) {
       clearProtectedState();
+      return false;
+    }
+    try {
+      const authMe = await dashboardApi.getCurrentAuthPrincipal();
+      if (!authMe.authenticated) {
+        throw new Error("登录已失效，请重新登录");
+      }
+      setAuthPrincipal(authMe.principal || undefined);
+    } catch (err) {
+      clearStoredApiKey();
+      setApiKey("");
+      clearProtectedState();
+      setError(err instanceof Error ? err.message : String(err));
       return false;
     }
     return true;
@@ -69,12 +88,50 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setProjects(projectRows);
     const nextProjectId = preferredProjectId && projectRows.some((project) => project.project_id === preferredProjectId)
       ? preferredProjectId
-      : undefined;
+      : selectedProjectId && projectRows.some((project) => project.project_id === selectedProjectId)
+        ? selectedProjectId
+        : projectRows[0]?.project_id;
     if (nextProjectId) {
       setSelectedProjectId(nextProjectId);
-    } else if (!selectedProjectId && projectRows.length > 0) {
-      setSelectedProjectId((currentProjectId) => currentProjectId || projectRows[0].project_id);
     }
+    return nextProjectId;
+  }
+
+  async function refreshLatestAuditRun(projectId?: string) {
+    const nextProjectId = projectId || selectedProjectId;
+    if (!nextProjectId) {
+      setAuditRun(undefined);
+      setAgentRuns([]);
+      setCodeAnalysisTasks([]);
+      setFindings([]);
+      setDependencies(undefined);
+      setExecutionGraph(undefined);
+      setContainers([]);
+      setReports([]);
+      setPipelineStatus(undefined);
+      setWhiteboard(undefined);
+      return;
+    }
+    if (auditRun?.audit_run_id && auditRun.project_id === nextProjectId) {
+      await refreshAuditRun(auditRun.audit_run_id);
+      return;
+    }
+    const runs = await dashboardApi.listProjectAuditRuns(nextProjectId).catch(() => []);
+    const latestRun = runs[0];
+    if (latestRun?.audit_run_id) {
+      await refreshAuditRun(latestRun.audit_run_id);
+      return;
+    }
+    setAuditRun(undefined);
+    setAgentRuns([]);
+    setCodeAnalysisTasks([]);
+    setFindings([]);
+    setDependencies(undefined);
+    setExecutionGraph(undefined);
+    setContainers([]);
+    setReports([]);
+    setPipelineStatus(undefined);
+    setWhiteboard(undefined);
   }
 
   async function refreshOverview() {
@@ -88,10 +145,8 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setManagedRuntime(managed);
     setRuntimeReadiness(readiness);
     setSandboxCapabilities(sandbox);
-    await refreshProjects();
-    if (auditRun) {
-      await refreshAuditRun(auditRun.audit_run_id);
-    }
+    const projectId = await refreshProjects();
+    await refreshLatestAuditRun(projectId);
   }
 
   async function refreshRuntime() {
@@ -105,9 +160,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     setWorkerHeartbeats(workers.workers || []);
     setSandboxCapabilities(sandbox);
     setManagedRuntime(managed);
-    if (auditRun) {
-      await refreshAuditRun(auditRun.audit_run_id);
-    }
+    await refreshLatestAuditRun();
   }
 
   async function refreshKnowledge() {
@@ -134,10 +187,8 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
   }
 
   async function refreshAuditWorkspace() {
-    await refreshProjects();
-    if (auditRun) {
-      await refreshAuditRun(auditRun.audit_run_id);
-    }
+    const projectId = await refreshProjects();
+    await refreshLatestAuditRun(projectId);
   }
 
   async function refreshCurrentView(view: AppView) {

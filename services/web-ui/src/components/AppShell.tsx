@@ -1,45 +1,43 @@
 import type { ReactNode } from "react";
 import type { AppView, NavigationGroup, NavigationItem } from "../navigation";
+import type { AuthPrincipal } from "../types";
 import { AppHeader } from "./AppHeader";
 import { AppNavigation } from "./AppNavigation";
 
 type Props = {
   activeView: AppView;
   alerts?: ReactNode;
-  apiKey: string;
-  authHeaderName?: string;
+  authEnabled?: boolean;
+  authPrincipal?: AuthPrincipal;
   children: ReactNode;
   navigationGroups: NavigationGroup[];
   navigationItems: NavigationItem[];
-  onApiKeyChange: (value: string) => void;
+  onLogout: () => void;
   onRefresh: () => void;
-  onSaveApiKey: () => void;
   onViewChange: (view: AppView) => void;
 };
 
 export function AppShell({
   activeView,
   alerts,
-  apiKey,
-  authHeaderName,
+  authEnabled,
+  authPrincipal,
   children,
   navigationGroups,
   navigationItems,
-  onApiKeyChange,
+  onLogout,
   onRefresh,
-  onSaveApiKey,
   onViewChange,
 }: Props) {
   return (
     <div className="min-h-dvh bg-slate-100">
       <AppHeader
         activeView={activeView}
-        apiKey={apiKey}
-        authHeaderName={authHeaderName}
+        authEnabled={authEnabled}
+        authPrincipal={authPrincipal}
         navigationItems={navigationItems}
-        onApiKeyChange={onApiKeyChange}
+        onLogout={onLogout}
         onRefresh={onRefresh}
-        onSaveApiKey={onSaveApiKey}
         onViewChange={onViewChange}
       />
       <div className="flex min-h-[calc(100dvh-76px)]">

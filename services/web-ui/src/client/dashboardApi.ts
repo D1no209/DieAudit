@@ -3,6 +3,7 @@ import type {
   AgentRun,
   AgentRunEvent,
   ApiHealth,
+  AuthMe,
   ApiKeyRecord,
   AuditRun,
   AuthStatus,
@@ -49,12 +50,33 @@ export function getPlatformBootstrap() {
   return Promise.all([readJson<ApiHealth>("/api/health"), readJson<AuthStatus>("/api/auth/status")]);
 }
 
+export async function loginWithPassword(username: string, password: string) {
+  const response = await fetch("/api/bff/session/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(formatHttpError(text, response.statusText));
+  }
+  return (text ? JSON.parse(text) : {}) as AuthMe;
+}
+
+export function getCurrentAuthPrincipal() {
+  return readJson<AuthMe>("/api/bff/session");
+}
+
 export function getDockerHealth() {
   return readJson<DockerHealth>("/gateway/runtime/docker/health");
 }
 
 export function listProjects() {
   return readJson<Project[]>("/gateway/projects");
+}
+
+export function listProjectAuditRuns(projectId: string) {
+  return readJson<AuditRun[]>(`/gateway/projects/${projectId}/audit-runs`);
 }
 
 export function getManagedRuntime() {
@@ -134,7 +156,7 @@ export function runCodeAnalysis(auditRunId: string) {
     max_tasks: 8,
     max_files_per_task: 25,
     max_parallel_agents: 2,
-    agent_name: "opencode-code-auditor",
+    agent_name: "kimi-code-auditor",
   });
 }
 

@@ -18,8 +18,11 @@ x-platform-env: &platform-env
   DOCKER_HOST: ${DOCKER_HOST:-tcp://docker-socket-proxy:2375}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
   DIEAUDIT_API_KEY: ${DIEAUDIT_API_KEY:-}
+  DIEAUDIT_ADMIN_USERNAME: ${DIEAUDIT_ADMIN_USERNAME:-admin}
+  DIEAUDIT_ADMIN_PASSWORD: ${DIEAUDIT_ADMIN_PASSWORD:-}
   API_KEY_HEADER: ${API_KEY_HEADER:-X-DieAudit-Api-Key}
   PUBLIC_METRICS: ${PUBLIC_METRICS:-false}
   MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-104857600}
@@ -50,8 +53,8 @@ x-platform-env: &platform-env
   PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS:-30}
   PIPELINE_WORKER_HEARTBEAT_RETENTION_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_RETENTION_SECONDS:-3600}
   ENABLE_DEMO_TEMPLATES: ${ENABLE_DEMO_TEMPLATES:-false}
-  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
-  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,web-api,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,web-api,platform-api,platform-worker,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
+  no_proxy: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,redis,nats,qdrant,web-api,platform-api,platform-worker,agent-gateway,workspace-engine,sandbox-runner,kb-indexer,docker-socket-proxy
   CONFIG_ROOT: /app/configs
   WORKSPACE_ROOT: /dieaudit/workspaces
   ARTIFACT_ROOT: /dieaudit/artifacts
@@ -88,6 +91,8 @@ services:
       web-ui:
         condition: service_started
       web-api:
+        condition: service_healthy
+      platform-api:
         condition: service_healthy
       agent-gateway:
         condition: service_healthy
@@ -141,6 +146,77 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
+
+  platform-api:
+    <<: *platform-service
+    image: dieaudit/platform:local
+    build:
+      context: .
+      dockerfile: services/platform/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    profiles: ["core", "demo"]
+    container_name: dieaudit-platform-api
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: agent-gateway
+      RUNTIME_CONTROLLER_CONTAINER_NAME: dieaudit-platform-api
+      AGENT_GATEWAY_URL: http://agent-gateway:8000
+    depends_on:
+      database-migrate:
+        condition: service_completed_successfully
+      docker-socket-proxy:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    ports:
+      - "${PLATFORM_API_PORT:-18002}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  platform-worker:
+    <<: *platform-service
+    image: dieaudit/platform:local
+    build:
+      context: .
+      dockerfile: services/platform/Dockerfile
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+    profiles: ["core", "demo"]
+    container_name: dieaudit-platform-worker
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *platform-env
+      SERVICE_NAME: workflow-worker
+      RUNTIME_CONTROLLER_CONTAINER_NAME: dieaudit-platform-worker
+      AGENT_GATEWAY_URL: http://agent-gateway:8000
+    depends_on:
+      platform-api:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
 
   workflow-worker:
     <<: *platform-service

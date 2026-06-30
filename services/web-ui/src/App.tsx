@@ -6,6 +6,7 @@ import { AppStatusAlerts } from "./components/AppStatusAlerts";
 import { useAppRoute } from "./hooks/useAppRoute";
 import { useDashboardController } from "./hooks/useDashboardController";
 import { navigationGroups, navigationItems } from "./navigation";
+import { LoginPage } from "./pages/LoginPage";
 import { AppRoutes } from "./routes/AppRoutes";
 import { ToastHost } from "./ui/ToastHost";
 
@@ -13,19 +14,32 @@ export function App() {
   const [activeView, setActiveView] = useAppRoute();
   const dashboard = useDashboardController(activeView);
   const { actions, state } = dashboard;
+  const loginRequired = Boolean(state.authStatus?.enabled && !state.apiKey.trim());
+
+  if (loginRequired) {
+    return (
+      <MotionConfig reducedMotion="user">
+        <LoginPage
+          error={state.error}
+          loading={state.loading}
+          onLogin={actions.login}
+        />
+        <ToastHost />
+      </MotionConfig>
+    );
+  }
 
   return (
     <MotionConfig reducedMotion="user">
       <AppShell
         activeView={activeView}
-        alerts={<AppStatusAlerts apiKey={state.apiKey} authStatus={state.authStatus} error={state.error} />}
-        apiKey={state.apiKey}
-        authHeaderName={state.authStatus?.api_key_header}
+        alerts={<AppStatusAlerts error={state.error} />}
+        authEnabled={state.authStatus?.enabled}
+        authPrincipal={state.authPrincipal}
         navigationGroups={navigationGroups}
         navigationItems={navigationItems}
-        onApiKeyChange={actions.setApiKey}
+        onLogout={actions.logout}
         onRefresh={actions.refresh}
-        onSaveApiKey={actions.saveApiKey}
         onViewChange={setActiveView}
       >
         <AuditContextBar

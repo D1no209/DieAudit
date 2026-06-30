@@ -13,11 +13,23 @@ export async function readJson<T = unknown>(path: string, options?: RequestInit)
 
 export function withAuth(options?: RequestInit): RequestInit {
   const headers = new Headers(options?.headers);
-  const apiKey = window.localStorage.getItem(API_KEY_STORAGE_KEY);
+  const apiKey = getStoredApiKey();
   if (apiKey) {
     headers.set(apiKeyHeaderName(), apiKey);
   }
   return { ...options, headers };
+}
+
+export function getStoredApiKey() {
+  return window.localStorage.getItem(API_KEY_STORAGE_KEY) || "";
+}
+
+export function storeApiKey(apiKey: string) {
+  window.localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
+}
+
+export function clearStoredApiKey() {
+  window.localStorage.removeItem(API_KEY_STORAGE_KEY);
 }
 
 export function apiKeyHeaderName() {

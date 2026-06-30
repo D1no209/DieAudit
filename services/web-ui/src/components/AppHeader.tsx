@@ -1,31 +1,31 @@
-import { Bug, RefreshCw } from "lucide-react";
+import { Bug, LogOut, RefreshCw, ShieldCheck } from "lucide-react";
 import type { AppView } from "../navigation";
-import { API_KEY_HEADER } from "../api";
 import type { NavigationItem } from "../navigation";
-import { Button, PasswordInput } from "../ui";
+import type { AuthPrincipal } from "../types";
+import { Button } from "../ui";
 import { cn } from "../ui/utils";
 
 type Props = {
   activeView: AppView;
-  apiKey: string;
-  authHeaderName?: string;
+  authPrincipal?: AuthPrincipal;
+  authEnabled?: boolean;
   navigationItems: NavigationItem[];
-  onApiKeyChange: (value: string) => void;
+  onLogout: () => void;
   onRefresh: () => void;
-  onSaveApiKey: () => void;
   onViewChange: (view: AppView) => void;
 };
 
 export function AppHeader({
   activeView,
-  apiKey,
-  authHeaderName,
+  authEnabled,
+  authPrincipal,
   navigationItems,
-  onApiKeyChange,
+  onLogout,
   onRefresh,
-  onSaveApiKey,
   onViewChange,
 }: Props) {
+  const principalLabel = authPrincipal?.name || authPrincipal?.key_id || authPrincipal?.source || "已登录";
+
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
       <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3">
@@ -39,17 +39,16 @@ export function AppHeader({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <PasswordInput
-            className="h-9 w-48"
-            placeholder={authHeaderName || API_KEY_HEADER}
-            value={apiKey}
-            onChange={(event) => onApiKeyChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") onSaveApiKey();
-            }}
-          />
-          <Button onClick={onSaveApiKey}>保存 Key</Button>
+          {authEnabled ? (
+            <div className="flex h-9 max-w-64 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm text-emerald-800">
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              <span className="truncate">{principalLabel}</span>
+            </div>
+          ) : null}
           <Button icon={<RefreshCw className="h-4 w-4" />} onClick={onRefresh}>刷新</Button>
+          {authEnabled ? (
+            <Button icon={<LogOut className="h-4 w-4" />} onClick={onLogout}>退出</Button>
+          ) : null}
         </div>
       </div>
       <nav className="mx-auto mt-3 flex max-w-[1440px] gap-1 overflow-x-auto lg:hidden" aria-label="Mobile navigation">

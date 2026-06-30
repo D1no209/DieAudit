@@ -22,10 +22,10 @@ providers:
     name: DeepSeek
     base_url: https://api.deepseek.com/v1
     api_key_env: DEEPSEEK_API_KEY
-    default_model: deepseek-v4-pro
+    default_model: deepseek-v4-flash
     models:
-      deepseek-v4-pro:
-        name: deepseek-v4-pro
+      deepseek-v4-flash:
+        name: deepseek-v4-flash
         limit:
           context: 1000000
           output: 8192
@@ -36,9 +36,9 @@ providers:
 profiles:
   orchestrator-long-context:
     provider: deepseek
-    model: deepseek-v4-pro
+    model: deepseek-v4-flash
     temperature: 0.1
   auditor-strong:
     provider: deepseek
-    model: deepseek-v4-pro
+    model: deepseek-v4-flash
     temperature: 0.1

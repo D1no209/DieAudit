@@ -513,6 +513,21 @@ export type AuthStatus = {
   service?: string;
 };
 
+export type AuthPrincipal = {
+  key_id?: string;
+  name?: string;
+  source?: string;
+  scopes?: string[];
+  [key: string]: unknown;
+};
+
+export type AuthMe = {
+  access_token?: string;
+  api_key_header?: string;
+  authenticated: boolean;
+  principal?: AuthPrincipal | null;
+};
+
 export type ApiHealth = {
   ok?: boolean;
   service?: string;

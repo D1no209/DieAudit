@@ -1740,6 +1740,7 @@ class RuntimeOrchestrator:
             "AGENT_GATEWAY_URL": "http://agent-gateway:8000",
             "PORT": "8080",
         }
+        env.update(self.opencode_packages.runtime_env(template))
         self._inject_proxy_env(env)
         mounts = await self._mounts(workspace_host_path, template)
         artifact_host_path = self.settings.artifact_root / "agent-runtimes" / audit_run_id / runtime_id
@@ -2198,7 +2199,7 @@ class RuntimeOrchestrator:
 
     async def _record_agent_event(self, agent_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
         async with SessionLocal() as session:
-            session.add(AgentRunEvent(agent_run_id=agent_run_id, event_type=event_type, payload=payload))
+            session.add(AgentRunEvent(agent_run_id=agent_run_id, event_type=event_type, payload_json=payload, payload=payload))
             await session.commit()
 
     async def record_agent_transcript_events(
@@ -2360,16 +2361,22 @@ class RuntimeOrchestrator:
                 existing.allow_external_network = allow_external_network
                 existing.retain_runtime_on_failure = retain_runtime_on_failure
                 existing.config = {**(existing.config or {}), **config}
+                existing.config_json = {**(existing.config_json or {}), **config}
+                existing.input_payload = dict(existing.config.get("input_payload") or {})
             else:
                 session.add(
                     AuditRun(
                         audit_run_id=audit_run_id,
                         project_id=project_id,
                         status="running",
+                        pipeline_status="pending",
                         validator_rounds=validator_rounds,
                         max_parallel_validators=max_parallel_validators,
                         allow_external_network=allow_external_network,
                         retain_runtime_on_failure=retain_runtime_on_failure,
+                        config_json=config,
+                        input_payload=dict(config.get("input_payload") or {}),
+                        metadata_json={},
                         config=config,
                     )
                 )
@@ -2394,6 +2401,8 @@ class RuntimeOrchestrator:
             existing = await session.scalar(select(AgentRun).where(AgentRun.agent_run_id == agent_run_id))
             if existing:
                 existing.status = status
+                existing.input_payload = input_summary or existing.input_payload or {}
+                existing.output_payload = output_summary or existing.output_payload or {}
                 existing.output_summary = output_summary or existing.output_summary
                 existing.error = error
                 if artifact_path:
@@ -2408,6 +2417,8 @@ class RuntimeOrchestrator:
                         template_name=template_name,
                         protocol_kind=protocol_kind,
                         status=status,
+                        input_payload=input_summary or {},
+                        output_payload=output_summary or {},
                         input_summary=input_summary or {},
                         output_summary=output_summary or {},
                         artifact_path=artifact_path,

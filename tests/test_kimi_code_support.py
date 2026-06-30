@@ -54,6 +54,16 @@ def test_kimi_code_agent_is_dockerized() -> None:
     assert "dieaudit/kimi-code-agent:local" in compose
 
 
+def test_kimi_runtime_server_injects_model_environment() -> None:
+    orchestrator = read_source("services/platform/app/runtime/orchestrator.py")
+
+    runner_start = orchestrator.index("async def _start_agent_runtime_runner")
+    agent_start = orchestrator.index("async def _start_agent", runner_start)
+    runner_source = orchestrator[runner_start:agent_start]
+
+    assert "env.update(self.opencode_packages.runtime_env(template))" in runner_source
+
+
 def test_acp_command_env_uses_template_stdio_command() -> None:
     template = {
         "protocol": {

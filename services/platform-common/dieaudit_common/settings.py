@@ -14,6 +14,8 @@ class CommonSettings(BaseSettings):
     docker_host: str = "http://docker-socket-proxy:2375"
     api_key_header: str = "X-DieAudit-Api-Key"
     dieaudit_api_key: str = ""
+    dieaudit_admin_username: str = "admin"
+    dieaudit_admin_password: str = ""
     config_root: Path = Path("/app/configs")
     workspace_root: Path = Path("/dieaudit/workspaces")
     artifact_root: Path = Path("/dieaudit/artifacts")

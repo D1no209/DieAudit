@@ -1,4 +1,4 @@
-import { API_KEY_STORAGE_KEY } from "../../api";
+import { clearStoredApiKey, storeApiKey } from "../../api";
 import * as dashboardApi from "../../client/dashboardApi";
 import type { AppView } from "../../navigation";
 import { toast } from "../../ui/toast";
@@ -12,8 +12,11 @@ type DashboardRunner = {
 
 export function useAdminActions(dashboardState: DashboardStateController, runner: DashboardRunner, activeView: AppView) {
   const {
-    apiKey,
+    clearProtectedState,
     setApiKeys,
+    setApiKey,
+    setAuthPrincipal,
+    setError,
     setLastResponse,
     setPlatformAuditEvents,
   } = dashboardState;
@@ -54,17 +57,37 @@ export function useAdminActions(dashboardState: DashboardStateController, runner
     });
   }
 
-  function saveApiKey() {
-    const normalized = apiKey.trim();
-    if (normalized) {
-      window.localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
-      toast.success("API Key saved locally");
-    } else {
-      window.localStorage.removeItem(API_KEY_STORAGE_KEY);
-      toast.warning("API Key removed");
+  async function login(credentials: { username: string; password: string }) {
+    const username = credentials.username.trim();
+    if (!username || !credentials.password) {
+      setError("请输入账号和密码");
+      return;
     }
+    await runner.runAction(async () => {
+      const authMe = await dashboardApi.loginWithPassword(username, credentials.password);
+      if (!authMe.authenticated) {
+        throw new Error("登录凭证未通过验证");
+      }
+      if (!authMe.access_token) {
+        throw new Error("登录成功但服务端未返回内部访问令牌");
+      }
+      storeApiKey(authMe.access_token);
+      setApiKey(authMe.access_token);
+      setAuthPrincipal(authMe.principal || undefined);
+      toast.success("登录成功");
+      await runner.refreshCurrentView(activeView);
+    });
+  }
+
+  function logout() {
+    clearStoredApiKey();
+    setApiKey("");
+    setAuthPrincipal(undefined);
+    clearProtectedState();
+    setError(undefined);
+    toast.success("已退出登录");
     runner.refreshCurrentView(activeView);
   }
 
-  return { cleanupPlatformAuditEvents, createManagedApiKey, deactivateManagedApiKey, saveApiKey };
+  return { cleanupPlatformAuditEvents, createManagedApiKey, deactivateManagedApiKey, login, logout };
 }

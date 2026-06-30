@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { API_KEY_STORAGE_KEY } from "../api";
+import { getStoredApiKey } from "../api";
 import type {
   AgentRun,
   AgentRunEvent,
   ApiHealth,
   ApiKeyRecord,
+  AuthPrincipal,
   AuditRun,
   AuthStatus,
   CodeAnalysisTask,
@@ -45,7 +46,8 @@ export function useDashboardState() {
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
   const [knowledgeMatches, setKnowledgeMatches] = useState<KnowledgeMatch[]>([]);
   const [knowledgeStatus, setKnowledgeStatus] = useState<KnowledgeStatus>();
-  const [apiKey, setApiKey] = useState(() => window.localStorage.getItem(API_KEY_STORAGE_KEY) || "");
+  const [apiKey, setApiKey] = useState(() => getStoredApiKey());
+  const [authPrincipal, setAuthPrincipal] = useState<AuthPrincipal>();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [auditRun, setAuditRun] = useState<AuditRun>();
@@ -75,6 +77,7 @@ export function useDashboardState() {
   );
 
   function clearProtectedState() {
+    setAuthPrincipal(undefined);
     setDockerHealth(undefined);
     setManagedRuntime(undefined);
     setStorageSummary(undefined);
@@ -114,6 +117,7 @@ export function useDashboardState() {
     apiKey,
     apiKeys,
     auditRun,
+    authPrincipal,
     authStatus,
     clearProtectedState,
     codeAnalysisTasks,
@@ -149,6 +153,7 @@ export function useDashboardState() {
     setApiKey,
     setApiKeys,
     setAuditRun,
+    setAuthPrincipal,
     setAuthStatus,
     setCodeAnalysisTasks,
     setContainerLogs,
