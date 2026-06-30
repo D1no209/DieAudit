@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { AgentRuntimeAdapter, AuditRun, CodeAnalysisTask, CreateAuditRunPayload, PipelineStatus, Project } from "../types";
 import { PageHeader } from "../components/PageHeader";
-import { Alert } from "../ui";
+import { Alert, Badge, Panel } from "../ui";
 import { AuditRunActionBar } from "./audit-runs/AuditRunActionBar";
 import { AuditRunConfigModal } from "./audit-runs/AuditRunConfigModal";
 import { AuditRunSummary } from "./audit-runs/AuditRunSummary";
@@ -99,9 +99,24 @@ export function AuditRunsPage({
         />
       )}
 
-      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(360px,0.9fr)_minmax(480px,1.1fr)]">
+      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(300px,0.72fr)_minmax(520px,1.35fr)_minmax(280px,0.58fr)]">
         <RunContextPanel auditRun={auditRun} lastResponse={lastResponse} selectedProject={selectedProject} />
         <PipelineStatePanel pipelineStatus={pipelineStatus} />
+        <Panel title="Next Actions">
+          <div className="grid gap-3 text-sm">
+            <div className="flex flex-wrap gap-2">
+              <Badge>{auditRun?.status || "no-run"}</Badge>
+              <Badge>{pipelineStatus?.current?.status || "idle"}</Badge>
+            </div>
+            {nextActionText({ auditRun, pipelineStatus, selectedProject })}
+            {warningEvents(pipelineStatus).slice(0, 3).map((item) => (
+              <div key={item.id} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
+                <div className="font-medium">{item.event_type}</div>
+                <div className="mt-1 text-xs">{eventProblemText(item.payload)}</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
       </div>
       <CodeAnalysisTasksPanel tasks={codeAnalysisTasks} />
       <AuditRunConfigModal
@@ -113,4 +128,46 @@ export function AuditRunsPage({
       />
     </>
   );
+}
+
+function warningEvents(pipelineStatus?: PipelineStatus) {
+  return (pipelineStatus?.events || []).filter((item) => /warning|failed|unavailable|skipped|completed_with_warnings/i.test(item.event_type));
+}
+
+function nextActionText({
+  auditRun,
+  pipelineStatus,
+  selectedProject,
+}: {
+  auditRun?: AuditRun;
+  pipelineStatus?: PipelineStatus;
+  selectedProject?: Project;
+}) {
+  if (!selectedProject) {
+    return <p className="leading-6 text-slate-600">先在 Projects 选择或导入项目，然后创建 AuditRun。</p>;
+  }
+  if (!auditRun) {
+    return <p className="leading-6 text-slate-600">点击启动审计，选择预设后创建第一条 AuditRun。</p>;
+  }
+  if (pipelineStatus?.runtime_control?.cancel_requested) {
+    return <p className="leading-6 text-amber-800">取消请求已提交，等待当前运行阶段结束并清理 runtime。</p>;
+  }
+  if (pipelineStatus?.current?.status === "failed" || auditRun.status === "failed") {
+    return <p className="leading-6 text-red-700">查看失败事件和容器日志；需要保留现场时重新创建任务并启用失败保留。</p>;
+  }
+  if (auditRun.status === "created" || auditRun.status === "pending") {
+    return <p className="leading-6 text-slate-600">点击一键闭环，按标准 pipeline 执行审计。</p>;
+  }
+  if (auditRun.status === "completed" || auditRun.status === "completed_with_warnings") {
+    return <p className="leading-6 text-slate-600">审计已结束，继续查看 Findings、Agent Runs、Whiteboard 和 Reports。</p>;
+  }
+  return <p className="leading-6 text-slate-600">当前阶段正在运行，优先观察 Pipeline State 和 Agent Runs 图谱。</p>;
+}
+
+function eventProblemText(payload: Record<string, unknown>) {
+  for (const key of ["error", "reason", "step", "stage", "status"]) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "See raw pipeline event for details.";
 }

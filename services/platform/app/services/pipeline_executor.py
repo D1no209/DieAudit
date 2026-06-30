@@ -295,7 +295,7 @@ class PipelineExecutor:
             if self._legacy_judgement_enabled(audit_run):
                 await self.record_pipeline_event(audit_run_id, "legacy_judgement_skipped", {"reason": "validation-judgement replaces judgement"})
             if self._legacy_source_sink_analysis_enabled(audit_run):
-                await self.record_pipeline_event(audit_run_id, "legacy_source_sink_skipped", {"reason": "whiteboard-swarm replaces source-sink-analysis"})
+                await self.record_pipeline_event(audit_run_id, "legacy_trace_worker_skipped", {"reason": "whiteboard-swarm schedules Trace Worker work internally"})
 
             if self._poc_writing_enabled(audit_run):
                 await self.set_pipeline_state(audit_run_id, stage="poc-writing", status="running")
@@ -552,9 +552,9 @@ class PipelineExecutor:
                     warnings.append({"kind": "code_batch_analysis_incomplete", "skipped": skipped, "failed": failed})
             elif step_name == "source-sink-analysis":
                 if result.get("ok") is False:
-                    warnings.append({"kind": "source_sink_analysis_failed", "result": result})
+                    warnings.append({"kind": "trace_worker_failed", "result": result})
                 if result.get("skipped") and "disabled" not in str(result.get("reason") or ""):
-                    warnings.append({"kind": "source_sink_analysis_skipped", "result": result})
+                    warnings.append({"kind": "trace_worker_skipped", "result": result})
             elif step_name == "whiteboard-swarm":
                 if result.get("ok") is False:
                     warnings.append({"kind": "whiteboard_swarm_failed", "result": result})

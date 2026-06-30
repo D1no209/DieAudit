@@ -102,8 +102,8 @@ project import
   -> orchestrator / recon
   -> code-auditor fan-out
   -> Semgrep + SCA
-  -> source-sink analysis
   -> Whiteboard Swarm
+     -> selectively scheduled Trace Worker / Validator / Judger / PoC work
   -> validation judgement
   -> feedback loop
   -> PoC writing
@@ -116,6 +116,11 @@ There is no pre-agent graph build stage. Graph context is agent-driven through
 `codebase-memory-mcp`. Decompilation remains a source preparation step; produced
 source roots are described in `STRUCTURE.md` and can be indexed by agents when
 they need graph context.
+
+There is also no separate top-level source-sink analysis stage in the current
+production pipeline. Source-to-sink chains are trace evidence produced by
+Whiteboard Swarm scheduled Trace Worker runs when the controller identifies a
+finding that needs deeper reachability analysis.
 
 ## Whiteboard Collaboration
 

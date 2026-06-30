@@ -4003,7 +4003,7 @@ async def _run_source_sink_finding_internal(
     )
     input_payload = {
         "goal": "For this single Finding, build or reject a source-to-sink attack chain. Return strict JSON with chains[].",
-        "audit_phase": "source-sink-analysis",
+        "audit_phase": "whiteboard-trace-worker",
         "finding": finding,
         "finding_artifact_contract": _finding_artifact_contract(audit_run_id, finding_id, "source-sink"),
         "evidence": [item for item in evidence if str(item.get("finding_id")) == finding_id],

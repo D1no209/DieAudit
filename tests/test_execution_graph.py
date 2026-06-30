@@ -14,11 +14,16 @@ def read_source(relative_path: str) -> str:
 
 def test_execution_graph_route_is_exposed() -> None:
     routes = read_source("services/platform/app/api/routes.py")
+    bff_routes = read_source("services/web-api/app/bff/routes/audit_runs.py")
+    bff_graph = read_source("services/web-api/app/application/execution_graph.py")
     api = read_source("services/web-ui/src/client/dashboardApi.ts")
     types = read_source("services/web-ui/src/types.ts")
 
     assert '"/audit-runs/{audit_run_id}/execution-graph"' in routes
     assert "def _execution_graph(" in routes
+    assert '@router.get("/{audit_run_id}/flow")' in bff_routes
+    assert "audit_run_execution_graph" in bff_graph
+    assert "PIPELINE_STAGES" in bff_graph
     assert "readJson<ExecutionGraph>" in api
     assert "ExecutionGraphNode" in types
     assert "ExecutionGraphEdge" in types

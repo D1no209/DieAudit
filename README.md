@@ -17,12 +17,12 @@ runnable open-source platform rather than a one-off demo.
 - Imports projects from Git URLs or zip uploads.
 - Creates isolated workspaces and local artifact directories.
 - Injects `codebase-memory-mcp` into ACP sessions for architecture, symbol,
-  route, call-chain, and graph-backed source-to-sink analysis.
+  route, call-chain, and graph-backed trace evidence.
 - Runs Agent Client Protocol runtimes through registered adapter templates.
 - Starts Agent containers and MCP sidecars through Docker orchestration.
 - Assigns each finding its own persistent folder and `finding.md` handoff file.
-- Lets Source-Sink Finder, Validator, Judger, PoC Writer, and PoC Verifier
-  iteratively refine the same finding markdown.
+- Lets Whiteboard Swarm coordinate Trace Worker, Validator, Judger, PoC Writer,
+  and PoC Verifier work against the same finding markdown.
 - Runs per-finding Agent Swarm stages in parallel with configurable concurrency.
 - Records Findings, Evidence, ValidationAttempts, AgentRuns, ContainerRuns, and
   report artifacts.
@@ -83,8 +83,9 @@ project import
   -> codebase-memory repository indexing inside ACP agents
   -> code-auditor fan-out
   -> Semgrep + SCA
-  -> per-finding Source-Sink Finder
   -> AuditRun Whiteboard Swarm
+     -> selectively schedules Trace Worker, Validator, Judger, PoC Writer,
+        and PoC Verifier work as needed
   -> per-finding Validator
   -> per-finding Judger
   -> per-finding PoC Writer
@@ -196,8 +197,8 @@ If you do not use a proxy, leave the proxy variables empty.
 
 Each finding has a stable artifact folder and a `finding.md` file. Finding
 scoped agents are instructed to read and update that markdown file, so the
-finding history is preserved across Source-Sink Finder, Validator, Judger, PoC
-Writer, and PoC Verifier stages.
+finding history is preserved across Whiteboard Swarm scheduled Trace Worker,
+Validator, Judger, PoC Writer, and PoC Verifier work.
 
 ## Runtime Safety Model
 
@@ -272,9 +273,10 @@ More details are in [docs/production-readiness.md](docs/production-readiness.md)
 Each AuditRun has a shared Whiteboard graph. Agents use `whiteboard-mcp` to
 create cards, attach files, connect evidence, declare predecessor/successor
 gaps, search all cards, and submit complete chain evidence. The
-`whiteboard-swarm` stage starts a controller Agent after source-sink analysis;
-that Agent inspects the graph and selectively schedules Source-Sink Finder,
-Validator, Judger, PoC Writer, or PoC Verifier runs through platform MCP tools.
+`whiteboard-swarm` stage starts a controller Agent that inspects the graph and
+selectively schedules Trace Worker, Validator, Judger, PoC Writer, or PoC
+Verifier runs through platform MCP tools. Source-to-sink chains are evidence
+produced inside this swarm workflow, not a separate top-level pipeline stage.
 
 The Whiteboard database records are the source of truth. JSON snapshots are
 written under `data/artifacts/whiteboards/{audit_run_id}/whiteboard.json` for

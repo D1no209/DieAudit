@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dieaudit_common.domain.models import AgentRun, AgentTranscriptEvent
 from dieaudit_common.persistence.base import SessionLocal
+from app.application.execution_graph import audit_run_execution_graph
 
 router = APIRouter(prefix="/api/bff/audit-runs", tags=["agent-messages"])
 
@@ -19,34 +21,10 @@ async def agent_run_messages(audit_run_id: str, agent_run_id: str) -> list[dict]
 @router.get("/{audit_run_id}/flow")
 async def audit_run_flow(audit_run_id: str) -> dict:
     async with SessionLocal() as session:
-        rows = (
-            await session.execute(
-                select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.asc())
-            )
-        ).scalars().all()
-        nodes = [
-            {
-                "id": f"agent-{row.agent_run_id}",
-                "kind": "agent-run",
-                "label": row.agent_name,
-                "status": row.status,
-                "group": row.template_name,
-                "target": {"agent_run_id": row.agent_run_id, "audit_run_id": audit_run_id},
-                "data": {"protocol_kind": row.protocol_kind, "error": row.error},
-            }
-            for row in rows
-        ]
-        edges = [
-            {"source": nodes[index - 1]["id"], "target": nodes[index]["id"], "type": "sequence"}
-            for index in range(1, len(nodes))
-        ]
-        return {
-            "audit_run_id": audit_run_id,
-            "project_id": rows[0].project_id if rows else "",
-            "summary": {"node_count": len(nodes), "by_kind": {"agent-run": len(nodes)}},
-            "nodes": nodes,
-            "edges": edges,
-        }
+        result = await audit_run_execution_graph(session, audit_run_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        return result
 
 
 @router.get("/{audit_run_id}/whiteboard/flow")

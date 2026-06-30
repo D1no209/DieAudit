@@ -62,7 +62,7 @@ export function AgentRunsPage({
           }
         >
           {flow.nodes.length ? (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]" data-testid="agent-graph">
               <FlowCanvas nodes={flow.nodes} edges={flow.edges} height={560} onNodeSelect={setSelectedNode} />
               <AgentNodeInspector
                 node={selectedNode}
@@ -101,6 +101,8 @@ function AgentNodeInspector({
     return <Panel title="Inspector"><EmptyState description="Select a graph node" /></Panel>;
   }
   const agentRunId = node.data.target?.agent_run_id;
+  const findingId = node.data.target?.finding_id;
+  const reportId = node.data.target?.report_id;
   const containerId = String((node.data.raw as { data?: Record<string, unknown> } | undefined)?.data?.container_id || node.data.target?.container_id || "");
   const container = containers.find((row) => row.Id === containerId || row.container_id === containerId);
   return (
@@ -122,6 +124,8 @@ function AgentNodeInspector({
           {agentRunId ? <Button size="sm" onClick={() => onOpenAgentEvents(agentRunId)}>Raw Events</Button> : null}
           {container ? <Button size="sm" onClick={() => onOpenContainerLogs(container)}>Logs</Button> : null}
           {node.data.kind.startsWith("whiteboard") ? <Button size="sm" icon={<SquareStack className="h-4 w-4" />} onClick={onViewWhiteboard}>Open</Button> : null}
+          {findingId ? <Button size="sm" onClick={() => { window.location.hash = `#/findings/${encodeURIComponent(findingId)}`; }}>Finding</Button> : null}
+          {reportId ? <Button size="sm" onClick={() => { window.location.hash = "#/reports"; }}>Reports</Button> : null}
         </div>
         <pre className="max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(node.data.raw, null, 2)}</pre>
       </div>

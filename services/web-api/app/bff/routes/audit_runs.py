@@ -4,6 +4,7 @@ from dieaudit_common.persistence.base import SessionLocal
 from dieaudit_common.schemas.bff import CancelAuditRunPayload, CreateAuditRunPayload, StartAuditRunPayload
 
 from app.application.audit_runs import AuditRunApplication
+from app.application.execution_graph import audit_run_execution_graph
 
 router = APIRouter(prefix="/api/bff/audit-runs", tags=["audit-runs"])
 
@@ -52,5 +53,10 @@ async def cancel_audit_run(audit_run_id: str, payload: CancelAuditRunPayload) ->
 
 
 @router.get("/{audit_run_id}/graph")
+@router.get("/{audit_run_id}/flow")
 async def audit_run_graph(audit_run_id: str) -> dict:
-    return {"audit_run_id": audit_run_id, "nodes": [], "edges": [], "summary": {"status": "not_projected"}}
+    async with SessionLocal() as session:
+        result = await audit_run_execution_graph(session, audit_run_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="audit run not found")
+        return result

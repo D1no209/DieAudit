@@ -388,6 +388,8 @@ export type ExecutionGraphNode = {
     agent_run_id?: string;
     container_id?: string;
     card_id?: string;
+    finding_id?: string;
+    report_id?: string;
     task_id?: string;
   };
   data?: Record<string, unknown>;
@@ -735,6 +737,14 @@ export type CreateAuditRunPayload = {
   config?: {
     agent_runtime?: { default_runtime_id: string };
     model_overrides?: Record<string, AgentModelOverride>;
+    whiteboard_swarm?: {
+      trace_worker?: {
+        enabled?: boolean;
+        agent_name?: string;
+        max_parallel?: number;
+        max_findings?: number;
+      };
+    };
     [key: string]: unknown;
   };
   start_agent?: boolean;

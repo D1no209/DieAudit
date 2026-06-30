@@ -28,9 +28,13 @@ def test_default_pipeline_registry_orders_dependencies_before_dependents() -> No
     assert positions["snapshot-ready"] < positions["structure-discovery"]
     assert positions["structure-discovery"] < positions["agent-audit"]
     assert positions["agent-audit"] < positions["code-analysis"]
-    assert positions["code-analysis"] < positions["whiteboard-swarm"]
+    assert positions["code-analysis"] < positions["value-triage"]
+    assert positions["value-triage"] < positions["whiteboard-swarm"]
     assert positions["whiteboard-swarm"] < positions["validation-judgement"]
     assert positions["validation-judgement"] < positions["feedback-loop"]
+    assert positions["feedback-loop"] < positions["poc-writing"]
+    assert positions["poc-writing"] < positions["poc-verification"]
+    assert positions["poc-verification"] < positions["report"]
     assert positions["report"] < positions["runtime-cleanup"]
 
 
@@ -42,11 +46,12 @@ def test_default_pipeline_registry_contains_planned_stage_names() -> None:
         "structure-discovery",
         "agent-audit",
         "code-analysis",
+        "value-triage",
         "whiteboard-swarm",
         "validation-judgement",
         "feedback-loop",
-        "poc-writer-fanout",
-        "poc-verifier-fanout",
+        "poc-writing",
+        "poc-verification",
         "report",
         "runtime-cleanup",
     ]

@@ -13,16 +13,17 @@ def test_audit_result_surfaces_have_dedicated_routes() -> None:
     navigation = read_source("services/web-ui/src/navigation.tsx")
     routes = read_source("services/web-ui/src/routes/routeRegistry.tsx")
 
-    for view in (
-        "agent-runs",
-        "finding-review",
-        "dependencies",
-        "reports",
-        "runtime-readiness",
-        "runtime-containers",
-        "runtime-sandbox",
-    ):
-        assert f'"{view}"' in navigation
+    expected_navigation = {
+        "project-agents": "project-agents",
+        "project-finding-review": "project-finding-review",
+        "project-dependencies": "project-dependencies",
+        "project-reports": "project-reports",
+        "runtime-readiness": "runtime-readiness",
+        "runtime-containers": "runtime-containers",
+        "runtime-sandbox": "runtime-sandbox",
+    }
+    for view, nav_key in expected_navigation.items():
+        assert f'"{nav_key}"' in navigation
         assert f'"{view}":' in routes or f"{view}:" in routes
 
 
@@ -53,25 +54,28 @@ def test_audit_runs_page_uses_focused_subcomponents() -> None:
         assert (ROOT / path).is_file()
 
 
-def test_audit_run_config_modal_exposes_swarm_controls() -> None:
+def test_audit_run_config_modal_exposes_standard_pipeline_controls() -> None:
     modal = read_source("services/web-ui/src/pages/audit-runs/AuditRunConfigModal.tsx")
     api = read_source("services/web-ui/src/client/dashboardApi.ts")
 
     for field in (
-        "enabled_agents",
+        "presets",
+        "pipelineStages",
         "preflight_prompt",
         "validator_rounds",
         "max_parallel_validators",
-        "max_parallel_source_sink_finders",
+        "whiteboard_swarm",
+        "trace_worker",
         "max_parallel_judgers",
         "max_parallel_poc_writers",
         "max_parallel_poc_verifiers",
-        "source_sink_finder_agent_name",
         "poc_verifier_agent_name",
         "enable_decompilation",
     ):
         assert field in modal
 
+    assert '"source-sink-analysis"' not in modal
+    assert 'name="enable_source_sink_analysis"' not in modal
     assert "query_packs" not in modal
 
     assert "CreateAuditRunPayload" in api
@@ -233,7 +237,7 @@ def test_finding_review_has_dedicated_page_not_global_drawer() -> None:
     assert "onPreviewArtifact" in detail_panel
     assert "onRunFindingPoc" in detail_panel
     assert "renderFindingReviewRoute" in renderers
-    assert 'onViewChange("findings")' in renderers
+    assert 'onViewChange("project-findings")' in renderers or '"project-findings"' in renderers
 
 
 def test_app_shell_delegates_dashboard_state_to_controller_hook() -> None:
@@ -257,10 +261,10 @@ def test_audit_context_is_shared_shell_component() -> None:
     findings_page = read_source("services/web-ui/src/pages/FindingsPage.tsx")
 
     assert "aria-label=\"Audit context\"" in context_bar
-    assert "onViewChange(\"projects\")" in context_bar
-    assert "onViewChange(\"audit-runs\")" in context_bar
-    assert "onViewChange(\"findings\")" in context_bar
-    assert "onViewChange(\"reports\")" in context_bar
+    assert "onViewChange(\"project-overview\")" in context_bar
+    assert "onViewChange(\"project-audit-runs\")" in context_bar
+    assert "onViewChange(\"project-findings\")" in context_bar
+    assert "onViewChange(\"project-reports\")" in context_bar
     assert "AuditContextBar" not in audit_runs_page
     assert "AuditContextBar" not in findings_page
 
