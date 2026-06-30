@@ -339,7 +339,7 @@ async def _run_validator_scaling_cancel_test(monkeypatch) -> None:
         workspace_host_path="/workspace/project",
         validator_rounds=1,
         max_parallel_validators=1,
-        validator_agent_name="opencode-validator",
+        validator_agent_name="agent-runtime-validator",
         allow_external_network=False,
         retain_runtime_on_failure=False,
         wait_for_completion=True,

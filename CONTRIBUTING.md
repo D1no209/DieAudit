@@ -29,7 +29,7 @@ Run these before opening a pull request:
 
 ```powershell
 python -m pytest
-python -m compileall services\platform\app services\mcp-tools services\agents\opencode-agent
+python -m compileall services\platform\app services\mcp-tools services\agents\kimi-code-agent
 cd services\web-ui
 npm run build
 ```

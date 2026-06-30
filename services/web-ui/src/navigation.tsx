@@ -1,12 +1,7 @@
 import {
-  Activity,
-  Bot,
   Boxes,
-  Bug,
-  Database,
   FileText,
   FolderOpen,
-  GitBranch,
   Network,
   PlayCircle,
   ShieldCheck,
@@ -14,15 +9,17 @@ import {
 import type { ReactNode } from "react";
 
 export type AppView =
-  | "overview"
   | "projects"
-  | "audit-runs"
-  | "agent-runs"
-  | "findings"
-  | "finding-review"
-  | "dependencies"
-  | "whiteboard"
-  | "reports"
+  | "project-overview"
+  | "project-audit-runs"
+  | "project-agents"
+  | "project-messages"
+  | "project-findings"
+  | "project-finding-review"
+  | "project-dependencies"
+  | "project-whiteboard"
+  | "project-swarm"
+  | "project-reports"
   | "runtime"
   | "runtime-readiness"
   | "runtime-containers"
@@ -30,18 +27,26 @@ export type AppView =
   | "knowledge"
   | "admin";
 
-export const DEFAULT_VIEW: AppView = "overview";
+export type ProjectRouteState = {
+  projectId?: string;
+  auditRunId?: string;
+  tab: AppView;
+};
+
+export const DEFAULT_VIEW: AppView = "projects";
 
 export const APP_VIEW_PATHS: Record<AppView, string> = {
-  overview: "/overview",
   projects: "/projects",
-  "audit-runs": "/audit-runs",
-  "agent-runs": "/agent-runs",
-  findings: "/findings",
-  "finding-review": "/findings/review",
-  dependencies: "/dependencies",
-  whiteboard: "/whiteboard",
-  reports: "/reports",
+  "project-overview": "/projects",
+  "project-audit-runs": "/projects",
+  "project-agents": "/projects",
+  "project-messages": "/projects",
+  "project-findings": "/projects",
+  "project-finding-review": "/projects",
+  "project-dependencies": "/projects",
+  "project-whiteboard": "/projects",
+  "project-swarm": "/projects",
+  "project-reports": "/projects",
   runtime: "/runtime",
   "runtime-readiness": "/runtime/readiness",
   "runtime-containers": "/runtime/containers",
@@ -54,6 +59,10 @@ const APP_VIEWS = new Set<AppView>(Object.keys(APP_VIEW_PATHS) as AppView[]);
 
 export function appViewFromHash(hash: string): AppView {
   const normalized = hash.replace(/^#/, "").trim() || APP_VIEW_PATHS[DEFAULT_VIEW];
+  const projectRoute = projectRouteFromHash(hash);
+  if (projectRoute.projectId) {
+    return projectRoute.tab;
+  }
   const directMatch = (Object.entries(APP_VIEW_PATHS) as Array<[AppView, string]>).find(([, path]) => path === normalized);
   if (directMatch) {
     return directMatch[0];
@@ -65,6 +74,58 @@ export function appViewFromHash(hash: string): AppView {
 
 export function hashFromAppView(view: AppView): string {
   return `#${APP_VIEW_PATHS[view] || APP_VIEW_PATHS[DEFAULT_VIEW]}`;
+}
+
+export function projectRouteFromHash(hash: string): ProjectRouteState {
+  const normalized = hash.replace(/^#/, "").trim();
+  const parts = normalized.split("/").filter(Boolean).map(decodeURIComponent);
+  if (parts[0] !== "projects" || !parts[1]) {
+    return { tab: DEFAULT_VIEW };
+  }
+  const projectId = parts[1];
+  const auditRunIndex = parts.indexOf("audit-runs");
+  const auditRunId = auditRunIndex >= 0 ? parts[auditRunIndex + 1] : undefined;
+  const leaf = parts[parts.length - 1];
+  if (leaf === "agents") return { projectId, auditRunId, tab: "project-agents" };
+  if (leaf === "messages") return { projectId, auditRunId, tab: "project-messages" };
+  if (leaf === "findings") return { projectId, auditRunId, tab: "project-findings" };
+  if (leaf === "review") return { projectId, auditRunId, tab: "project-finding-review" };
+  if (leaf === "dependencies") return { projectId, auditRunId, tab: "project-dependencies" };
+  if (leaf === "reports") return { projectId, auditRunId, tab: "project-reports" };
+  if (leaf === "whiteboard") return { projectId, auditRunId, tab: "project-whiteboard" };
+  if (leaf === "swarm") return { projectId, auditRunId, tab: "project-swarm" };
+  if (parts[2] === "audit-runs") return { projectId, auditRunId, tab: "project-audit-runs" };
+  return { projectId, auditRunId, tab: "project-overview" };
+}
+
+export function projectHash(view: AppView, projectId?: string, auditRunId?: string): string {
+  if (!projectId) return hashFromAppView("projects");
+  const projectBase = `#/projects/${encodeURIComponent(projectId)}`;
+  const runBase = auditRunId ? `${projectBase}/audit-runs/${encodeURIComponent(auditRunId)}` : `${projectBase}/audit-runs`;
+  switch (view) {
+    case "project-overview":
+      return projectBase;
+    case "project-audit-runs":
+      return `${projectBase}/audit-runs`;
+    case "project-agents":
+      return `${runBase}/agents`;
+    case "project-messages":
+      return `${runBase}/messages`;
+    case "project-findings":
+      return `${runBase}/findings`;
+    case "project-finding-review":
+      return `${runBase}/findings/review`;
+    case "project-dependencies":
+      return `${runBase}/dependencies`;
+    case "project-reports":
+      return `${runBase}/reports`;
+    case "project-whiteboard":
+      return `${runBase}/whiteboard`;
+    case "project-swarm":
+      return `${runBase}/swarm`;
+    default:
+      return hashFromAppView(view);
+  }
 }
 
 export type NavigationItem = {
@@ -84,21 +145,7 @@ export const navigationGroups: NavigationGroup[] = [
     key: "workspace",
     label: "Workspace",
     items: [
-      { key: "overview", icon: <Activity className="h-4 w-4" />, label: "Overview" },
       { key: "projects", icon: <FolderOpen className="h-4 w-4" />, label: "Projects" },
-    ],
-  },
-  {
-    key: "audit",
-    label: "Audit Workflow",
-    items: [
-      { key: "audit-runs", icon: <PlayCircle className="h-4 w-4" />, label: "Audit Runs" },
-      { key: "agent-runs", icon: <Bot className="h-4 w-4" />, label: "Agent Runs" },
-      { key: "findings", icon: <Bug className="h-4 w-4" />, label: "Findings" },
-      { key: "finding-review", icon: <ShieldCheck className="h-4 w-4" />, label: "Finding Review" },
-      { key: "dependencies", icon: <Database className="h-4 w-4" />, label: "Dependencies" },
-      { key: "whiteboard", icon: <GitBranch className="h-4 w-4" />, label: "Whiteboard" },
-      { key: "reports", icon: <FileText className="h-4 w-4" />, label: "Reports" },
     ],
   },
   {
@@ -109,6 +156,12 @@ export const navigationGroups: NavigationGroup[] = [
       { key: "runtime-readiness", icon: <ShieldCheck className="h-4 w-4" />, label: "Readiness" },
       { key: "runtime-containers", icon: <Boxes className="h-4 w-4" />, label: "Containers" },
       { key: "runtime-sandbox", icon: <PlayCircle className="h-4 w-4" />, label: "Sandbox" },
+    ],
+  },
+  {
+    key: "platform",
+    label: "Platform",
+    items: [
       { key: "knowledge", icon: <FileText className="h-4 w-4" />, label: "Knowledge" },
       { key: "admin", icon: <ShieldCheck className="h-4 w-4" />, label: "Admin" },
     ],

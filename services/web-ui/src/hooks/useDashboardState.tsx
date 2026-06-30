@@ -3,6 +3,8 @@ import { getStoredApiKey } from "../api";
 import type {
   AgentRun,
   AgentRunEvent,
+  AgentRuntimeAdapter,
+  AgentTranscriptEvent,
   ApiHealth,
   ApiKeyRecord,
   AuthPrincipal,
@@ -52,6 +54,7 @@ export function useDashboardState() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [auditRun, setAuditRun] = useState<AuditRun>();
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [agentRuntimes, setAgentRuntimes] = useState<AgentRuntimeAdapter[]>([]);
   const [codeAnalysisTasks, setCodeAnalysisTasks] = useState<CodeAnalysisTask[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [dependencies, setDependencies] = useState<DependencyInventory>();
@@ -62,6 +65,7 @@ export function useDashboardState() {
   const [whiteboard, setWhiteboard] = useState<WhiteboardGraph>();
   const [selectedFinding, setSelectedFinding] = useState<FindingDetail>();
   const [agentEvents, setAgentEvents] = useState<AgentRunEvent[]>();
+  const [agentMessages, setAgentMessages] = useState<AgentTranscriptEvent[]>([]);
   const [containerLogs, setContainerLogs] = useState<{ title: string; body: string }>();
   const [artifactPreview, setArtifactPreview] = useState<{ title: string; body: string }>();
   const [sandboxTarget, setSandboxTarget] = useState<{ network: string; target_url: string }>();
@@ -94,6 +98,7 @@ export function useDashboardState() {
     setSelectedProjectId(undefined);
     setAuditRun(undefined);
     setAgentRuns([]);
+    setAgentRuntimes([]);
     setCodeAnalysisTasks([]);
     setFindings([]);
     setDependencies(undefined);
@@ -104,6 +109,7 @@ export function useDashboardState() {
     setWhiteboard(undefined);
     setSelectedFinding(undefined);
     setAgentEvents(undefined);
+    setAgentMessages([]);
     setContainerLogs(undefined);
     setArtifactPreview(undefined);
     setSandboxTarget(undefined);
@@ -111,7 +117,9 @@ export function useDashboardState() {
 
   return {
     agentEvents,
+    agentMessages,
     agentRuns,
+    agentRuntimes,
     artifactPreview,
     apiHealth,
     apiKey,
@@ -147,8 +155,10 @@ export function useDashboardState() {
     selectedProject,
     selectedProjectId,
     setAgentEvents,
+    setAgentMessages,
     setArtifactPreview,
     setAgentRuns,
+    setAgentRuntimes,
     setApiHealth,
     setApiKey,
     setApiKeys,

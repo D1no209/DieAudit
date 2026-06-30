@@ -1,6 +1,6 @@
 import { clearStoredApiKey, getStoredApiKey, rememberApiKeyHeaderName } from "../../api";
 import * as dashboardApi from "../../client/dashboardApi";
-import type { AppView } from "../../navigation";
+import { projectRouteFromHash, type AppView } from "../../navigation";
 import type { DashboardStateController } from "../useDashboardState";
 
 export function useDashboardRefresh(dashboardState: DashboardStateController) {
@@ -9,6 +9,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     clearProtectedState,
     selectedProjectId,
     setAgentRuns,
+    setAgentRuntimes,
     setApiHealth,
     setApiKeys,
     setAuditRun,
@@ -135,16 +136,18 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
   }
 
   async function refreshOverview() {
-    const [docker, managed, readiness, sandbox] = await Promise.all([
+    const [docker, managed, readiness, sandbox, runtimes] = await Promise.all([
       dashboardApi.getDockerHealth(),
       dashboardApi.getManagedRuntime().catch(() => undefined),
       dashboardApi.getRuntimeReadiness().catch(() => undefined),
       dashboardApi.getSandboxCapabilities().catch(() => undefined),
+      dashboardApi.listAgentRuntimes().catch(() => []),
     ]);
     setDockerHealth(docker);
     setManagedRuntime(managed);
     setRuntimeReadiness(readiness);
     setSandboxCapabilities(sandbox);
+    setAgentRuntimes(runtimes);
     const projectId = await refreshProjects();
     await refreshLatestAuditRun(projectId);
   }
@@ -187,7 +190,12 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
   }
 
   async function refreshAuditWorkspace() {
-    const projectId = await refreshProjects();
+    const route = projectRouteFromHash(window.location.hash);
+    const [projectId, runtimes] = await Promise.all([
+      refreshProjects(route.projectId),
+      dashboardApi.listAgentRuntimes().catch(() => []),
+    ]);
+    setAgentRuntimes(runtimes);
     await refreshLatestAuditRun(projectId);
   }
 
@@ -199,9 +207,6 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
         return;
       }
       switch (view) {
-        case "overview":
-          await refreshOverview();
-          return;
         case "projects":
           await refreshProjects();
           return;
@@ -217,13 +222,16 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
         case "admin":
           await refreshAdmin();
           return;
-        case "audit-runs":
-        case "agent-runs":
-        case "findings":
-        case "finding-review":
-        case "dependencies":
-        case "reports":
-        case "whiteboard":
+        case "project-overview":
+        case "project-audit-runs":
+        case "project-agents":
+        case "project-messages":
+        case "project-findings":
+        case "project-finding-review":
+        case "project-dependencies":
+        case "project-reports":
+        case "project-whiteboard":
+        case "project-swarm":
           await refreshAuditWorkspace();
           return;
         default:

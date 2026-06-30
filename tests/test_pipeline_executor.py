@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from app.runtime.agent_runtime_registry import default_agent_template
 from app.services.pipeline_executor import PipelineExecutor
 
 
@@ -267,7 +268,7 @@ async def test_pipeline_executor_runs_fixed_pipeline_to_completion() -> None:
         "report",
         "completed",
     ]
-    assert runtime.agent_runs[0]["agent_name"] == "opencode-orchestrator"
+    assert runtime.agent_runs[0]["agent_name"] == default_agent_template("orchestrator")
     assert runtime.agent_runs[0]["allow_external_network"] is True
     graph_input = runtime.agent_runs[0]["input_payload"]["codebase_memory"]
     assert graph_input["mcp"] == "codebase-memory-mcp"
@@ -335,7 +336,7 @@ async def test_pipeline_executor_respects_disabled_swarm_agents() -> None:
     await build_executor(recorder, runtime).execute("run-1")
 
     assert len(runtime.agent_runs) == 1
-    assert runtime.agent_runs[0]["agent_name"] == "opencode-orchestrator"
+    assert runtime.agent_runs[0]["agent_name"] == default_agent_template("orchestrator")
     assert runtime.validator_runs == []
     skipped = [event for event in recorder.events if event["event_type"] == "pipeline_step_skipped"]
     assert {event["payload"]["step"] for event in skipped} == {
@@ -356,7 +357,7 @@ async def test_pipeline_executor_uses_configured_validator_agent_name() -> None:
             "project_id": "project-1",
             "config": {
                 "workspace_host_path": "/workspace/project",
-                "validation_judgement_agent_name": "opencode-custom-validator",
+                "validation_judgement_agent_name": "custom-validator",
             },
             "allow_external_network": False,
             "retain_runtime_on_failure": False,
@@ -367,7 +368,7 @@ async def test_pipeline_executor_uses_configured_validator_agent_name() -> None:
 
     await build_executor(recorder, runtime).execute("run-1")
 
-    assert runtime.validator_runs[0]["validator_agent_name"] == "opencode-custom-validator"
+    assert runtime.validator_runs[0]["validator_agent_name"] == "custom-validator"
 
 
 @pytest.mark.asyncio
@@ -406,7 +407,7 @@ async def test_pipeline_executor_marks_completed_with_warnings_for_parse_warning
 @pytest.mark.asyncio
 async def test_pipeline_executor_fails_fast_when_agent_audit_fails() -> None:
     runtime = FakeRuntime()
-    runtime.agent_result = {"ok": True, "agent_run_id": "agent-1", "opencode_status": "failed", "error": "OpenCode timed out"}
+    runtime.agent_result = {"ok": True, "agent_run_id": "agent-1", "status": "failed", "error": "Agent runtime timed out"}
     recorder = CallbackRecorder(
         {
             "audit_run_id": "run-1",
@@ -423,7 +424,7 @@ async def test_pipeline_executor_fails_fast_when_agent_audit_fails() -> None:
 
     assert recorder.statuses == ["running", "failed"]
     assert recorder.pipeline_states[-1]["stage"] == "failed"
-    assert "OpenCode timed out" in recorder.pipeline_states[-1]["error"]
+    assert "Agent runtime timed out" in recorder.pipeline_states[-1]["error"]
     assert runtime.validator_runs == []
 
 

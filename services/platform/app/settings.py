@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     allow_runc_sandbox: bool = True
     allow_sandbox_external_network: bool = False
     allow_agent_external_network: bool = True
-    opencode_agent_timeout_seconds: int = 600
+    agent_runtime_timeout_seconds: int = 600
     default_container_memory: str = "1024m"
     default_container_cpus: float = 1.0
     default_container_pids_limit: int = 512

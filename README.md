@@ -18,7 +18,7 @@ runnable open-source platform rather than a one-off demo.
 - Creates isolated workspaces and local artifact directories.
 - Injects `codebase-memory-mcp` into ACP sessions for architecture, symbol,
   route, call-chain, and graph-backed source-to-sink analysis.
-- Runs OpenCode and Kimi Code agents through Agent Client Protocol.
+- Runs Agent Client Protocol runtimes through registered adapter templates.
 - Starts Agent containers and MCP sidecars through Docker orchestration.
 - Assigns each finding its own persistent folder and `finding.md` handoff file.
 - Lets Source-Sink Finder, Validator, Judger, PoC Writer, and PoC Verifier
@@ -161,7 +161,7 @@ Build the default tool images before real audits:
 ```powershell
 $env:HTTP_PROXY = "http://127.0.0.1:7897"
 $env:HTTPS_PROXY = "http://127.0.0.1:7897"
-docker compose --profile tools build tool-mcp-image opencode-agent-image kimi-code-agent-image
+docker compose --profile tools build tool-mcp-image kimi-code-agent-image
 ```
 
 Linux/macOS:
@@ -169,7 +169,7 @@ Linux/macOS:
 ```bash
 HTTP_PROXY=http://127.0.0.1:7897 \
 HTTPS_PROXY=http://127.0.0.1:7897 \
-docker compose --profile tools build tool-mcp-image opencode-agent-image kimi-code-agent-image
+docker compose --profile tools build tool-mcp-image kimi-code-agent-image
 ```
 
 If you do not use a proxy, leave the proxy variables empty.
@@ -314,7 +314,7 @@ python -m pip install -r services\platform\requirements.txt
 python -m pip install -r services\mcp-tools\requirements.txt
 python -m pip install pytest pytest-asyncio requests-mock time-machine
 python -m pytest
-python -m compileall services\platform\app services\mcp-tools services\agents\opencode-agent
+python -m compileall services\platform\app services\mcp-tools services\agents\kimi-code-agent
 ```
 
 Frontend:

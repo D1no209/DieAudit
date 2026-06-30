@@ -9,6 +9,7 @@ from app.schemas import (
     StartSandboxServiceRequest,
     ValidatorScaleRequest,
 )
+from app.runtime.agent_runtime_registry import default_agent_template
 
 
 def test_runtime_requests_default_to_no_external_network() -> None:
@@ -37,11 +38,11 @@ def test_code_batch_analysis_defaults_are_bounded_and_enabled_on_audit_runs() ->
     assert audit_run.max_code_audit_tasks == 8
     assert audit_run.max_files_per_code_audit_task == 25
     assert audit_run.max_parallel_code_auditors == 2
-    assert audit_run.code_auditor_agent_name == "opencode-code-auditor"
+    assert audit_run.code_auditor_agent_name == default_agent_template("code-auditor")
     assert code_batch.max_tasks == 8
     assert code_batch.max_files_per_task == 25
     assert code_batch.max_parallel_agents == 2
-    assert code_batch.agent_name == "opencode-code-auditor"
+    assert code_batch.agent_name == default_agent_template("code-auditor")
 
 
 def test_audit_run_swarm_defaults_cover_finding_pipeline_agents() -> None:
@@ -57,20 +58,20 @@ def test_audit_run_swarm_defaults_cover_finding_pipeline_agents() -> None:
         "poc-verifier",
     ]
     assert audit_run.enable_source_sink_analysis is True
-    assert audit_run.source_sink_finder_agent_name == "opencode-source-sink-finder"
+    assert audit_run.source_sink_finder_agent_name == default_agent_template("source-sink-finder")
     assert audit_run.max_parallel_source_sink_finders == 2
     assert audit_run.max_source_sink_findings == 50
     assert audit_run.enable_validators is True
-    assert audit_run.validator_agent_name == "opencode-validator"
+    assert audit_run.validator_agent_name == default_agent_template("validator")
     assert audit_run.enable_judgement is True
-    assert audit_run.judger_agent_name == "opencode-judger"
+    assert audit_run.judger_agent_name == default_agent_template("judger")
     assert audit_run.max_parallel_judgers == 2
     assert audit_run.enable_poc_writing is True
-    assert audit_run.poc_writer_agent_name == "opencode-poc-writer"
+    assert audit_run.poc_writer_agent_name == default_agent_template("poc-writer")
     assert audit_run.max_parallel_poc_writers == 2
     assert audit_run.max_poc_findings == 25
     assert audit_run.enable_poc_verification is True
-    assert audit_run.poc_verifier_agent_name == "opencode-poc-verifier"
+    assert audit_run.poc_verifier_agent_name == default_agent_template("poc-verifier")
     assert audit_run.max_parallel_poc_verifiers == 2
 
 

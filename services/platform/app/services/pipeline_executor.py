@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from app.settings import Settings
+from app.runtime.agent_runtime_registry import default_agent_template
 
 
 class PipelineCancelled(RuntimeError):
@@ -141,7 +142,7 @@ class PipelineExecutor:
                 agent_result = await self.runtime.start_agent_run(
                     audit_run_id=audit_run_id,
                     project_id=audit_run["project_id"],
-                    agent_name=audit_run.get("config", {}).get("agent_name") or "opencode-orchestrator",
+                    agent_name=audit_run.get("config", {}).get("agent_name") or default_agent_template("orchestrator"),
                     workspace_host_path=workspace_path,
                     allow_external_network=agent_external_network,
                     retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
@@ -254,7 +255,7 @@ class PipelineExecutor:
                     workspace_host_path=workspace_path,
                     validator_rounds=audit_run["validator_rounds"],
                     max_parallel_validators=audit_run["max_parallel_validators"],
-                    validator_agent_name=self._config_str(audit_run, "validation_judgement_agent_name", self._config_str(audit_run, "validator_agent_name", "opencode-validator")),
+                    validator_agent_name=self._config_str(audit_run, "validation_judgement_agent_name", self._config_str(audit_run, "validator_agent_name", default_agent_template("validator"))),
                     allow_external_network=agent_external_network,
                     retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
                     wait_for_completion=True,
@@ -684,14 +685,14 @@ class PipelineExecutor:
 
     @staticmethod
     def _agent_run_failed(agent_result: dict[str, Any]) -> bool:
-        status = str(agent_result.get("opencode_status") or agent_result.get("status") or "").lower()
+        status = str(agent_result.get("status") or agent_result.get("acp_status") or "").lower()
         return status == "failed" or bool(agent_result.get("error"))
 
     @staticmethod
     def _agent_run_error(agent_result: dict[str, Any]) -> str | None:
         if agent_result.get("error"):
             return str(agent_result["error"])
-        result = agent_result.get("opencode_result")
+        result = agent_result.get("result") or agent_result.get("acp_result")
         if isinstance(result, dict) and result.get("error"):
             return str(result["error"])
         return None

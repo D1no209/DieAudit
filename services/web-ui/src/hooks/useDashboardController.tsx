@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { AppView } from "../navigation";
+import { projectRouteFromHash, type AppView } from "../navigation";
 import { isActiveRun } from "../utils/format";
 import { useAdminActions } from "./dashboard/useAdminActions";
 import { useAuditRunActions } from "./dashboard/useAuditRunActions";
@@ -14,7 +14,9 @@ export function useDashboardController(activeView: AppView) {
   const dashboardState = useDashboardState();
   const {
     agentEvents,
+    agentMessages,
     agentRuns,
+    agentRuntimes,
     artifactPreview,
     apiHealth,
     apiKey,
@@ -49,6 +51,7 @@ export function useDashboardController(activeView: AppView) {
     selectedProject,
     selectedProjectId,
     setAgentEvents,
+    setAgentMessages,
     setArtifactPreview,
     setApiKey,
     setContainerLogs,
@@ -71,8 +74,32 @@ export function useDashboardController(activeView: AppView) {
   const adminActions = useAdminActions(dashboardState, runner, activeView);
 
   useEffect(() => {
-    runner.refreshCurrentView(activeView);
-  }, [activeView]);
+    function syncRoute() {
+      const route = projectRouteFromHash(window.location.hash);
+      if (route.projectId && route.projectId !== selectedProjectId) {
+        setSelectedProjectId(route.projectId);
+      }
+      if (route.auditRunId && route.auditRunId !== auditRun?.audit_run_id) {
+        runner.refreshAuditRun(route.auditRunId).catch((err) => {
+          setError(err instanceof Error ? err.message : String(err));
+        });
+      } else {
+        runner.refreshCurrentView(activeView);
+      }
+    }
+    syncRoute();
+    window.addEventListener("dieaudit-routechange", syncRoute);
+    return () => window.removeEventListener("dieaudit-routechange", syncRoute);
+  }, [activeView, auditRun?.audit_run_id, selectedProjectId]);
+
+  useEffect(() => {
+    const route = projectRouteFromHash(window.location.hash);
+    if (route.auditRunId && route.auditRunId !== auditRun?.audit_run_id) {
+      runner.refreshAuditRun(route.auditRunId).catch((err) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+    }
+  }, [activeView, auditRun?.audit_run_id]);
 
   useEffect(() => {
     if (!auditRun?.audit_run_id || !isActiveRun(auditRun.status, pipelineStatus?.current?.status)) {
@@ -104,6 +131,7 @@ export function useDashboardController(activeView: AppView) {
       ...runtimeActions,
       refresh: () => runner.refreshCurrentView(activeView),
       setAgentEvents,
+      setAgentMessages,
       setArtifactPreview,
       setApiKey,
       setContainerLogs,
@@ -116,7 +144,9 @@ export function useDashboardController(activeView: AppView) {
     forms: {},
     state: {
       agentEvents,
+      agentMessages,
       agentRuns,
+      agentRuntimes,
       artifactPreview,
       apiHealth,
       apiKey,

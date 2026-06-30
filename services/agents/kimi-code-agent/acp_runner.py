@@ -106,9 +106,9 @@ async def main() -> int:
     }
     try:
         env = dict(os.environ)
-        runtime_name = os.environ.get("ACP_RUNTIME_NAME") or os.environ.get("OPENCODE_RUNTIME_NAME") or "opencode"
-        command = os.environ.get("ACP_COMMAND") or os.environ.get("OPENCODE_ACP_COMMAND", "opencode")
-        args = (os.environ.get("ACP_ARGS") or os.environ.get("OPENCODE_ACP_ARGS", "acp")).split()
+        runtime_name = os.environ.get("ACP_RUNTIME_NAME") or "acp"
+        command = os.environ.get("ACP_COMMAND", "kimi-code")
+        args = os.environ.get("ACP_ARGS", "acp").split()
         stream_limit = int(os.environ.get("ACP_STREAM_LIMIT_BYTES", str(8 * 1024 * 1024)))
         async with acp.spawn_agent_process(
             client,
@@ -122,7 +122,7 @@ async def main() -> int:
                 agent.initialize(
                     protocol_version=acp.PROTOCOL_VERSION,
                     client_capabilities=schema.ClientCapabilities(terminal=False),
-                    client_info=schema.Implementation(name="dieaudit-opencode-runner", version="0.1.0"),
+                    client_info=schema.Implementation(name="dieaudit-acp-runtime-runner", version="0.1.0"),
                 )
             )
             session = await _maybe_await(agent.new_session(cwd="/workspace", mcp_servers=mcp_servers))

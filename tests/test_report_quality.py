@@ -47,7 +47,7 @@ def test_report_summary_exposes_quality_gaps() -> None:
     agent_runs = [
         {
             "agent_run_id": "agent-1",
-            "agent_name": "opencode-orchestrator",
+            "agent_name": "agent-runtime-orchestrator",
             "output_summary": {
                 "structured_ingest": {
                     "structured_parse_status": "parsed_with_warnings",
@@ -188,7 +188,7 @@ def test_finding_report_markdown_is_finding_scoped() -> None:
                 {"round_index": 1, "status": "completed", "agent_run_id": "validator-1"},
             ],
             "agent_runs": [
-                {"agent_name": "opencode-source-sink-finder", "agent_run_id": "agent-1", "status": "completed"},
+                {"agent_name": "agent-runtime-source-sink-finder", "agent_run_id": "agent-1", "status": "completed"},
             ],
         }
     )
@@ -200,7 +200,7 @@ def test_finding_report_markdown_is_finding_scoped() -> None:
     assert "agent-written" in markdown
     assert "judger-result-1" in markdown
     assert "poc-artifact" in markdown
-    assert "opencode-source-sink-finder" in markdown
+    assert "agent-runtime-source-sink-finder" in markdown
     assert "validator-1" in markdown
 
 
@@ -221,7 +221,7 @@ def test_report_summary_ignores_missing_json_when_markdown_handoff_exists() -> N
         agent_runs=[
             {
                 "agent_run_id": "agent-1",
-                "agent_name": "opencode-poc-writer",
+                "agent_name": "agent-runtime-poc-writer",
                 "output_summary": {
                     "structured_ingest": {
                         "structured_parse_status": "not_found",
@@ -261,7 +261,7 @@ def test_report_summary_ignores_missing_json_when_validator_evidence_exists() ->
         agent_runs=[
             {
                 "agent_run_id": "validator-agent-1",
-                "agent_name": "opencode-validator",
+                "agent_name": "agent-runtime-validator",
                 "output_summary": {
                     "structured_ingest": {
                         "structured_parse_status": "not_found",

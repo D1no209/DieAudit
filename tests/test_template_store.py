@@ -10,8 +10,8 @@ from app.services.templates import TemplateStore
 def test_template_store_hides_demo_templates_by_default(tmp_path: Path) -> None:
     folder = tmp_path / "agent-templates"
     folder.mkdir()
-    (folder / "opencode-orchestrator.yaml").write_text(
-        "name: opencode-orchestrator\nimage: dieaudit/opencode-agent:local\n",
+    (folder / "agent-runtime-orchestrator.yaml").write_text(
+        "name: agent-runtime-orchestrator\nimage: dieaudit/agent-runtime:local\n",
         encoding="utf-8",
     )
     (folder / "orchestrator.yaml").write_text(
@@ -21,7 +21,7 @@ def test_template_store_hides_demo_templates_by_default(tmp_path: Path) -> None:
 
     store = TemplateStore(tmp_path, "agent-templates")
 
-    assert [item["name"] for item in store.list()] == ["opencode-orchestrator"]
+    assert [item["name"] for item in store.list()] == ["agent-runtime-orchestrator"]
     with pytest.raises(FileNotFoundError):
         store.get("orchestrator")
 

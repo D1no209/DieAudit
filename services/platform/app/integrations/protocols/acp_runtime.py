@@ -5,7 +5,7 @@ from typing import Any
 
 
 @dataclass(slots=True)
-class OpenCodeAcpResult:
+class AcpRuntimeResult:
     status: str
     session_id: str | None = None
     response: dict[str, Any] = field(default_factory=dict)
@@ -13,8 +13,8 @@ class OpenCodeAcpResult:
     error: str | None = None
 
 
-class OpenCodeAcpClient:
-    runtime_name = "opencode"
+class AcpRuntimeClient:
+    runtime_name = "acp"
     protocol_kind = "agent-client-protocol"
     transport = "stdio"
 
@@ -27,15 +27,11 @@ class OpenCodeAcpClient:
                 "ACP_RUNTIME_NAME": runtime,
                 "ACP_COMMAND": str(command[0]),
                 "ACP_ARGS": " ".join(str(item) for item in command[1:]) or "acp",
-                "OPENCODE_ACP_COMMAND": str(command[0]),
-                "OPENCODE_ACP_ARGS": " ".join(str(item) for item in command[1:]) or "acp",
             }
         return {
-            "ACP_RUNTIME_NAME": "opencode",
-            "ACP_COMMAND": "opencode",
+            "ACP_RUNTIME_NAME": runtime,
+            "ACP_COMMAND": "agent-runtime",
             "ACP_ARGS": "acp",
-            "OPENCODE_ACP_COMMAND": "opencode",
-            "OPENCODE_ACP_ARGS": "acp",
         }
 
     @staticmethod

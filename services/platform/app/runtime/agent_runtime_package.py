@@ -15,7 +15,7 @@ from app.repositories import SessionLocal
 from app.settings import Settings
 
 
-class OpenCodeRuntimePackageBuilder:
+class AgentRuntimePackageBuilder:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
@@ -43,8 +43,8 @@ class OpenCodeRuntimePackageBuilder:
             instruction_target.write_text(f"# {template['name']}\n\nFollow the audit task instructions.\n", encoding="utf-8")
 
         mcp_config = self._mcp_config(mcp_servers)
-        opencode_config = self._opencode_config(template, mcp_config, instruction_target)
-        self._write_json(package_dir / "opencode.json", opencode_config)
+        runtime_config = self._runtime_config(template, mcp_config, instruction_target)
+        self._write_json(package_dir / "agent-runtime.json", runtime_config)
         self._write_json(package_dir / "mcp_servers.json", mcp_servers)
         self._write_json(
             package_dir / "input.json",
@@ -63,7 +63,7 @@ class OpenCodeRuntimePackageBuilder:
             "agent_run_id": agent_run_id,
             "agent": template["name"],
             "model_profile": template.get("model_profile", "orchestrator-long-context"),
-            "opencode_config": "opencode.json",
+            "runtime_config": "agent-runtime.json",
             "instructions": [f"instructions/{instruction_name}"],
             "mcp": sorted(mcp_servers),
         }
@@ -72,12 +72,12 @@ class OpenCodeRuntimePackageBuilder:
         await self._record(agent_run_id, package_dir, content_hash, manifest)
         return {
             "host_path": str(package_dir),
-            "container_config_path": f"{template.get('runtime_mount', {}).get('target', '/dieaudit/runtime')}/opencode.json",
+            "container_config_path": f"{template.get('runtime_mount', {}).get('target', '/dieaudit/runtime')}/agent-runtime.json",
             "content_hash": content_hash,
             "manifest": manifest,
         }
 
-    def _opencode_config(
+    def _runtime_config(
         self,
         template: dict[str, Any],
         mcp_config: dict[str, dict[str, Any]],
@@ -86,7 +86,6 @@ class OpenCodeRuntimePackageBuilder:
         profile_name = template.get("model_profile", "orchestrator-long-context")
         model_config = self._model_config(profile_name)
         return {
-            "$schema": "https://opencode.ai/config.json",
             "autoupdate": False,
             "model": model_config["model_ref"],
             "provider": model_config["providers"],

@@ -49,13 +49,12 @@ Agent templates declare ACP runtime metadata and required MCP names. The
 gateway starts the requested agent image, mounts the workspace and runtime
 package, then passes task input plus MCP definitions to the shared ACP runner.
 
-Supported production agent images:
+Enabled production agent images:
 
-- `dieaudit/opencode-agent:local`
 - `dieaudit/kimi-code-agent:local`
 
-Both use the shared ACP runner. Runtime-specific command selection is driven by
-template protocol fields, not by hard-coded platform logic.
+Runtime-specific command selection is driven by template protocol fields and
+adapter registry entries, not by hard-coded platform logic.
 
 ## MCP Model
 
@@ -84,7 +83,7 @@ gateway sends this neutral MCP definition through `MCP_SERVERS_JSON`:
 
 The ACP runner converts it to `schema.McpServerStdio` and passes it into
 `new_session(..., mcp_servers=...)`. Runtime packages may record this definition
-for auditability, but stdio MCPs are not written into OpenCode-specific local
+for auditability, but stdio MCPs are not written into runtime-specific local
 MCP configuration.
 
 Agents should call `index_repository` for `/workspace` when graph context is

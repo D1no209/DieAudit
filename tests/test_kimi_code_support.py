@@ -4,8 +4,8 @@ from pathlib import Path
 
 import yaml
 
-from app.integrations.protocols import OpenCodeAcpClient
-from app.runtime.opencode_package import OpenCodeRuntimePackageBuilder
+from app.integrations.protocols import AcpRuntimeClient
+from app.runtime.agent_runtime_package import AgentRuntimePackageBuilder
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,8 +47,8 @@ def test_kimi_code_agent_is_dockerized() -> None:
 
     assert 'ACP_ARGS="acp"' in dockerfile
     assert "bunx --version" in dockerfile
-    assert "COPY services/agents/opencode-agent/opencode_acp_runner.py /app/acp_runner.py" in dockerfile
-    assert "COPY services/agents/opencode-agent/kimi_acp_runtime_server.py /app/kimi_acp_runtime_server.py" in dockerfile
+    assert "COPY services/agents/kimi-code-agent/acp_runner.py /app/acp_runner.py" in dockerfile
+    assert "COPY services/agents/kimi-code-agent/kimi_acp_runtime_server.py /app/kimi_acp_runtime_server.py" in dockerfile
     assert "uvicorn" in dockerfile
     assert "kimi-code-agent-image:" in compose
     assert "dieaudit/kimi-code-agent:local" in compose
@@ -57,11 +57,11 @@ def test_kimi_code_agent_is_dockerized() -> None:
 def test_kimi_runtime_server_injects_model_environment() -> None:
     orchestrator = read_source("services/platform/app/runtime/orchestrator.py")
 
-    runner_start = orchestrator.index("async def _start_agent_runtime_runner")
-    agent_start = orchestrator.index("async def _start_agent", runner_start)
+    runner_start = orchestrator.index("    async def _start_agent_runtime_runner")
+    agent_start = orchestrator.index("\n    async def _start_agent(", runner_start)
     runner_source = orchestrator[runner_start:agent_start]
 
-    assert "env.update(self.opencode_packages.runtime_env(template))" in runner_source
+    assert "env.update(self.agent_runtime_packages.runtime_env(template))" in runner_source
 
 
 def test_acp_command_env_uses_template_stdio_command() -> None:
@@ -74,16 +74,15 @@ def test_acp_command_env_uses_template_stdio_command() -> None:
         }
     }
 
-    env = OpenCodeAcpClient().command_env(template)
+    env = AcpRuntimeClient().command_env(template)
 
     assert env["ACP_RUNTIME_NAME"] == "kimi"
     assert env["ACP_COMMAND"] == "bunx"
     assert env["ACP_ARGS"] == "@moonshot-ai/kimi-code acp"
-    assert env["OPENCODE_ACP_COMMAND"] == "bunx"
 
 
-def test_runtime_package_keeps_stdio_mcp_out_of_opencode_config() -> None:
-    mcp_config = OpenCodeRuntimePackageBuilder._mcp_config(
+def test_runtime_package_keeps_stdio_mcp_out_of_runtime_config() -> None:
+    mcp_config = AgentRuntimePackageBuilder._mcp_config(
         {
             "codebase-memory-mcp": {
                 "transport": "stdio",
@@ -122,7 +121,7 @@ profiles:
     )
     monkeypatch.setenv("KIMI_API_KEY", "sk-test")
     settings = type("Settings", (), {"config_root": config_root, "artifact_root": tmp_path / "artifacts"})()
-    builder = OpenCodeRuntimePackageBuilder(settings)
+    builder = AgentRuntimePackageBuilder(settings)
 
     env = builder.runtime_env({"model_profile": "auditor-strong", "protocol": {"runtime": "kimi"}})
 

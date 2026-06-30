@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
 
 :root {
   color: #182235;
@@ -67,6 +68,16 @@ pre {
   padding: 14px;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.react-flow__node {
+  font-family: inherit;
+}
+
+.react-flow__controls-button {
+  border-color: #dde5ef;
+  background: #ffffff;
+  color: #334155;
 }
 
 @media (prefers-reduced-motion: reduce) {

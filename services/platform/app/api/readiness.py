@@ -4,21 +4,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.settings import Settings
+from app.runtime.agent_runtime_registry import required_agent_template_names, template_runtime_for_name
 from app.services.pipeline_recovery import is_active_pipeline
 from app.services.worker_heartbeat import ACTIVE_WORKER_STATUSES, ensure_aware
 
 
-PRODUCTION_AGENT_TEMPLATES = {
-    "opencode-orchestrator",
-    "opencode-code-auditor",
-    "opencode-recon-auditor",
-    "opencode-sca-analyst",
-    "opencode-source-sink-finder",
-    "opencode-validator",
-    "opencode-judger",
-    "opencode-poc-writer",
-    "opencode-poc-verifier",
-}
+PRODUCTION_AGENT_TEMPLATES = required_agent_template_names()
 PRODUCTION_MCP_TEMPLATES = {
     "filesystem-mcp",
     "code-search-mcp",
@@ -245,7 +236,7 @@ def template_readiness_checks(
         name
         for name in PRODUCTION_AGENT_TEMPLATES & set(agents)
         if (agents[name].get("protocol") or {}).get("kind") != "agent-client-protocol"
-        or (agents[name].get("protocol") or {}).get("runtime") != "opencode"
+        or (agents[name].get("protocol") or {}).get("runtime") != template_runtime_for_name(name)
         or "mock-agent" in str(agents[name].get("image") or "")
     )
     missing_mcps = sorted(PRODUCTION_MCP_TEMPLATES - set(mcps))
@@ -274,8 +265,8 @@ def template_readiness_checks(
 
     checks = [
         {
-            "id": "opencode_agent_templates",
-            "title": "OpenCode ACP agent templates are configured",
+            "id": "agent_runtime_templates",
+            "title": "Enabled agent runtime templates are configured",
             "status": "fail" if missing_agents or invalid_agents else "pass",
             "detail": {
                 "required": sorted(PRODUCTION_AGENT_TEMPLATES),

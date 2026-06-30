@@ -2,6 +2,8 @@ import { formatHttpError, readJson, withAuth } from "../api";
 import type {
   AgentRun,
   AgentRunEvent,
+  AgentRuntimeAdapter,
+  AgentTranscriptEvent,
   ApiHealth,
   AuthMe,
   ApiKeyRecord,
@@ -47,7 +49,7 @@ function postJson<T = unknown>(path: string, body?: unknown) {
 }
 
 export function getPlatformBootstrap() {
-  return Promise.all([readJson<ApiHealth>("/api/health"), readJson<AuthStatus>("/api/auth/status")]);
+  return Promise.all([readJson<ApiHealth>("/api/health"), readJson<AuthStatus>("/api/bff/session/status")]);
 }
 
 export async function loginWithPassword(username: string, password: string) {
@@ -67,6 +69,10 @@ export function getCurrentAuthPrincipal() {
   return readJson<AuthMe>("/api/bff/session");
 }
 
+export function listAgentRuntimes() {
+  return readJson<AgentRuntimeAdapter[]>("/api/bff/agent-runtimes");
+}
+
 export function getDockerHealth() {
   return readJson<DockerHealth>("/gateway/runtime/docker/health");
 }
@@ -76,7 +82,7 @@ export function listProjects() {
 }
 
 export function listProjectAuditRuns(projectId: string) {
-  return readJson<AuditRun[]>(`/gateway/projects/${projectId}/audit-runs`);
+  return readJson<AuditRun[]>("/api/bff/audit-runs").then((runs) => runs.filter((run) => run.project_id === projectId));
 }
 
 export function getManagedRuntime() {
@@ -130,7 +136,9 @@ export async function getAuditRunBundle(auditRunId: string) {
     readJson<ReportArtifact[]>(`/gateway/audit-runs/${auditRunId}/reports`),
     readJson<PipelineStatus>(`/gateway/audit-runs/${auditRunId}/pipeline-status`),
     readJson<WhiteboardGraph>(`/gateway/audit-runs/${auditRunId}/whiteboard`).catch(() => undefined),
-    readJson<ExecutionGraph>(`/gateway/audit-runs/${auditRunId}/execution-graph`).catch(() => undefined),
+    readJson<ExecutionGraph>(`/api/bff/audit-runs/${auditRunId}/flow`).catch(() =>
+      readJson<ExecutionGraph>(`/gateway/audit-runs/${auditRunId}/execution-graph`).catch(() => undefined),
+    ),
   ]);
   return { agents, codeAnalysisTasks, containers, dependencies, executionGraph, findings, pipeline, reports, run, whiteboard };
 }
@@ -194,6 +202,10 @@ export function runFindingPoc(findingId: string, body: Record<string, unknown>) 
 
 export function getAgentEvents(auditRunId: string, agentRunId: string) {
   return readJson<AgentRunEvent[]>(`/gateway/audit-runs/${auditRunId}/agent-runs/${agentRunId}/events`);
+}
+
+export function getAgentMessages(auditRunId: string, agentRunId: string) {
+  return readJson<AgentTranscriptEvent[]>(`/api/bff/audit-runs/${auditRunId}/agent-runs/${agentRunId}/messages`);
 }
 
 export async function getContainerLogs(auditRunId: string, containerId: string) {

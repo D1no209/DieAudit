@@ -12,27 +12,13 @@ from dieaudit_common.domain.models import ApiKey
 from dieaudit_common.persistence.base import get_session
 from dieaudit_common.security.api_keys import authenticate
 
-router = APIRouter(tags=["session"])
+router = APIRouter(prefix="/api/bff/session", tags=["session"])
 
 
-@router.get("/auth/status")
-async def auth_status(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+@router.get("")
+async def session(request: Request, db: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     settings = get_settings()
-    persisted_key_exists = await session.scalar(select(ApiKey.key_id).where(ApiKey.status == "active").limit(1))
-    return {
-        "enabled": bool(_password_login_enabled(settings) or settings.dieaudit_api_key or persisted_key_exists),
-        "bootstrap_key_enabled": bool(settings.dieaudit_api_key),
-        "api_key_header": settings.api_key_header,
-        "public_metrics": False,
-        "service": settings.service_name,
-    }
-
-
-@router.get("/bff/session")
-@router.get("/api/bff/session")
-async def session(request: Request, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
-    settings = get_settings()
-    principal = await _authenticate(request, session)
+    principal = await _authenticate(request, db)
     return {
         "authenticated": bool(principal),
         "api_key_header": settings.api_key_header,
@@ -41,41 +27,57 @@ async def session(request: Request, session: AsyncSession = Depends(get_session)
     }
 
 
-@router.post("/bff/session/login")
-@router.post("/api/bff/session/login")
-async def login(payload: dict[str, Any], session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+@router.get("/status")
+async def status(db: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    settings = get_settings()
+    persisted_key_exists = await db.scalar(select(ApiKey.key_id).where(ApiKey.status == "active").limit(1))
+    return {
+        "enabled": bool(_password_login_enabled(settings) or settings.dieaudit_api_key.strip() or persisted_key_exists),
+        "bootstrap_key_enabled": bool(settings.dieaudit_api_key.strip()),
+        "password_login_enabled": _password_login_enabled(settings),
+        "api_key_header": settings.api_key_header,
+        "public_metrics": False,
+        "service": settings.service_name,
+    }
+
+
+@router.post("/login")
+async def login(payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
     principal = _authenticate_admin_password(settings, username, password)
     if not principal:
         raise HTTPException(status_code=401, detail="登录凭证无效")
-    if not settings.dieaudit_api_key:
+    access_token = settings.dieaudit_api_key.strip()
+    if not access_token:
         raise HTTPException(status_code=503, detail="管理员登录需要配置 DIEAUDIT_API_KEY 作为内部访问令牌")
     return {
         "authenticated": True,
-        "access_token": settings.dieaudit_api_key,
+        "access_token": access_token,
         "api_key_header": settings.api_key_header,
         "principal": principal,
         "service": settings.service_name,
     }
 
 
-async def _authenticate(request: Request, session: AsyncSession) -> dict[str, Any] | None:
+async def _authenticate(request: Request, db: AsyncSession) -> dict[str, Any] | None:
     settings = get_settings()
-    supplied = request.headers.get(settings.api_key_header) or _bearer_token(request.headers.get("Authorization"))
-    return await _authenticate_supplied(settings, session, supplied)
-
-
-async def _authenticate_supplied(settings: Any, session: AsyncSession, supplied: str | None) -> dict[str, Any] | None:
+    supplied = _supplied_api_key(request, settings)
     if not supplied:
         return None
-    if settings.dieaudit_api_key and secrets.compare_digest(supplied, settings.dieaudit_api_key):
+    bootstrap_key = settings.dieaudit_api_key.strip()
+    if bootstrap_key and secrets.compare_digest(supplied, bootstrap_key):
         return {"key_id": "bootstrap", "name": "Bootstrap administrator", "scopes": ["admin"], "source": "bootstrap"}
-    principal = await authenticate(session, supplied)
+    principal = await authenticate(db, supplied)
     if principal:
-        await session.commit()
+        await db.commit()
     return principal
+
+
+def _supplied_api_key(request: Request, settings: Any) -> str | None:
+    supplied = request.headers.get(settings.api_key_header) or _bearer_token(request.headers.get("Authorization"))
+    return supplied.strip() if supplied and supplied.strip() else None
 
 
 def _authenticate_admin_password(settings: Any, username: str, password: str) -> dict[str, Any] | None:
@@ -89,7 +91,7 @@ def _authenticate_admin_password(settings: Any, username: str, password: str) ->
 
 
 def _password_login_enabled(settings: Any) -> bool:
-    return bool(settings.dieaudit_admin_username and settings.dieaudit_admin_password)
+    return bool(settings.dieaudit_admin_username.strip() and settings.dieaudit_admin_password.strip())
 
 
 def _bearer_token(value: str | None) -> str | None:

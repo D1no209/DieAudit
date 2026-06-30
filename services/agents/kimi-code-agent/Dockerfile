@@ -46,9 +46,8 @@ shutil.copyfile(str(matches[0]), '/usr/local/bin/codebase-memory-mcp')" \
     && chmod 755 /usr/local/bin/codebase-memory-mcp \
     && codebase-memory-mcp --version
 
-COPY services/agents/opencode-agent/opencode_acp_runner.py /app/acp_runner.py
-COPY services/agents/opencode-agent/opencode_acp_runner.py /app/opencode_acp_runner.py
-COPY services/agents/opencode-agent/kimi_acp_runtime_server.py /app/kimi_acp_runtime_server.py
+COPY services/agents/kimi-code-agent/acp_runner.py /app/acp_runner.py
+COPY services/agents/kimi-code-agent/kimi_acp_runtime_server.py /app/kimi_acp_runtime_server.py
 
 WORKDIR /workspace
 

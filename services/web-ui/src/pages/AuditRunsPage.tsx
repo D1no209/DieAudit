@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AuditRun, CodeAnalysisTask, CreateAuditRunPayload, PipelineStatus, Project } from "../types";
+import type { AgentRuntimeAdapter, AuditRun, CodeAnalysisTask, CreateAuditRunPayload, PipelineStatus, Project } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Alert } from "../ui";
 import { AuditRunActionBar } from "./audit-runs/AuditRunActionBar";
@@ -11,6 +11,7 @@ import { RunContextPanel } from "./audit-runs/RunContextPanel";
 
 type Props = {
   agentRunsCount: number;
+  agentRuntimes: AgentRuntimeAdapter[];
   auditRun?: AuditRun;
   codeAnalysisTasks: CodeAnalysisTask[];
   lastResponse?: unknown;
@@ -29,6 +30,7 @@ type Props = {
 
 export function AuditRunsPage({
   agentRunsCount,
+  agentRuntimes,
   auditRun,
   codeAnalysisTasks,
   lastResponse,
@@ -103,6 +105,7 @@ export function AuditRunsPage({
       </div>
       <CodeAnalysisTasksPanel tasks={codeAnalysisTasks} />
       <AuditRunConfigModal
+        agentRuntimes={agentRuntimes}
         loading={loading}
         open={configOpen}
         onCancel={() => setConfigOpen(false)}

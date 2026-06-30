@@ -1,36 +1,22 @@
 import type { ReactNode } from "react";
 import type { DashboardController } from "../hooks/useDashboardController";
-import type { AppView } from "../navigation";
+import { projectHash, type AppView } from "../navigation";
 import { AdminPage } from "../pages/AdminPage";
+import { AgentMessagesPage } from "../pages/AgentMessagesPage";
 import { AgentRunsPage } from "../pages/AgentRunsPage";
 import { AuditRunsPage } from "../pages/AuditRunsPage";
 import { DependenciesPage } from "../pages/DependenciesPage";
 import { FindingReviewPage } from "../pages/FindingReviewPage";
 import { FindingsPage } from "../pages/FindingsPage";
 import { KnowledgePage } from "../pages/KnowledgePage";
-import { OverviewPage } from "../pages/OverviewPage";
 import { ProjectsPage } from "../pages/ProjectsPage";
 import { ReportsPage } from "../pages/ReportsPage";
+import { SwarmGraphPage } from "../pages/SwarmGraphPage";
 import { RuntimePage } from "../pages/RuntimePage";
 import { RuntimeContainersPage } from "../pages/RuntimeContainersPage";
 import { RuntimeReadinessPage } from "../pages/RuntimeReadinessPage";
 import { RuntimeSandboxPage } from "../pages/RuntimeSandboxPage";
 import { WhiteboardPage } from "../pages/WhiteboardPage";
-
-export function renderOverviewRoute({ state }: DashboardController) {
-  return (
-    <OverviewPage
-      apiHealth={state.apiHealth}
-      authStatus={state.authStatus}
-      dockerHealth={state.dockerHealth}
-      findingsCount={state.findings.length}
-      managedRuntime={state.managedRuntime}
-      projectsCount={state.projects.length}
-      runtimeReadiness={state.runtimeReadiness}
-      sandboxCapabilities={state.sandboxCapabilities}
-    />
-  );
-}
 
 export function renderProjectsRoute({ actions, columns, state }: DashboardController) {
   return (
@@ -42,7 +28,10 @@ export function renderProjectsRoute({ actions, columns, state }: DashboardContro
       selectedProjectId={state.selectedProjectId}
       zipFiles={state.zipFiles}
       onCreateGitProject={actions.createGitProject}
-      onSelectProject={actions.setSelectedProjectId}
+      onSelectProject={(projectId) => {
+        actions.setSelectedProjectId(projectId);
+        window.location.hash = projectHash("project-overview", projectId).replace(/^#/, "");
+      }}
       onSetZipFiles={actions.setZipFiles}
       onUploadZipProject={actions.uploadZipProject}
     />
@@ -53,6 +42,7 @@ export function renderAuditRunsRoute({ actions, state }: DashboardController) {
   return (
     <AuditRunsPage
       agentRunsCount={state.agentRuns.length}
+      agentRuntimes={state.agentRuntimes}
       auditRun={state.auditRun}
       codeAnalysisTasks={state.codeAnalysisTasks}
       lastResponse={state.lastResponse}
@@ -71,7 +61,7 @@ export function renderAuditRunsRoute({ actions, state }: DashboardController) {
   );
 }
 
-export function renderAgentRunsRoute({ actions, columns, state }: DashboardController, onViewChange: (view: AppView) => void) {
+export function renderAgentRunsRoute({ actions, columns, state }: DashboardController, _onViewChange: (view: AppView) => void) {
   return (
     <AgentRunsPage
       agentColumns={columns.agentColumns}
@@ -81,7 +71,21 @@ export function renderAgentRunsRoute({ actions, columns, state }: DashboardContr
       executionGraph={state.executionGraph}
       onOpenAgentEvents={actions.openAgentEvents}
       onOpenContainerLogs={actions.openContainerLogs}
-      onViewWhiteboard={() => onViewChange("whiteboard")}
+      onViewWhiteboard={() => {
+        window.location.hash = projectHash("project-whiteboard", state.selectedProjectId, state.auditRun?.audit_run_id).replace(/^#/, "");
+      }}
+    />
+  );
+}
+
+export function renderAgentMessagesRoute({ actions, state }: DashboardController) {
+  return (
+    <AgentMessagesPage
+      agentMessages={state.agentMessages}
+      agentRuns={state.agentRuns}
+      auditRun={state.auditRun}
+      loading={state.loading}
+      onOpenAgentMessages={actions.openAgentMessages}
     />
   );
 }
@@ -90,7 +94,7 @@ export function renderFindingsRoute({ actions, state }: DashboardController) {
   return <FindingsPage findings={state.findings} onOpenFinding={actions.openFinding} />;
 }
 
-export function renderFindingReviewRoute({ actions, state }: DashboardController, onViewChange: (view: AppView) => void) {
+export function renderFindingReviewRoute({ actions, state }: DashboardController, _onViewChange: (view: AppView) => void) {
   return (
     <FindingReviewPage
       loading={state.loading}
@@ -100,7 +104,9 @@ export function renderFindingReviewRoute({ actions, state }: DashboardController
       onOpenArtifact={actions.openArtifact}
       onPreviewArtifact={actions.previewArtifact}
       onRunFindingPoc={actions.runFindingPoc}
-      onViewFindings={() => onViewChange("findings")}
+      onViewFindings={() => {
+        window.location.hash = projectHash("project-findings", state.selectedProjectId, state.auditRun?.audit_run_id).replace(/^#/, "");
+      }}
     />
   );
 }
@@ -131,6 +137,10 @@ export function renderWhiteboardRoute({ actions, state }: DashboardController) {
       onRunWhiteboardSwarm={actions.runWhiteboardSwarm}
     />
   );
+}
+
+export function renderSwarmRoute({ state }: DashboardController) {
+  return <SwarmGraphPage agentRuns={state.agentRuns} auditRun={state.auditRun} whiteboard={state.whiteboard} />;
 }
 
 export function renderRuntimeRoute({ actions, columns, state }: DashboardController, onViewChange: (view: AppView) => void) {
@@ -213,15 +223,17 @@ export function renderAdminRoute({ actions, columns, state }: DashboardControlle
 }
 
 export const routeRenderers: Record<AppView, (dashboard: DashboardController, onViewChange: (view: AppView) => void) => ReactNode> = {
-  overview: renderOverviewRoute,
   projects: renderProjectsRoute,
-  "audit-runs": renderAuditRunsRoute,
-  "agent-runs": renderAgentRunsRoute,
-  findings: renderFindingsRoute,
-  "finding-review": renderFindingReviewRoute,
-  dependencies: renderDependenciesRoute,
-  whiteboard: renderWhiteboardRoute,
-  reports: renderReportsRoute,
+  "project-overview": renderProjectsRoute,
+  "project-audit-runs": renderAuditRunsRoute,
+  "project-agents": renderAgentRunsRoute,
+  "project-messages": renderAgentMessagesRoute,
+  "project-findings": renderFindingsRoute,
+  "project-finding-review": renderFindingReviewRoute,
+  "project-dependencies": renderDependenciesRoute,
+  "project-whiteboard": renderWhiteboardRoute,
+  "project-swarm": renderSwarmRoute,
+  "project-reports": renderReportsRoute,
   runtime: renderRuntimeRoute,
   "runtime-readiness": renderRuntimeReadinessRoute,
   "runtime-containers": renderRuntimeContainersRoute,

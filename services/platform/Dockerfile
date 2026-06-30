@@ -21,7 +21,7 @@ ENV DOTNET_ROOT=/opt/dotnet \
     PATH="/root/.dotnet/tools:/opt/dotnet:${PATH}"
 
 RUN apt-get update -o Acquire::Retries=5 \
-    && apt-get install -y --fix-missing -o Acquire::Retries=5 --no-install-recommends bash ca-certificates curl default-jre-headless git libicu72 unzip wget \
+    && apt-get install -y --fix-missing -o Acquire::Retries=5 --no-install-recommends bash ca-certificates curl default-jre-headless git libicu76 unzip wget \
     && mkdir -p /opt/cfr /opt/dotnet \
     && wget --tries=5 -q -O /opt/cfr/cfr.jar https://www.benf.org/other/cfr/cfr-0.152.jar \
     && printf '#!/bin/sh\nexec java -jar /opt/cfr/cfr.jar "$@"\n' > /usr/local/bin/cfr \

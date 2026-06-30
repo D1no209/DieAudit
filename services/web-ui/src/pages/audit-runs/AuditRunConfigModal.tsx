@@ -1,5 +1,5 @@
 import { Settings } from "lucide-react";
-import type { CreateAuditRunPayload } from "../../types";
+import type { AgentModelOverride, AgentRuntimeAdapter, CreateAuditRunPayload } from "../../types";
 import { Accordion, Button, CheckboxGroup, Dialog, Field, Input, NumberInput, SwitchField, Textarea, checkedFieldValue, fieldValue, numberFieldValue } from "../../ui";
 
 const agentOptions = [
@@ -12,6 +12,15 @@ const agentOptions = [
 ];
 
 const defaultGoal = "Run an initial security audit. Inspect the mounted source and report vulnerability candidates with file paths.";
+const modelRoles = [
+  { key: "orchestrator", label: "Orchestrator" },
+  { key: "code-auditor", label: "Code Auditor" },
+  { key: "source-sink-finder", label: "Trace Worker" },
+  { key: "validator", label: "Validator" },
+  { key: "judger", label: "Judger" },
+  { key: "poc-writer", label: "PoC Writer" },
+  { key: "poc-verifier", label: "PoC Verifier" },
+];
 
 const defaultPayload: Omit<CreateAuditRunPayload, "input_payload"> = {
   agent_name: "kimi-orchestrator",
@@ -58,13 +67,19 @@ const defaultPayload: Omit<CreateAuditRunPayload, "input_payload"> = {
 };
 
 type Props = {
+  agentRuntimes: AgentRuntimeAdapter[];
   loading: boolean;
   open: boolean;
   onCancel: () => void;
   onSubmit: (values: CreateAuditRunPayload) => void;
 };
 
-export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props) {
+export function AuditRunConfigModal({ agentRuntimes, loading, open, onCancel, onSubmit }: Props) {
+  const defaultRuntime = agentRuntimes[0];
+  const runtimeId = defaultRuntime?.runtime_id || "default-agent-runtime";
+  const defaultProvider = runtimeId;
+  const defaultModel = defaultRuntime?.default_model_profile || "default";
+  const defaultApiKeyEnv = `${runtimeId.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}_API_KEY`;
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()} title={<span className="inline-flex items-center gap-2"><Settings className="h-4 w-4" />审计任务配置</span>}>
       <form
@@ -73,6 +88,7 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
           event.preventDefault();
           const formData = new FormData(event.currentTarget);
           const preflight = fieldValue(formData, "preflight_prompt")?.trim();
+          const modelOverrides = buildModelOverrides(formData, runtimeId);
           onSubmit({
             agent_name: fieldValue(formData, "agent_name"),
             enabled_agents: formData.getAll("enabled_agents").map(String),
@@ -115,6 +131,10 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
             retain_runtime_on_failure: checkedFieldValue(formData, "retain_runtime_on_failure"),
             start_agent: checkedFieldValue(formData, "start_agent"),
             input_payload: { goal: preflight || defaultGoal },
+            config: {
+              agent_runtime: { default_runtime_id: runtimeId },
+              model_overrides: modelOverrides,
+            },
           });
         }}
       >
@@ -139,6 +159,38 @@ export function AuditRunConfigModal({ loading, open, onCancel, onSubmit }: Props
                     <TextField name="validation_judgement_agent_name" label="Validation-Judgement 模板" />
                     <TextField name="poc_writer_agent_name" label="PoC Writer 模板" />
                     <TextField name="poc_verifier_agent_name" label="PoC Verifier 模板" />
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: "models",
+              title: "Models",
+              children: (
+                <div className="grid gap-4">
+                  <Field label="Runtime Adapter" hint="由 BFF runtime registry 提供；新增 runtime adapter 后会复用同一配置结构。">
+                    <Input name="default_runtime_id" value={runtimeId} readOnly />
+                  </Field>
+                  <div className="grid gap-3">
+                    {modelRoles.map((role) => (
+                      <div key={role.key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="font-medium text-slate-900">{role.label}</div>
+                          <span className="text-xs text-slate-500">{role.key}</span>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <ModelInput role={role.key} field="provider" label="Provider" defaultValue={defaultProvider} />
+                          <ModelInput role={role.key} field="model" label="Model" defaultValue={defaultModel} />
+                          <ModelInput role={role.key} field="api_key_env" label="API key env" defaultValue={defaultApiKeyEnv} />
+                          <ModelInput role={role.key} field="temperature" label="Temperature" defaultValue="0.1" type="number" step="0.1" />
+                          <ModelInput role={role.key} field="max_output_tokens" label="Max tokens" defaultValue="8192" type="number" />
+                          <ModelInput role={role.key} field="context_window" label="Context window" defaultValue="128000" type="number" />
+                          <div className="md:col-span-3">
+                            <ModelInput role={role.key} field="base_url" label="Base URL override" defaultValue="" placeholder="Optional" />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ),
@@ -223,5 +275,54 @@ function NumberField({ label, max, min, name }: { label: string; max: number; mi
     <Field label={label}>
       <NumberInput name={name} min={min} max={max} defaultValue={Number(defaultPayload[name] || 0)} />
     </Field>
+  );
+}
+
+function ModelInput({
+  defaultValue,
+  field,
+  label,
+  placeholder,
+  role,
+  step,
+  type = "text",
+}: {
+  defaultValue: string;
+  field: keyof AgentModelOverride;
+  label: string;
+  placeholder?: string;
+  role: string;
+  step?: string;
+  type?: string;
+}) {
+  return (
+    <Field label={label}>
+      <Input name={`model_overrides.${role}.${field}`} defaultValue={defaultValue} placeholder={placeholder} step={step} type={type} />
+    </Field>
+  );
+}
+
+function buildModelOverrides(formData: FormData, runtimeId: string): Record<string, AgentModelOverride> {
+  const defaultApiKeyEnv = `${runtimeId.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}_API_KEY`;
+  return Object.fromEntries(
+    modelRoles.map((role) => {
+      const prefix = `model_overrides.${role.key}.`;
+      const provider = fieldValue(formData, `${prefix}provider`) || runtimeId;
+      const model = fieldValue(formData, `${prefix}model`) || "default";
+      const baseUrl = fieldValue(formData, `${prefix}base_url`)?.trim();
+      const override: AgentModelOverride = {
+        runtime_id: runtimeId,
+        provider,
+        model,
+        temperature: numberFieldValue(formData, `${prefix}temperature`),
+        max_output_tokens: numberFieldValue(formData, `${prefix}max_output_tokens`),
+        context_window: numberFieldValue(formData, `${prefix}context_window`),
+        api_key_env: fieldValue(formData, `${prefix}api_key_env`) || defaultApiKeyEnv,
+      };
+      if (baseUrl) {
+        override.base_url = baseUrl;
+      }
+      return [role.key, override];
+    }),
   );
 }

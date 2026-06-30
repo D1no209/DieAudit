@@ -1,5 +1,5 @@
 import * as dashboardApi from "../../client/dashboardApi";
-import { hashFromAppView } from "../../navigation";
+import { projectHash } from "../../navigation";
 import type { ArtifactRef, ContainerRow } from "../../types";
 import { toast } from "../../ui/toast";
 import { artifactFileName, artifactUrl } from "../../utils/format";
@@ -14,6 +14,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
   const {
     auditRun,
     setAgentEvents,
+    setAgentMessages,
     setArtifactPreview,
     setContainerLogs,
     setLastResponse,
@@ -129,7 +130,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     await runner.runAction(async () => {
       const result = await dashboardApi.getFinding(findingId);
       setSelectedFinding(result);
-      window.location.hash = hashFromAppView("finding-review");
+      window.location.hash = projectHash("project-finding-review", auditRun?.project_id, auditRun?.audit_run_id).replace(/^#/, "");
     });
   }
 
@@ -140,6 +141,16 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     await runner.runAction(async () => {
       const result = await dashboardApi.getAgentEvents(auditRun.audit_run_id, agentRunId);
       setAgentEvents(result);
+    });
+  }
+
+  async function openAgentMessages(agentRunId: string) {
+    if (!auditRun) {
+      return;
+    }
+    await runner.runAction(async () => {
+      const result = await dashboardApi.getAgentMessages(auditRun.audit_run_id, agentRunId);
+      setAgentMessages(result);
     });
   }
 
@@ -180,6 +191,7 @@ export function useAuditRunActions(dashboardState: DashboardStateController, run
     cleanup,
     generateReport,
     openAgentEvents,
+    openAgentMessages,
     openArtifact,
     openContainerLogs,
     openFinding,

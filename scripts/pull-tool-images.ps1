@@ -17,7 +17,7 @@ $images = @(
     "anchore/syft:latest"
 )
 
-docker compose --profile tools build tool-mcp-image opencode-agent-image kimi-code-agent-image
+docker compose --profile tools build tool-mcp-image kimi-code-agent-image
 if ($IncludeDemo) {
     docker compose --profile demo build mock-agent-image mock-mcp-image
 }

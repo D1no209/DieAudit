@@ -78,6 +78,7 @@ from app.domain.models import (
     WhiteboardEdge,
     WorkerHeartbeat,
 )
+from app.runtime.agent_runtime_registry import default_agent_template, required_agent_template_names
 from app.integrations.docker import DockerApiError
 from app.integrations.protocols import classify_agent_protocol, fetch_a2a_agent_card, serialize_capabilities
 from app.repositories import SessionLocal
@@ -630,19 +631,6 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             ).scalars()
             return [_snapshot_to_dict(row) for row in rows]
 
-    @router.get("/projects/{project_id}/audit-runs")
-    async def list_project_audit_runs(request: Request, project_id: str) -> list[dict[str, Any]]:
-        await _require_project_access(getattr(request.state, "auth_principal", None), project_id)
-        async with SessionLocal() as session:
-            rows = (
-                await session.execute(
-                    select(AuditRun)
-                    .where(AuditRun.project_id == project_id)
-                    .order_by(AuditRun.created_at.desc())
-                )
-            ).scalars()
-            return [_audit_run_to_dict(row) for row in rows]
-
     @router.post("/projects/{project_id}/audit-runs")
     async def create_audit_run(request: Request, project_id: str, body: CreateAuditRunRequest) -> dict[str, Any]:
         principal = getattr(request.state, "auth_principal", None)
@@ -658,64 +646,58 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             input_payload = dict(body.input_payload or {})
             if body.preflight_prompt:
                 input_payload["preflight_prompt"] = body.preflight_prompt
-            audit_config = {
-                "agent_name": body.agent_name,
-                "enabled_agents": body.enabled_agents,
-                "preflight_prompt": body.preflight_prompt,
-                "input_payload": input_payload,
-                "workspace_host_path": snapshot.workspace_path,
-                "enable_code_batch_analysis": body.enable_code_batch_analysis,
-                "enable_batch_internal_semgrep": body.enable_batch_internal_semgrep,
-                "enable_batch_internal_sca": body.enable_batch_internal_sca,
-                "max_code_audit_tasks": body.max_code_audit_tasks,
-                "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
-                "max_parallel_code_auditors": body.max_parallel_code_auditors,
-                "code_auditor_agent_name": body.code_auditor_agent_name,
-                "enable_source_sink_analysis": body.enable_source_sink_analysis,
-                "source_sink_finder_agent_name": body.source_sink_finder_agent_name,
-                "max_parallel_source_sink_finders": body.max_parallel_source_sink_finders,
-                "max_source_sink_findings": body.max_source_sink_findings,
-                "enable_validators": body.enable_validators,
-                "validator_agent_name": body.validator_agent_name,
-                "enable_validation_judgement": body.enable_validation_judgement,
-                "validation_judgement_agent_name": body.validation_judgement_agent_name,
-                "enable_judgement": body.enable_judgement,
-                "judger_agent_name": body.judger_agent_name,
-                "max_parallel_judgers": body.max_parallel_judgers,
-                "enable_poc_writing": body.enable_poc_writing,
-                "poc_writer_agent_name": body.poc_writer_agent_name,
-                "max_parallel_poc_writers": body.max_parallel_poc_writers,
-                "max_poc_findings": body.max_poc_findings,
-                "enable_poc_verification": body.enable_poc_verification,
-                "poc_verifier_agent_name": body.poc_verifier_agent_name,
-                "max_parallel_poc_verifiers": body.max_parallel_poc_verifiers,
-                "enable_decompilation": body.enable_decompilation,
-                "decompiled_source_dir": body.decompiled_source_dir,
-                "decompile_max_artifact_size_mb": body.decompile_max_artifact_size_mb,
-                "decompile_timeout_seconds": body.decompile_timeout_seconds,
-                "decompile_max_artifacts": body.decompile_max_artifacts,
-                "enable_feedback_loop": body.enable_feedback_loop,
-                "max_feedback_rounds": body.max_feedback_rounds,
-                "enable_whiteboard": True,
-                "enable_whiteboard_swarm": True,
-                "max_whiteboard_rounds": 3,
-                "max_whiteboard_tasks_per_round": 8,
-            }
             audit_run = AuditRun(
                 audit_run_id=audit_run_id,
                 project_id=project_id,
                 snapshot_id=snapshot.snapshot_id,
                 status="starting" if body.start_agent else "created",
-                pipeline_status="pending",
-                workspace_path=snapshot.workspace_path,
                 validator_rounds=body.validator_rounds,
                 max_parallel_validators=body.max_parallel_validators,
                 allow_external_network=body.allow_external_network,
                 retain_runtime_on_failure=body.retain_runtime_on_failure,
-                config_json=audit_config,
-                input_payload=input_payload,
-                metadata_json={},
-                config=audit_config,
+                config={
+                    "agent_name": body.agent_name,
+                    "enabled_agents": body.enabled_agents,
+                    "preflight_prompt": body.preflight_prompt,
+                    "input_payload": input_payload,
+                    "workspace_host_path": snapshot.workspace_path,
+                    "enable_code_batch_analysis": body.enable_code_batch_analysis,
+                    "enable_batch_internal_semgrep": body.enable_batch_internal_semgrep,
+                    "enable_batch_internal_sca": body.enable_batch_internal_sca,
+                    "max_code_audit_tasks": body.max_code_audit_tasks,
+                    "max_files_per_code_audit_task": body.max_files_per_code_audit_task,
+                    "max_parallel_code_auditors": body.max_parallel_code_auditors,
+                    "code_auditor_agent_name": body.code_auditor_agent_name,
+                    "enable_source_sink_analysis": body.enable_source_sink_analysis,
+                    "source_sink_finder_agent_name": body.source_sink_finder_agent_name,
+                    "max_parallel_source_sink_finders": body.max_parallel_source_sink_finders,
+                    "max_source_sink_findings": body.max_source_sink_findings,
+                    "enable_validators": body.enable_validators,
+                    "validator_agent_name": body.validator_agent_name,
+                    "enable_validation_judgement": body.enable_validation_judgement,
+                    "validation_judgement_agent_name": body.validation_judgement_agent_name,
+                    "enable_judgement": body.enable_judgement,
+                    "judger_agent_name": body.judger_agent_name,
+                    "max_parallel_judgers": body.max_parallel_judgers,
+                    "enable_poc_writing": body.enable_poc_writing,
+                    "poc_writer_agent_name": body.poc_writer_agent_name,
+                    "max_parallel_poc_writers": body.max_parallel_poc_writers,
+                    "max_poc_findings": body.max_poc_findings,
+                    "enable_poc_verification": body.enable_poc_verification,
+                    "poc_verifier_agent_name": body.poc_verifier_agent_name,
+                    "max_parallel_poc_verifiers": body.max_parallel_poc_verifiers,
+                    "enable_decompilation": body.enable_decompilation,
+                    "decompiled_source_dir": body.decompiled_source_dir,
+                    "decompile_max_artifact_size_mb": body.decompile_max_artifact_size_mb,
+                    "decompile_timeout_seconds": body.decompile_timeout_seconds,
+                    "decompile_max_artifacts": body.decompile_max_artifacts,
+                    "enable_feedback_loop": body.enable_feedback_loop,
+                    "max_feedback_rounds": body.max_feedback_rounds,
+                    "enable_whiteboard": True,
+                    "enable_whiteboard_swarm": True,
+                    "max_whiteboard_rounds": 3,
+                    "max_whiteboard_tasks_per_round": 8,
+                },
             )
             session.add(audit_run)
             await session.commit()
@@ -1623,9 +1605,9 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             "workflow_worker": bool(worker_health.get("ok")),
             "demo_templates_hidden": not bool(settings.enable_demo_templates or exposed_mock_agents or exposed_mock_mcps),
             "model_configured": any(model_env.values()),
-            "opencode_templates_present": all(
+            "agent_runtime_templates_present": all(
                 name in {str(template.get("name")) for template in agent_templates}
-                for name in ["opencode-orchestrator", "opencode-validator", "opencode-judger"]
+                for name in sorted(required_agent_template_names())
             ),
         }
         return {
@@ -1641,7 +1623,7 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             "model_env": model_env,
             "recommended_gateway_base_url": "http://localhost:8080/gateway",
             "notes": [
-                "Without a model API key the smoke script should skip the real OpenCode pipeline segment.",
+                "Without a model API key the smoke script should skip the real agent runtime pipeline segment.",
                 "Use /runtime/readiness for full production readiness blockers.",
             ],
         }
@@ -2091,12 +2073,12 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         )
         return await _start_agent_run_impl(audit_run_id, body)
 
-    @router.post("/audit-runs/{audit_run_id}/opencode-demo")
-    async def start_opencode_demo(request: Request, audit_run_id: str = "opencode-demo-run") -> dict[str, Any]:
+    @router.post("/audit-runs/{audit_run_id}/agent-runtime-demo")
+    async def start_agent_runtime_demo(request: Request, audit_run_id: str = "agent-runtime-demo-run") -> dict[str, Any]:
         _require_unrestricted_resource_scope(getattr(request.state, "auth_principal", None), "demo audit run")
         if not settings.enable_demo_templates:
-            raise HTTPException(status_code=403, detail="demo templates are disabled; set ENABLE_DEMO_TEMPLATES=true to run OpenCode demos")
-        workspace = settings.workspace_root / "opencode-demo-project"
+            raise HTTPException(status_code=403, detail="demo templates are disabled; set ENABLE_DEMO_TEMPLATES=true to run agent runtime demos")
+        workspace = settings.workspace_root / "agent-runtime-demo-project"
         workspace.mkdir(parents=True, exist_ok=True)
         demo_file = workspace / "app.py"
         if not demo_file.exists():
@@ -2109,8 +2091,8 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
             )
         body = StartAgentRunRequest(
             audit_run_id=audit_run_id,
-            project_id="opencode-demo-project",
-            agent_name="opencode-orchestrator",
+            project_id="agent-runtime-demo-project",
+            agent_name=default_agent_template("orchestrator"),
             workspace_host_path=str(workspace),
             allow_external_network=False,
             input_payload={
@@ -2943,19 +2925,8 @@ def _metadata_id_set(value: Any) -> set[str]:
 
 async def _record_snapshot(snapshot: dict[str, Any]) -> None:
     async with SessionLocal() as session:
-        existing = await session.scalar(select(ProjectSnapshot).where(ProjectSnapshot.snapshot_id == snapshot["snapshot_id"]))
-        if existing:
-            existing.project_id = snapshot["project_id"]
-            existing.source_type = snapshot["source_type"]
-            existing.source_ref = snapshot.get("source_ref")
-            existing.workspace_path = snapshot["workspace_path"]
-            existing.artifact_path = snapshot.get("artifact_path")
-            existing.content_hash = snapshot.get("content_hash")
-            existing.status = "ready"
-            existing.metadata_json = existing.metadata_json or {}
-        else:
-            session.add(
-                ProjectSnapshot(
+        session.add(
+            ProjectSnapshot(
                 snapshot_id=snapshot["snapshot_id"],
                 project_id=snapshot["project_id"],
                 source_type=snapshot["source_type"],
@@ -2966,7 +2937,7 @@ async def _record_snapshot(snapshot: dict[str, Any]) -> None:
                 status="ready",
                 metadata_json={},
             )
-            )
+        )
         await session.commit()
 
 
@@ -3322,7 +3293,7 @@ async def _record_pipeline_event(audit_run_id: str, event_type: str, payload: di
             select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
         )
         if agent_run:
-            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload_json=payload, payload=payload))
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type=event_type, payload=payload))
             await session.commit()
 
 
@@ -3358,9 +3329,6 @@ async def _set_pipeline_state(
             state["error"] = error
         config["pipeline_state"] = state
         audit_run.config = config
-        audit_run.config_json = config
-        audit_run.pipeline_status = status
-        audit_run.current_stage = stage
         await session.commit()
 
 
@@ -3376,7 +3344,7 @@ async def _record_pipeline_summary(audit_run_id: str, summary: dict[str, Any]) -
             select(AgentRun).where(AgentRun.audit_run_id == audit_run_id).order_by(AgentRun.created_at.desc())
         )
         if agent_run:
-            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type="pipeline_summary", payload_json=summary, payload=summary))
+            session.add(AgentRunEvent(agent_run_id=agent_run.agent_run_id, event_type="pipeline_summary", payload=summary))
         await session.commit()
 
 
@@ -3514,7 +3482,7 @@ async def _run_structure_discovery(
     }
     await _record_pipeline_event(audit_run_id, "structure_discovery_bootstrap_completed", _compact_event_payload(result))
     if bool(config.get("enable_structure_discovery_agent", True)) and runtime is not None:
-        agent_name = str(config.get("structure_discovery_agent_name") or config.get("agent_name") or "opencode-orchestrator")
+        agent_name = str(config.get("structure_discovery_agent_name") or config.get("agent_name") or default_agent_template("orchestrator"))
         try:
             agent_result = await runtime.start_agent_run(
                 audit_run_id=audit_run_id,
@@ -3925,7 +3893,7 @@ async def _run_judger_finding_internal(audit_run_id: str, runtime: Any, audit_ru
         agent_result = await runtime.start_agent_run(
             audit_run_id=audit_run_id,
             project_id=audit_run["project_id"],
-            agent_name=str(config.get("judger_agent_name") or "opencode-judger"),
+            agent_name=str(config.get("judger_agent_name") or default_agent_template("judger")),
             workspace_host_path=workspace_path,
             allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
             retain_runtime_on_failure=audit_run["retain_runtime_on_failure"],
@@ -3952,7 +3920,7 @@ async def _run_judger_finding_internal(audit_run_id: str, runtime: Any, audit_ru
             title="Judger Report",
             payload={"decisions": decisions, "agent_result": _compact_event_payload(agent_result)},
         )
-        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        failed = str(agent_result.get("status") or agent_result.get("acp_status") or "").lower() == "failed" or bool(agent_result.get("error"))
         return {
             "finding_id": finding_id,
             "status": "failed" if failed else "completed",
@@ -4075,7 +4043,7 @@ async def _run_source_sink_finding_internal(
             agent_run_id=agent_run_id or None,
             chains=chains,
         )
-        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        failed = str(agent_result.get("status") or agent_result.get("acp_status") or "").lower() == "failed" or bool(agent_result.get("error"))
         status = "failed" if failed else "completed"
         result = {
             "finding_id": finding_id,
@@ -4141,7 +4109,7 @@ async def _run_whiteboard_swarm(
     triage = await _triage_whiteboard_swarm_candidates(audit_run_id)
     rounds = max(1, int(override_rounds or config.get("max_whiteboard_rounds") or 3))
     max_tasks_per_round = max(1, int(override_max_tasks_per_round or config.get("max_whiteboard_tasks_per_round") or 8))
-    controller_agent = str(config.get("whiteboard_swarm_agent_name") or config.get("agent_name") or "opencode-orchestrator")
+    controller_agent = str(config.get("whiteboard_swarm_agent_name") or config.get("agent_name") or default_agent_template("orchestrator"))
     settings = get_settings()
     async with SessionLocal() as session:
         service = WhiteboardService(settings, session)
@@ -4201,10 +4169,10 @@ async def _run_whiteboard_swarm(
                     "allowed_agent_names": [
                         "kimi-source-sink-finder",
                         "kimi-validator",
-                        "opencode-judger",
-                        "opencode-poc-writer",
-                        "opencode-poc-verifier",
-                        "opencode-code-auditor",
+                        default_agent_template("judger"),
+                        default_agent_template("poc-writer"),
+                        default_agent_template("poc-verifier"),
+                        default_agent_template("code-auditor"),
                     ],
                     "instruction": (
                         "You decide the next Agent work, but you must only schedule work for card IDs listed in "
@@ -4222,7 +4190,7 @@ async def _run_whiteboard_swarm(
             },
         )
         agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
-        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        failed = str(agent_result.get("status") or agent_result.get("acp_status") or "").lower() == "failed" or bool(agent_result.get("error"))
         status = "failed" if failed else "completed"
         async with SessionLocal() as session:
             row = await session.scalar(select(WhiteboardTask).where(WhiteboardTask.task_id == task.task_id))
@@ -4763,7 +4731,7 @@ async def _run_poc_writer_finding_internal(audit_run_id: str, runtime: Any, audi
         agent_result = await runtime.start_agent_run(
             audit_run_id=audit_run_id,
             project_id=audit_run["project_id"],
-            agent_name=str(config.get("poc_writer_agent_name") or "opencode-poc-writer"),
+            agent_name=str(config.get("poc_writer_agent_name") or default_agent_template("poc-writer")),
             workspace_host_path=workspace_path,
             allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
             retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
@@ -4777,7 +4745,7 @@ async def _run_poc_writer_finding_internal(audit_run_id: str, runtime: Any, audi
             agent_run_id=agent_run_id or None,
             pocs=pocs,
         )
-        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        failed = str(agent_result.get("status") or agent_result.get("acp_status") or "").lower() == "failed" or bool(agent_result.get("error"))
         status = "failed" if failed else "completed"
         result = {
             "finding_id": finding_id,
@@ -4878,7 +4846,7 @@ async def _run_poc_verifier_finding_internal(
         agent_result = await runtime.start_agent_run(
             audit_run_id=audit_run_id,
             project_id=audit_run["project_id"],
-            agent_name=str(config.get("poc_verifier_agent_name") or "opencode-poc-verifier"),
+            agent_name=str(config.get("poc_verifier_agent_name") or default_agent_template("poc-verifier")),
             workspace_host_path=workspace_path,
             allow_external_network=_effective_agent_external_network(audit_run, get_settings()),
             retain_runtime_on_failure=bool(audit_run.get("retain_runtime_on_failure")),
@@ -4892,7 +4860,7 @@ async def _run_poc_verifier_finding_internal(
             agent_run_id=agent_run_id or None,
             verifications=verifications,
         )
-        failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+        failed = str(agent_result.get("status") or agent_result.get("acp_status") or "").lower() == "failed" or bool(agent_result.get("error"))
         status = "failed" if failed else "completed"
         result = {
             "finding_id": finding_id,
@@ -6308,7 +6276,7 @@ async def _run_code_batch_analysis(
     max_tasks = int(config.get("max_code_audit_tasks") or 8)
     max_files_per_task = int(config.get("max_files_per_code_audit_task") or 25)
     max_parallel_agents = int(config.get("max_parallel_code_auditors") or 2)
-    agent_name = str(config.get("code_auditor_agent_name") or "opencode-code-auditor")
+    agent_name = str(config.get("code_auditor_agent_name") or default_agent_template("code-auditor"))
     planner = CodeAuditPlanner(workspace_path)
     plans = planner.plan(max_tasks=max_tasks, max_files_per_task=max_files_per_task)
     await _record_pipeline_event(
@@ -6412,7 +6380,7 @@ async def _run_code_batch_analysis(
                 await _record_pipeline_event(audit_run_id, "code_analysis_task_failed", result)
                 return result
             agent_run_id = str(agent_result.get("agent_run_id") or agent_result.get("run_id") or "")
-            failed = str(agent_result.get("opencode_status") or "").lower() == "failed" or bool(agent_result.get("error"))
+            failed = str(agent_result.get("status") or agent_result.get("acp_status") or "").lower() == "failed" or bool(agent_result.get("error"))
             status = "failed" if failed else "completed"
             result = {
                 "task_id": task_db_id,

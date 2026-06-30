@@ -1,6 +1,21 @@
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.runtime.agent_runtime_registry import default_agent_template
+
+
+DEFAULT_AGENT_TEMPLATES = {
+    role: default_agent_template(role)
+    for role in [
+        "orchestrator",
+        "code-auditor",
+        "source-sink-finder",
+        "validator",
+        "judger",
+        "poc-writer",
+        "poc-verifier",
+    ]
+}
 
 
 class StartAgentRunRequest(BaseModel):
@@ -15,7 +30,7 @@ class StartAgentRunRequest(BaseModel):
 
 class EnsureAgentRuntimeRequest(BaseModel):
     project_id: str = Field(min_length=1)
-    agent_name: str = Field(default="opencode-orchestrator")
+    agent_name: str = Field(default=DEFAULT_AGENT_TEMPLATES["orchestrator"])
     workspace_host_path: str | None = None
     allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
@@ -46,7 +61,7 @@ class CreateProjectRequest(BaseModel):
 
 class CreateAuditRunRequest(BaseModel):
     snapshot_id: str | None = None
-    agent_name: str = "opencode-orchestrator"
+    agent_name: str = DEFAULT_AGENT_TEMPLATES["orchestrator"]
     enabled_agents: list[str] = Field(
         default_factory=lambda: [
             "orchestrator",
@@ -61,9 +76,9 @@ class CreateAuditRunRequest(BaseModel):
     preflight_prompt: str | None = None
     validator_rounds: int = Field(default=1, ge=1)
     max_parallel_validators: int = Field(default=2, ge=1)
-    validator_agent_name: str = "opencode-validator"
+    validator_agent_name: str = DEFAULT_AGENT_TEMPLATES["validator"]
     enable_validation_judgement: bool = True
-    validation_judgement_agent_name: str = "opencode-validator"
+    validation_judgement_agent_name: str = DEFAULT_AGENT_TEMPLATES["validator"]
     enable_feedback_loop: bool = True
     max_feedback_rounds: int = Field(default=2, ge=0, le=10)
     enable_code_batch_analysis: bool = True
@@ -72,21 +87,21 @@ class CreateAuditRunRequest(BaseModel):
     max_code_audit_tasks: int = Field(default=8, ge=1, le=100)
     max_files_per_code_audit_task: int = Field(default=25, ge=1, le=200)
     max_parallel_code_auditors: int = Field(default=2, ge=1, le=20)
-    code_auditor_agent_name: str = "opencode-code-auditor"
+    code_auditor_agent_name: str = DEFAULT_AGENT_TEMPLATES["code-auditor"]
     enable_source_sink_analysis: bool = True
-    source_sink_finder_agent_name: str = "opencode-source-sink-finder"
+    source_sink_finder_agent_name: str = DEFAULT_AGENT_TEMPLATES["source-sink-finder"]
     max_parallel_source_sink_finders: int = Field(default=2, ge=1, le=20)
     max_source_sink_findings: int = Field(default=50, ge=1, le=500)
     enable_validators: bool = True
     enable_judgement: bool = True
-    judger_agent_name: str = "opencode-judger"
+    judger_agent_name: str = DEFAULT_AGENT_TEMPLATES["judger"]
     max_parallel_judgers: int = Field(default=2, ge=1, le=20)
     enable_poc_writing: bool = True
-    poc_writer_agent_name: str = "opencode-poc-writer"
+    poc_writer_agent_name: str = DEFAULT_AGENT_TEMPLATES["poc-writer"]
     max_parallel_poc_writers: int = Field(default=2, ge=1, le=20)
     max_poc_findings: int = Field(default=25, ge=1, le=500)
     enable_poc_verification: bool = True
-    poc_verifier_agent_name: str = "opencode-poc-verifier"
+    poc_verifier_agent_name: str = DEFAULT_AGENT_TEMPLATES["poc-verifier"]
     max_parallel_poc_verifiers: int = Field(default=2, ge=1, le=20)
     enable_decompilation: bool = True
     decompiled_source_dir: str = ".dieaudit/decompiled"
@@ -103,7 +118,7 @@ class CodeBatchAnalysisRequest(BaseModel):
     max_tasks: int = Field(default=8, ge=1, le=100)
     max_files_per_task: int = Field(default=25, ge=1, le=200)
     max_parallel_agents: int = Field(default=2, ge=1, le=20)
-    agent_name: str = "opencode-code-auditor"
+    agent_name: str = DEFAULT_AGENT_TEMPLATES["code-auditor"]
     wait_for_completion: bool = True
 
 
@@ -285,7 +300,7 @@ class ValidatorScaleRequest(BaseModel):
     workspace_host_path: str | None = None
     validator_rounds: int = Field(default=1, ge=1)
     max_parallel_validators: int = Field(default=2, ge=1)
-    validator_agent_name: str = "opencode-validator"
+    validator_agent_name: str = DEFAULT_AGENT_TEMPLATES["validator"]
     allow_external_network: bool = False
     retain_runtime_on_failure: bool = False
     wait_for_completion: bool = False

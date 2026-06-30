@@ -332,6 +332,50 @@ export type AgentRunEvent = {
   created_at: string;
 };
 
+export type AgentTranscriptEvent = {
+  id: number;
+  agent_run_id: string;
+  audit_run_id?: string;
+  runtime_id?: string;
+  seq: number;
+  event_type: string;
+  session_id?: string;
+  payload: Record<string, unknown>;
+  content_text?: string;
+  created_at: string;
+};
+
+export type FlowNodeData = {
+  kind: string;
+  label: string;
+  status?: string;
+  group?: string;
+  target?: ExecutionGraphNode["target"];
+  summary?: string;
+  raw?: unknown;
+};
+
+export type AgentRuntimeAdapter = {
+  runtime_id: string;
+  display_name: string;
+  protocol_kind: string;
+  template_runtime: string;
+  image: string;
+  capabilities: string[];
+  default_model_profile: string;
+};
+
+export type AgentModelOverride = {
+  runtime_id: string;
+  provider: string;
+  model: string;
+  temperature?: number;
+  max_output_tokens?: number;
+  context_window?: number;
+  base_url?: string;
+  api_key_env?: string;
+};
+
 export type ExecutionGraphNode = {
   id: string;
   kind: string;
@@ -688,6 +732,11 @@ export type CreateAuditRunPayload = {
   allow_external_network?: boolean;
   retain_runtime_on_failure?: boolean;
   input_payload?: Record<string, unknown>;
+  config?: {
+    agent_runtime?: { default_runtime_id: string };
+    model_overrides?: Record<string, AgentModelOverride>;
+    [key: string]: unknown;
+  };
   start_agent?: boolean;
 };
 

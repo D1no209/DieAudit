@@ -1,4 +1,7 @@
-import { Clock, GitBranch, Network, PlayCircle } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Clock, PlayCircle } from "lucide-react";
+import { FlowCanvas, type FlowNode } from "../components/flow/FlowCanvas";
+import { whiteboardToFlow } from "../components/flow/flowMappers";
 import type { AuditRun, WhiteboardGraph } from "../types";
 import { Alert, Badge, Button, EmptyState, MetricCard, Panel, Tabs } from "../ui";
 import { statusTone } from "../utils/format";
@@ -12,6 +15,8 @@ type Props = {
 };
 
 export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardSwarm }: Props) {
+  const [selectedNode, setSelectedNode] = useState<FlowNode | undefined>();
+  const flow = useMemo(() => whiteboardToFlow(whiteboard), [whiteboard]);
   const cards = whiteboard?.cards || [];
   const edges = whiteboard?.edges || [];
   const tasks = whiteboard?.tasks || [];
@@ -43,6 +48,49 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
         <MetricCard label="Events" value={events.length} />
         <MetricCard label="Pending notices" value={notifications.filter((item) => item.status === "pending").length} />
         <MetricCard label="Evidence" value={evidence.length} />
+      </div>
+
+      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <FlowCanvas
+          title="Whiteboard Graph"
+          description="Cards, evidence, and findings are connected as a traceable audit graph."
+          nodes={flow.nodes}
+          edges={flow.edges}
+          height={620}
+          onNodeSelect={setSelectedNode}
+        />
+        <Panel title="Inspector">
+          {selectedNode ? (
+            <Tabs
+              items={[
+                {
+                  key: "summary",
+                  label: "Summary",
+                  children: (
+                    <div className="grid gap-3 text-sm">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge>{selectedNode.data.kind}</Badge>
+                        {selectedNode.data.status ? <Badge tone={statusTone(selectedNode.data.status)}>{selectedNode.data.status}</Badge> : null}
+                        {selectedNode.data.group ? <Badge>{selectedNode.data.group}</Badge> : null}
+                      </div>
+                      <div>
+                        <div className="font-medium text-slate-900">{selectedNode.data.label}</div>
+                        <p className="mt-2 whitespace-pre-wrap leading-6 text-slate-600">{selectedNode.data.summary || "No content"}</p>
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: "raw",
+                  label: "Payload",
+                  children: <pre className="max-h-[520px] overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(selectedNode.data.raw, null, 2)}</pre>,
+                },
+              ]}
+            />
+          ) : (
+            <EmptyState description="Select a whiteboard node" />
+          )}
+        </Panel>
       </div>
 
       <div className="mb-5 grid gap-4 xl:grid-cols-2">

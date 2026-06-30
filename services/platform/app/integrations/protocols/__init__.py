@@ -5,11 +5,11 @@ from .capabilities import (
     protocol_capabilities,
     serialize_capabilities,
 )
-from .opencode_acp import OpenCodeAcpClient, OpenCodeAcpResult
+from .acp_runtime import AcpRuntimeClient, AcpRuntimeResult
 
 __all__ = [
-    "OpenCodeAcpClient",
-    "OpenCodeAcpResult",
+    "AcpRuntimeClient",
+    "AcpRuntimeResult",
     "ProtocolCapability",
     "classify_agent_protocol",
     "fetch_a2a_agent_card",

@@ -1,8 +1,10 @@
-import { Bot, Boxes, GitBranch, Network, SquareStack } from "lucide-react";
-import type { AgentRun, AuditRun, ContainerRow, ExecutionGraph, ExecutionGraphNode } from "../types";
+import { useMemo, useState } from "react";
+import { Bot, SquareStack } from "lucide-react";
+import { FlowCanvas, type FlowNode } from "../components/flow/FlowCanvas";
+import { executionGraphToFlow } from "../components/flow/flowMappers";
+import type { AgentRun, AuditRun, ContainerRow, ExecutionGraph } from "../types";
 import type { DataColumn } from "../ui";
 import { Alert, Badge, Button, DataTable, EmptyState, Panel } from "../ui";
-import { statusTone } from "../utils/format";
 import { PageHeader } from "../components/PageHeader";
 
 type Props = {
@@ -28,11 +30,9 @@ export function AgentRunsPage({
 }: Props) {
   const nodes = executionGraph?.nodes || [];
   const edges = executionGraph?.edges || [];
-  const runnableNodes = nodes.filter((node) =>
-    ["agent-run", "whiteboard-task", "whiteboard-card", "container", "pipeline-step", "decompiled-artifact"].includes(node.kind),
-  );
   const statusCounts = executionGraph?.summary?.by_status || {};
-  const containerById = new Map(containers.map((container) => [container.Id || container.container_id || "", container]));
+  const [selectedNode, setSelectedNode] = useState<FlowNode | undefined>();
+  const flow = useMemo(() => executionGraphToFlow(executionGraph), [executionGraph]);
 
   return (
     <>
@@ -61,18 +61,16 @@ export function AgentRunsPage({
             </div>
           }
         >
-          {runnableNodes.length ? (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Agent execution graph">
-              {runnableNodes.map((node) => (
-                <GraphNode
-                  key={node.id}
-                  node={node}
-                  container={node.kind === "container" ? containerById.get(String(node.data?.container_id || "")) : undefined}
-                  onOpenAgentEvents={onOpenAgentEvents}
-                  onOpenContainerLogs={onOpenContainerLogs}
-                  onViewWhiteboard={onViewWhiteboard}
-                />
-              ))}
+          {flow.nodes.length ? (
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <FlowCanvas nodes={flow.nodes} edges={flow.edges} height={560} onNodeSelect={setSelectedNode} />
+              <AgentNodeInspector
+                node={selectedNode}
+                containers={containers}
+                onOpenAgentEvents={onOpenAgentEvents}
+                onOpenContainerLogs={onOpenContainerLogs}
+                onViewWhiteboard={onViewWhiteboard}
+              />
             </div>
           ) : (
             <EmptyState description="No execution graph yet" />
@@ -86,46 +84,47 @@ export function AgentRunsPage({
   );
 }
 
-function GraphNode({
+function AgentNodeInspector({
   node,
-  container,
+  containers,
   onOpenAgentEvents,
   onOpenContainerLogs,
   onViewWhiteboard,
 }: {
-  node: ExecutionGraphNode;
-  container?: ContainerRow;
+  node?: FlowNode;
+  containers: ContainerRow[];
   onOpenAgentEvents: (agentRunId: string) => void;
   onOpenContainerLogs: (row: ContainerRow) => void;
   onViewWhiteboard: () => void;
 }) {
-  const icon =
-    node.kind === "container"
-      ? <Boxes className="h-4 w-4" />
-      : node.kind.startsWith("whiteboard")
-        ? <GitBranch className="h-4 w-4" />
-        : node.kind === "pipeline-step"
-          ? <Network className="h-4 w-4" />
-          : <Bot className="h-4 w-4" />;
-  const agentRunId = node.target?.agent_run_id;
+  if (!node) {
+    return <Panel title="Inspector"><EmptyState description="Select a graph node" /></Panel>;
+  }
+  const agentRunId = node.data.target?.agent_run_id;
+  const containerId = String((node.data.raw as { data?: Record<string, unknown> } | undefined)?.data?.container_id || node.data.target?.container_id || "");
+  const container = containers.find((row) => row.Id === containerId || row.container_id === containerId);
   return (
-    <div className="flex min-h-28 flex-col justify-between gap-3 rounded-lg border border-slate-200 border-l-blue-500 bg-white p-3 shadow-sm">
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 rounded-lg border border-slate-200 bg-slate-50 p-1.5 text-slate-500">{icon}</span>
-        <div className="min-w-0">
-          <div className="truncate font-medium text-slate-900">{node.label}</div>
-          <div className="mt-2 flex flex-wrap gap-1">
-            <Badge tone={statusTone(node.status)}>{node.status || "unknown"}</Badge>
-            <Badge>{node.kind}</Badge>
-            {node.group ? <Badge>{node.group}</Badge> : null}
+    <Panel title="Inspector">
+      <div className="grid gap-4 text-sm">
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 rounded-lg border border-slate-200 bg-slate-50 p-1.5 text-slate-500"><Bot className="h-4 w-4" /></span>
+          <div className="min-w-0">
+            <div className="truncate font-medium text-slate-900">{node.data.label}</div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {node.data.status ? <Badge>{node.data.status}</Badge> : null}
+              <Badge>{node.data.kind}</Badge>
+              {node.data.group ? <Badge>{node.data.group}</Badge> : null}
+            </div>
           </div>
         </div>
+        <p className="whitespace-pre-wrap leading-6 text-slate-600">{node.data.summary || "No summary"}</p>
+        <div className="flex flex-wrap gap-2">
+          {agentRunId ? <Button size="sm" onClick={() => onOpenAgentEvents(agentRunId)}>Raw Events</Button> : null}
+          {container ? <Button size="sm" onClick={() => onOpenContainerLogs(container)}>Logs</Button> : null}
+          {node.data.kind.startsWith("whiteboard") ? <Button size="sm" icon={<SquareStack className="h-4 w-4" />} onClick={onViewWhiteboard}>Open</Button> : null}
+        </div>
+        <pre className="max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(node.data.raw, null, 2)}</pre>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {agentRunId ? <Button size="sm" onClick={() => onOpenAgentEvents(agentRunId)}>Events</Button> : null}
-        {container ? <Button size="sm" onClick={() => onOpenContainerLogs(container)}>Logs</Button> : null}
-        {node.kind.startsWith("whiteboard") ? <Button size="sm" icon={<SquareStack className="h-4 w-4" />} onClick={onViewWhiteboard}>Open</Button> : null}
-      </div>
-    </div>
+    </Panel>
   );
 }

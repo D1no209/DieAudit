@@ -19,11 +19,11 @@ but cannot install safely by itself.
     controller Agent schedules follow-up Agents through platform MCP tools, so
     `max_whiteboard_rounds` and `max_whiteboard_tasks_per_round` are production
     guard rails, not tuning niceties.
-  - Verify AgentRun events record container start, OpenCode wait, log capture,
+  - Verify AgentRun events record container start, ACP wait, log capture,
     result parsing, and terminal status. A later hardening pass should add
-    finer-grained streaming progress from inside the ACP/OpenCode adapter.
+    finer-grained streaming progress from inside the ACP runtime adapter.
 - Keep ACP agent images current:
-  - Build and publish both `dieaudit/opencode-agent:local` and
+  - Build and publish enabled agent runtime images such as
     `dieaudit/kimi-code-agent:local` when those templates are enabled.
   - Verify the agent images include the shared ACP runner and
     `codebase-memory-mcp`.

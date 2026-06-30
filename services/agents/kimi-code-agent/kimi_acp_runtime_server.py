@@ -11,7 +11,7 @@ from acp import schema
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from opencode_acp_runner import RecordingClient, _dump, _maybe_await, _prompt
+from acp_runner import RecordingClient, _dump, _maybe_await, _prompt
 
 
 class RunSessionRequest(BaseModel):
@@ -156,8 +156,8 @@ async def _ensure_agent() -> tuple[Any, RuntimeRecordingClient]:
     if _agent is not None and _client is not None:
         return _agent, _client
     client = RuntimeRecordingClient()
-    command = os.environ.get("ACP_COMMAND") or os.environ.get("OPENCODE_ACP_COMMAND", "kimi-code")
-    args = (os.environ.get("ACP_ARGS") or os.environ.get("OPENCODE_ACP_ARGS", "acp")).split()
+    command = os.environ.get("ACP_COMMAND", "kimi-code")
+    args = os.environ.get("ACP_ARGS", "acp").split()
     stream_limit = int(os.environ.get("ACP_STREAM_LIMIT_BYTES", str(8 * 1024 * 1024)))
     _manager = acp.spawn_agent_process(
         client,

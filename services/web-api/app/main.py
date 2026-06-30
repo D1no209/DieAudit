@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.bff.routes import admin, audit_runs, findings, knowledge, projects, reports, runtime, session
+from app.bff.routes import admin, agent_messages, agent_runtimes, audit_runs, findings, knowledge, projects, reports, runtime, session
 from app.settings import get_settings
 
 
@@ -54,6 +54,8 @@ async def ready() -> dict:
 
 
 app.include_router(session.router)
+app.include_router(agent_runtimes.router)
+app.include_router(agent_messages.router)
 app.include_router(projects.router)
 app.include_router(audit_runs.router)
 app.include_router(findings.router)

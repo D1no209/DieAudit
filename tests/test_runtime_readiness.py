@@ -16,29 +16,27 @@ from app.api.routes import (
     _vector_store_readiness_remediation,
     _workspace_import_readiness_check,
 )
+from app.runtime.agent_runtime_registry import default_agent_runtime, required_agent_template_names
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
-    agent_templates = [
+def _agent_templates() -> list[dict]:
+    runtime = default_agent_runtime()
+    return [
         {
             "name": name,
-            "image": "dieaudit/opencode-agent:local",
-            "protocol": {"kind": "agent-client-protocol", "runtime": "opencode"},
+            "image": runtime.image,
+            "protocol": {"kind": runtime.protocol_kind, "runtime": runtime.template_runtime},
         }
-            for name in [
-                "opencode-orchestrator",
-                "opencode-code-auditor",
-                "opencode-recon-auditor",
-                "opencode-sca-analyst",
-                "opencode-source-sink-finder",
-                "opencode-validator",
-                "opencode-judger",
-                "opencode-poc-writer",
-                "opencode-poc-verifier",
-            ]
+        for name in sorted(required_agent_template_names())
+    ]
+
+
+def test_template_readiness_accepts_enabled_agent_runtime_and_tool_mcp_templates() -> None:
+    agent_templates = [
+        *_agent_templates()
     ]
     mcp_templates = [
         {"name": name, "image": "dieaudit/tool-mcp:local"}
@@ -57,7 +55,7 @@ def test_template_readiness_accepts_opencode_and_tool_mcp_templates() -> None:
 
     checks = {check["id"]: check for check in _template_readiness_checks(agent_templates, mcp_templates)}
 
-    assert checks["opencode_agent_templates"]["status"] == "pass"
+    assert checks["agent_runtime_templates"]["status"] == "pass"
     assert checks["production_mcp_templates"]["status"] == "pass"
 
 
@@ -66,22 +64,7 @@ def test_codebase_memory_is_production_required_without_tool_image_probe() -> No
         check["id"]: check
         for check in _template_readiness_checks(
             [
-                {
-                    "name": name,
-                    "image": "dieaudit/opencode-agent:local",
-                    "protocol": {"kind": "agent-client-protocol", "runtime": "opencode"},
-                }
-                for name in [
-                    "opencode-orchestrator",
-                    "opencode-code-auditor",
-                    "opencode-recon-auditor",
-                    "opencode-sca-analyst",
-                    "opencode-source-sink-finder",
-                    "opencode-validator",
-                    "opencode-judger",
-                    "opencode-poc-writer",
-                    "opencode-poc-verifier",
-                ]
+                *_agent_templates()
             ],
             [
                 {"name": name, "transport": "stdio", "command": "codebase-memory-mcp"} if name == "codebase-memory-mcp" else {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": []}
@@ -122,16 +105,10 @@ def test_codebase_memory_template_uses_stdio_transport() -> None:
     assert template["env"]["CBM_CACHE_DIR"] == "/artifacts/codebase-memory"
 
 
-def test_default_opencode_audit_agents_are_authorized_for_codebase_memory() -> None:
-    for name in [
-        "opencode-orchestrator",
-        "opencode-recon-auditor",
-        "opencode-code-auditor",
-        "opencode-source-sink-finder",
-        "opencode-validator",
-        "opencode-judger",
-        "opencode-poc-verifier",
-    ]:
+def test_default_agent_runtime_templates_are_authorized_for_codebase_memory() -> None:
+    runtime = default_agent_runtime()
+    for role in ["orchestrator", "recon-auditor", "code-auditor", "source-sink-finder", "validator", "judger", "poc-verifier"]:
+        name = runtime.role_templates[role]
         template = yaml.safe_load((ROOT / f"configs/agent-templates/{name}.yaml").read_text(encoding="utf-8"))
 
         assert "codebase-memory-mcp" in template["required_mcp"]
@@ -145,14 +122,15 @@ def test_core_tool_templates_declare_required_binaries() -> None:
     assert sca["required_binaries"] == ["syft"]
 
 
-def test_bare_role_agent_templates_use_opencode_runtime() -> None:
+def test_bare_role_agent_templates_use_default_agent_runtime() -> None:
+    runtime = default_agent_runtime()
     for role in ["orchestrator", "recon-auditor", "sca-analyst", "validator", "judger", "poc-writer"]:
         template = yaml.safe_load((ROOT / f"configs/agent-templates/{role}.yaml").read_text(encoding="utf-8"))
 
-        assert template["image"] == "dieaudit/opencode-agent:local"
-        assert template["protocol"]["kind"] == "agent-client-protocol"
-        assert template["protocol"]["runtime"] == "opencode"
-        assert template["command"] == ["python", "/app/opencode_acp_runner.py"]
+        assert template["image"] == runtime.image
+        assert template["protocol"]["kind"] == runtime.protocol_kind
+        assert template["protocol"]["runtime"] == runtime.template_runtime
+        assert template["command"] == ["python", "/app/acp_runner.py"]
         assert template["instruction"] == f"{role}.md"
 
 
@@ -169,22 +147,7 @@ def test_codebase_memory_has_no_image_binary_probe_requirement() -> None:
         check["id"]: check
         for check in _template_readiness_checks(
             [
-                {
-                    "name": name,
-                    "image": "dieaudit/opencode-agent:local",
-                    "protocol": {"kind": "agent-client-protocol", "runtime": "opencode"},
-                }
-                for name in [
-                    "opencode-orchestrator",
-                    "opencode-code-auditor",
-                    "opencode-recon-auditor",
-                    "opencode-sca-analyst",
-                    "opencode-source-sink-finder",
-                    "opencode-validator",
-                    "opencode-judger",
-                    "opencode-poc-writer",
-                    "opencode-poc-verifier",
-                ]
+                *_agent_templates()
             ],
             [
                 {"name": name, "transport": "stdio", "command": "codebase-memory-mcp"} if name == "codebase-memory-mcp" else {"name": name, "image": "dieaudit/tool-mcp:local", "required_binaries": []}
@@ -223,7 +186,7 @@ def test_template_readiness_fails_missing_or_mock_production_templates() -> None
         for check in _template_readiness_checks(
             [
                 {
-                    "name": "opencode-validator",
+                    "name": default_agent_runtime().role_templates["validator"],
                     "image": "dieaudit/mock-agent:local",
                     "protocol": {"kind": "legacy-http", "runtime": "mock"},
                 }
@@ -232,9 +195,9 @@ def test_template_readiness_fails_missing_or_mock_production_templates() -> None
         )
     }
 
-    assert checks["opencode_agent_templates"]["status"] == "fail"
-    assert "opencode-validator" in checks["opencode_agent_templates"]["detail"]["invalid"]
-    assert "opencode-recon-auditor" in checks["opencode_agent_templates"]["detail"]["missing"]
+    assert checks["agent_runtime_templates"]["status"] == "fail"
+    assert default_agent_runtime().role_templates["validator"] in checks["agent_runtime_templates"]["detail"]["invalid"]
+    assert default_agent_runtime().role_templates["recon-auditor"] in checks["agent_runtime_templates"]["detail"]["missing"]
     assert checks["production_mcp_templates"]["status"] == "fail"
     assert "filesystem-mcp" in checks["production_mcp_templates"]["detail"]["mock_images"]
     assert "code-search-mcp" in checks["production_mcp_templates"]["detail"]["missing"]

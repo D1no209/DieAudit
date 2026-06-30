@@ -22,6 +22,7 @@ from app.domain.models import (
     WhiteboardSubscription,
     WhiteboardTask,
 )
+from app.runtime.agent_runtime_registry import default_agent_template
 from app.services.artifacts import ArtifactStore
 from app.settings import Settings
 
@@ -29,13 +30,13 @@ from app.settings import Settings
 WHITEBOARD_EDGE_TYPES = {"precedes", "supports", "contradicts", "duplicates", "blocks", "refines"}
 WHITEBOARD_LINK_STATUSES = {"not_ready", "finding", "not_found", "hint", "impossible"}
 WHITEBOARD_AGENT_BY_GAP_TYPE = {
-    "source": ("source-sink-finder", "kimi-source-sink-finder"),
-    "predecessor": ("source-sink-finder", "kimi-source-sink-finder"),
-    "successor": ("source-sink-finder", "kimi-source-sink-finder"),
-    "validation": ("validator", "kimi-validator"),
-    "judgement": ("judger", "kimi-judger"),
-    "poc": ("poc-writer", "kimi-poc-writer"),
-    "poc-verification": ("poc-verifier", "kimi-poc-verifier"),
+    "source": ("source-sink-finder", default_agent_template("source-sink-finder")),
+    "predecessor": ("source-sink-finder", default_agent_template("source-sink-finder")),
+    "successor": ("source-sink-finder", default_agent_template("source-sink-finder")),
+    "validation": ("validator", default_agent_template("validator")),
+    "judgement": ("judger", default_agent_template("judger")),
+    "poc": ("poc-writer", default_agent_template("poc-writer")),
+    "poc-verification": ("poc-verifier", default_agent_template("poc-verifier")),
 }
 
 
@@ -688,7 +689,7 @@ class WhiteboardService:
                 gap_card_id=(row.related_card_ids or [None])[0],
                 card_id=(row.related_card_ids or [None])[0],
                 agent_role="whiteboard-requested-agent",
-                agent_name=str(body.get("agent_name") or row.suggested_agent_name or "opencode-source-sink-finder"),
+                agent_name=str(body.get("agent_name") or row.suggested_agent_name or default_agent_template("source-sink-finder")),
                 status="queued",
                 parent_task_id=self._optional_str(body.get("parent_task_id") or row.requested_by_task_id, 128),
                 root_task_id=self._optional_str(body.get("root_task_id") or row.requested_by_task_id, 128),
@@ -832,7 +833,7 @@ class WhiteboardService:
 
     async def create_task_for_gap(self, audit_run: AuditRun, gap: WhiteboardCard, *, round_index: int, attempt_index: int) -> WhiteboardTask:
         gap_kind = str((gap.metadata_json or {}).get("gap_kind") or gap.metadata_json.get("kind") if gap.metadata_json else "").strip().lower()
-        agent_role, default_agent_name = WHITEBOARD_AGENT_BY_GAP_TYPE.get(gap_kind, ("source-sink-finder", "opencode-source-sink-finder"))
+        agent_role, default_agent_name = WHITEBOARD_AGENT_BY_GAP_TYPE.get(gap_kind, ("source-sink-finder", default_agent_template("source-sink-finder")))
         config = audit_run.config or {}
         agent_name = str(config.get(f"{agent_role.replace('-', '_')}_agent_name") or default_agent_name)
         task = WhiteboardTask(
