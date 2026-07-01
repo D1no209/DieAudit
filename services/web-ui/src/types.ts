@@ -376,6 +376,30 @@ export type AgentModelOverride = {
   api_key_env?: string;
 };
 
+export type AgentModelConfigRole = {
+  runtime_id: string;
+  provider_type: string;
+  base_url?: string;
+  model_name: string;
+  api_key?: string;
+  api_key_set?: boolean;
+  api_key_preview?: string;
+  temperature?: number;
+  max_output_tokens?: number;
+  context_window?: number;
+};
+
+export type AgentModelProviderTypeOption = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
+export type AgentModelConfig = {
+  provider_type_options?: AgentModelProviderTypeOption[];
+  roles: Record<string, AgentModelConfigRole>;
+};
+
 export type ExecutionGraphNode = {
   id: string;
   kind: string;
@@ -711,10 +735,14 @@ export type CreateAuditRunPayload = {
   max_files_per_code_audit_task?: number;
   max_parallel_code_auditors?: number;
   code_auditor_agent_name?: string;
-  enable_source_sink_analysis?: boolean;
-  source_sink_finder_agent_name?: string;
-  max_parallel_source_sink_finders?: number;
-  max_source_sink_findings?: number;
+  whiteboard_swarm?: {
+    trace_worker?: {
+      enabled?: boolean;
+      agent_name?: string;
+      max_parallel?: number;
+      max_findings?: number;
+    };
+  };
   enable_validators?: boolean;
   enable_judgement?: boolean;
   judger_agent_name?: string;

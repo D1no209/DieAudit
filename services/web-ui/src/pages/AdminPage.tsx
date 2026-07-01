@@ -1,10 +1,13 @@
-import type { ApiKeyRecord, PlatformAuditEvent, RuntimePolicy, StorageSummary } from "../types";
+import type { AgentModelConfig, AgentRuntimeAdapter, ApiKeyRecord, PlatformAuditEvent, RuntimePolicy, StorageSummary } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Tabs, type DataColumn } from "../ui";
 import { ApiKeysPanel } from "./admin/ApiKeysPanel";
+import { AgentModelsPanel } from "./admin/AgentModelsPanel";
 import { PlatformAuditPanel } from "./admin/PlatformAuditPanel";
 
 type Props = {
+  agentModelConfig?: AgentModelConfig;
+  agentRuntimes: AgentRuntimeAdapter[];
   apiKeyColumns: DataColumn<ApiKeyRecord>[];
   apiKeys: ApiKeyRecord[];
   loading: boolean;
@@ -15,9 +18,12 @@ type Props = {
   onCleanupPlatformAuditEvents: () => void;
   onCreateManagedApiKey: (values: { name: string; scopes?: string; project_ids?: string; audit_run_ids?: string }) => void;
   onPreviewLocalStorageCleanup: () => void;
+  onUpdateAgentModelConfig: (values: AgentModelConfig) => void;
 };
 
 export function AdminPage({
+  agentModelConfig,
+  agentRuntimes,
   apiKeyColumns,
   apiKeys,
   loading,
@@ -28,10 +34,11 @@ export function AdminPage({
   onCleanupPlatformAuditEvents,
   onCreateManagedApiKey,
   onPreviewLocalStorageCleanup,
+  onUpdateAgentModelConfig,
 }: Props) {
   return (
     <>
-      <PageHeader title="Admin" />
+      <PageHeader title="Admin" eyebrow="Runtime/Admin" />
       <Tabs
         items={[
           {
@@ -46,6 +53,18 @@ export function AdminPage({
                 storageSummary={storageSummary}
                 onCleanupPlatformAuditEvents={onCleanupPlatformAuditEvents}
                 onPreviewLocalStorageCleanup={onPreviewLocalStorageCleanup}
+              />
+            ),
+          },
+          {
+            key: "agent-models",
+            label: "Agent Models",
+            children: (
+              <AgentModelsPanel
+                agentModelConfig={agentModelConfig}
+                agentRuntimes={agentRuntimes}
+                loading={loading}
+                onSave={onUpdateAgentModelConfig}
               />
             ),
           },

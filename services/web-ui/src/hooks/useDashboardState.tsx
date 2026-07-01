@@ -3,6 +3,7 @@ import { getStoredApiKey } from "../api";
 import type {
   AgentRun,
   AgentRunEvent,
+  AgentModelConfig,
   AgentRuntimeAdapter,
   AgentTranscriptEvent,
   ApiHealth,
@@ -44,6 +45,7 @@ export function useDashboardState() {
   const [workerHeartbeats, setWorkerHeartbeats] = useState<WorkerHeartbeat[]>([]);
   const [sandboxCapabilities, setSandboxCapabilities] = useState<SandboxCapabilities>();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
+  const [agentModelConfig, setAgentModelConfig] = useState<AgentModelConfig>();
   const [platformAuditEvents, setPlatformAuditEvents] = useState<PlatformAuditEvent[]>([]);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
   const [knowledgeMatches, setKnowledgeMatches] = useState<KnowledgeMatch[]>([]);
@@ -90,6 +92,7 @@ export function useDashboardState() {
     setWorkerHeartbeats([]);
     setSandboxCapabilities(undefined);
     setApiKeys([]);
+    setAgentModelConfig(undefined);
     setPlatformAuditEvents([]);
     setKnowledgeDocuments([]);
     setKnowledgeMatches([]);
@@ -118,6 +121,7 @@ export function useDashboardState() {
   return {
     agentEvents,
     agentMessages,
+    agentModelConfig,
     agentRuns,
     agentRuntimes,
     artifactPreview,
@@ -156,6 +160,7 @@ export function useDashboardState() {
     selectedProjectId,
     setAgentEvents,
     setAgentMessages,
+    setAgentModelConfig,
     setArtifactPreview,
     setAgentRuns,
     setAgentRuntimes,

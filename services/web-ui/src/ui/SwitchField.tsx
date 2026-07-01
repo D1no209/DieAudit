@@ -16,7 +16,7 @@ export function SwitchField({
       <SwitchPrimitive.Root
         name={name}
         defaultChecked={defaultChecked}
-        className={cn("h-5 w-9 rounded-full bg-slate-300 outline-none transition data-[state=checked]:bg-blue-600")}
+        className={cn("h-5 w-9 rounded-full bg-slate-300 outline-none transition data-[state=checked]:bg-cyan-900")}
       >
         <SwitchPrimitive.Thumb className="block h-4 w-4 translate-x-0.5 rounded-full bg-white shadow transition data-[state=checked]:translate-x-4" />
       </SwitchPrimitive.Root>

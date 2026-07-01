@@ -9,6 +9,7 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
     clearProtectedState,
     selectedProjectId,
     setAgentRuns,
+    setAgentModelConfig,
     setAgentRuntimes,
     setApiHealth,
     setApiKeys,
@@ -177,16 +178,20 @@ export function useDashboardRefresh(dashboardState: DashboardStateController) {
   }
 
   async function refreshAdmin() {
-    const [policy, storage, apiKeyRows, auditEvents] = await Promise.all([
+    const [policy, storage, apiKeyRows, auditEvents, agentModelConfig, runtimes] = await Promise.all([
       dashboardApi.getRuntimePolicy().catch(() => undefined),
       dashboardApi.getStorageSummary().catch(() => undefined),
       dashboardApi.listApiKeys().catch(() => []),
       dashboardApi.listPlatformAuditEvents().catch(() => []),
+      dashboardApi.getAgentModelConfig().catch(() => undefined),
+      dashboardApi.listAgentRuntimes().catch(() => []),
     ]);
     setRuntimePolicy(policy);
     setStorageSummary(storage);
     setApiKeys(apiKeyRows);
     setPlatformAuditEvents(auditEvents);
+    setAgentModelConfig(agentModelConfig);
+    setAgentRuntimes(runtimes);
   }
 
   async function refreshAuditWorkspace() {

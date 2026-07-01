@@ -41,11 +41,9 @@ async def lifespan(app: FastAPI):
     if settings.service_name in {"agent-gateway", "sandbox-runner"}:
         runtime = RuntimeOrchestrator(settings)
         asyncio.create_task(_reconcile_runtime_on_startup(runtime))
-    pipeline_backend = (settings.pipeline_execution_backend or "workflow-worker").strip().lower()
     if (
         settings.service_name == "agent-gateway"
         and settings.pipeline_recovery_on_startup
-        and pipeline_backend == "background-tasks"
     ):
         await recover_interrupted_pipelines(
             service_name=settings.service_name,

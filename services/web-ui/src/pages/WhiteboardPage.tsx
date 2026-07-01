@@ -37,7 +37,7 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
 
   return (
     <>
-      <PageHeader title="Whiteboard" actions={pageActions} />
+      <PageHeader title="Whiteboard" eyebrow="Swarm coordination" actions={pageActions} />
       {!auditRun ? (
         <Alert className="mb-5" tone="processing" title="No active AuditRun" description="Create or select an audit run before using the shared Whiteboard." />
       ) : null}
@@ -53,13 +53,14 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <FlowCanvas
           title="Whiteboard Graph"
-          description="Cards, evidence, and findings are connected as a traceable audit graph."
+          description="Cards, evidence, findings, and Trace Worker outputs are connected as a traceable audit graph."
           nodes={flow.nodes}
           edges={flow.edges}
           height={620}
           onNodeSelect={setSelectedNode}
+          selectedNodeId={selectedNode?.id}
         />
-        <Panel title="Inspector">
+        <Panel title="Inspector" dense>
           {selectedNode ? (
             <Tabs
               items={[
@@ -94,10 +95,10 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
       </div>
 
       <div className="mb-5 grid gap-4 xl:grid-cols-2">
-        <Panel title="Graph Summary">
+        <Panel title="Graph Summary" dense>
           <p className="text-sm leading-6 text-slate-600">{whiteboard?.snapshot || "Whiteboard snapshot will appear after the first refresh."}</p>
         </Panel>
-        <Panel title="Agent Queues">
+        <Panel title="Swarm Task Queues" dense>
           <div className="mb-4 grid gap-3 sm:grid-cols-4">
             <QueueStat label="Working" value={workingTasks.length} />
             <QueueStat label="Waiting" value={waitingTasks.length} />
@@ -119,14 +120,14 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
       </div>
 
       <div className="mb-5 grid gap-4 xl:grid-cols-2">
-        <Panel title="Open Gaps">
+        <Panel title="Open Gaps" dense>
           <Rows
             empty="No open gaps"
             items={cards.filter((card) => card.card_type === "gap" && ["open", "needs_agent", "agent_queued"].includes(card.status))}
             render={(card) => <CompactRow key={card.card_id} title={card.title} detail={card.content || card.card_id}><Badge tone={statusTone(card.status)}>{card.status}</Badge></CompactRow>}
           />
         </Panel>
-        <Panel title="Card Links">
+        <Panel title="Card Links" dense>
           <Rows
             empty="No card links"
             items={edges.slice(0, 8)}
@@ -139,7 +140,7 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
         </Panel>
       </div>
 
-      <Panel>
+      <Panel title="Swarm Board" dense>
         <Tabs
           items={[
             {
@@ -150,7 +151,7 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
                   empty="No cards yet"
                   items={cards}
                   render={(card) => (
-                    <article key={card.card_id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <article key={card.card_id} className="rounded-lg border border-slate-300 bg-slate-50 p-3">
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <strong className="text-slate-900">{card.title}</strong>
                         <Badge>{card.card_type}</Badge>
@@ -182,7 +183,7 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
             },
             {
               key: "tasks",
-              label: "Agents",
+              label: "Tasks",
               children: (
                 <Rows
                   empty="No swarm tasks yet"
@@ -220,14 +221,14 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
               label: "Listeners",
               children: (
                 <div className="grid gap-4 xl:grid-cols-2">
-                  <Panel title="Subscriptions">
+                  <Panel title="Subscriptions" dense>
                     <Rows
                       empty="No subscriptions"
                       items={subscriptions}
                       render={(item) => <CompactRow key={item.subscription_id} title={item.subscriber_agent_run_id || item.subscriber_task_id || item.subscription_id} detail={JSON.stringify(item.filter || {})}><Badge>{item.status}</Badge></CompactRow>}
                     />
                   </Panel>
-                  <Panel title="Notifications">
+                  <Panel title="Notifications" dense>
                     <Rows
                       empty="No notifications"
                       items={notifications}
@@ -273,7 +274,7 @@ export function WhiteboardPage({ auditRun, loading, whiteboard, onRunWhiteboardS
 
 function QueueStat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="rounded-lg border border-slate-300 bg-slate-50 p-3">
       <div className="text-xs font-medium text-slate-500">{label}</div>
       <div className="mt-1 text-xl font-semibold text-slate-950">{value}</div>
     </div>
@@ -282,7 +283,7 @@ function QueueStat({ label, value }: { label: string; value: number }) {
 
 function CompactRow({ children, detail, title }: { children?: React.ReactNode; detail?: React.ReactNode; title: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3">
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-slate-300 bg-white p-3">
       <div className="min-w-0">
         <div className="font-medium text-slate-900">{title}</div>
         {detail ? <div className="mt-1 max-w-[72ch] truncate text-sm text-slate-500">{detail}</div> : null}

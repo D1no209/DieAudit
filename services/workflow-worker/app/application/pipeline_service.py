@@ -3,13 +3,18 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dieaudit_common.domain.models import AuditRun
-from dieaudit_common.events.nats import NullEventPublisher
 from dieaudit_common.persistence.repositories import EventRepository, PipelineRepository
 
 from app.pipeline.context import PipelineContext
 from app.pipeline.executor import PipelineExecutor
 from app.pipeline.registry import StageRegistry
 from app.pipeline.stages.default import default_stages
+from app.application.stage_runner import StageAdapterRunner
+
+
+class NullEventPublisher:
+    async def publish(self, event: object) -> None:
+        return None
 
 
 class PipelineService:
@@ -32,7 +37,7 @@ class PipelineService:
             cancelled=audit_run.cancel_requested,
         )
         executor = PipelineExecutor(
-            registry=StageRegistry(default_stages()),
+            registry=StageRegistry(default_stages(StageAdapterRunner(self.session))),
             pipeline_repo=pipeline_repo,
             event_repo=EventRepository(self.session),
             publisher=NullEventPublisher(),

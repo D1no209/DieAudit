@@ -47,7 +47,6 @@ x-platform-env: &platform-env
   UNREFERENCED_WORKSPACE_RETENTION_DAYS: ${UNREFERENCED_WORKSPACE_RETENTION_DAYS:-30}
   UNREFERENCED_SNAPSHOT_RETENTION_DAYS: ${UNREFERENCED_SNAPSHOT_RETENTION_DAYS:-90}
   STORAGE_CLEANUP_MAX_ENTRIES: ${STORAGE_CLEANUP_MAX_ENTRIES:-500}
-  PIPELINE_EXECUTION_BACKEND: ${PIPELINE_EXECUTION_BACKEND:-workflow-worker}
   PIPELINE_WORKER_POLL_INTERVAL_SECONDS: ${PIPELINE_WORKER_POLL_INTERVAL_SECONDS:-2}
   PIPELINE_WORKER_HEARTBEAT_INTERVAL_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_INTERVAL_SECONDS:-5}
   PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS: ${PIPELINE_WORKER_HEARTBEAT_TTL_SECONDS:-30}
@@ -62,7 +61,6 @@ x-platform-env: &platform-env
   DYNAMIC_CONTAINER_PREFIX: dieaudit
   AGENT_GATEWAY_CONTAINER_NAME: dieaudit-agent-gateway
   WORKSPACE_ENGINE_URL: http://workspace-engine:8000
-  WORKFLOW_WORKER_URL: http://workflow-worker:8000
   AGENT_GATEWAY_URL: http://agent-gateway:8000
   SANDBOX_RUNNER_URL: http://sandbox-runner:8000
   KB_INDEXER_URL: http://kb-indexer:8000
@@ -168,7 +166,7 @@ services:
       web-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      test: ["CMD", "python", "-m", "app.healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 20

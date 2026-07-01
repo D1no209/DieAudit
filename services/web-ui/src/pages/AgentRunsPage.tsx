@@ -36,12 +36,12 @@ export function AgentRunsPage({
 
   return (
     <>
-      <PageHeader title="Agent Runs" />
+      <PageHeader title="Agent Runs" eyebrow="Inspect" />
       {!auditRun ? (
         <Alert className="mb-5" tone="processing" title="No active AuditRun" description="Create an audit run before inspecting agent execution." />
       ) : null}
-      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(280px,0.55fr)_minmax(560px,1.45fr)]">
-        <Panel title="Run Status">
+      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(280px,0.6fr)_minmax(620px,1.4fr)]">
+        <Panel title="Run Status" dense>
           <div className="flex flex-wrap gap-2">
             <Badge tone="success">completed {executionGraph?.summary?.completed ?? statusCounts.completed ?? 0}</Badge>
             <Badge tone="processing">unfinished {executionGraph?.summary?.unfinished ?? 0}</Badge>
@@ -52,18 +52,10 @@ export function AgentRunsPage({
             Graph combines pipeline steps, ACP AgentRuns, containers, Whiteboard swarm tasks, and decompiled artifacts.
           </p>
         </Panel>
-        <Panel
-          title="Execution Graph"
-          actions={
-            <div className="flex flex-wrap gap-2">
-              <Badge>{nodes.length} nodes</Badge>
-              <Button size="sm" onClick={onViewWhiteboard}>Whiteboard</Button>
-            </div>
-          }
-        >
+        <Panel title="Execution Graph" actions={<Button size="sm" onClick={onViewWhiteboard}>Whiteboard</Button>} dense>
           {flow.nodes.length ? (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]" data-testid="agent-graph">
-              <FlowCanvas nodes={flow.nodes} edges={flow.edges} height={560} onNodeSelect={setSelectedNode} />
+              <FlowCanvas nodes={flow.nodes} edges={flow.edges} height={560} onNodeSelect={setSelectedNode} selectedNodeId={selectedNode?.id} />
               <AgentNodeInspector
                 node={selectedNode}
                 containers={containers}
@@ -77,7 +69,7 @@ export function AgentRunsPage({
           )}
         </Panel>
       </div>
-      <Panel title="Agent Execution" actions={<span className="text-sm text-slate-500">{auditRun?.audit_run_id || "No run"} {auditRun?.status ? <Badge>{auditRun.status}</Badge> : null}</span>}>
+      <Panel title="Agent Execution" actions={<span className="text-sm text-slate-500">{auditRun?.audit_run_id || "No run"} {auditRun?.status ? <Badge tone="processing">{auditRun.status}</Badge> : null}</span>}>
         <DataTable getRowKey={(row) => row.agent_run_id} columns={agentColumns} data={agentRuns} pagination={{ pageSize: 10 }} />
       </Panel>
     </>
@@ -98,7 +90,7 @@ function AgentNodeInspector({
   onViewWhiteboard: () => void;
 }) {
   if (!node) {
-    return <Panel title="Inspector"><EmptyState description="Select a graph node" /></Panel>;
+    return <Panel title="Inspector" dense><EmptyState description="Select a graph node" /></Panel>;
   }
   const agentRunId = node.data.target?.agent_run_id;
   const findingId = node.data.target?.finding_id;
@@ -106,10 +98,10 @@ function AgentNodeInspector({
   const containerId = String((node.data.raw as { data?: Record<string, unknown> } | undefined)?.data?.container_id || node.data.target?.container_id || "");
   const container = containers.find((row) => row.Id === containerId || row.container_id === containerId);
   return (
-    <Panel title="Inspector">
+    <Panel title="Inspector" dense>
       <div className="grid gap-4 text-sm">
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 rounded-lg border border-slate-200 bg-slate-50 p-1.5 text-slate-500"><Bot className="h-4 w-4" /></span>
+          <span className="mt-0.5 rounded-md border border-slate-300 bg-slate-100 p-1.5 text-slate-600"><Bot className="h-4 w-4" /></span>
           <div className="min-w-0">
             <div className="truncate font-medium text-slate-900">{node.data.label}</div>
             <div className="mt-2 flex flex-wrap gap-1">

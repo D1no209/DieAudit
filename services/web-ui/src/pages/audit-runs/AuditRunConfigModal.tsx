@@ -5,6 +5,12 @@ import { Accordion, Badge, Button, Dialog, Field, Input, NumberInput, SwitchFiel
 import { cn } from "../../ui/utils";
 
 const defaultGoal = "Run an initial security audit. Inspect the mounted source and report vulnerability candidates with file paths.";
+const defaultTraceWorker = {
+  enabled: true,
+  agent_name: "kimi-source-sink-finder",
+  max_parallel: 1,
+  max_findings: 50,
+};
 const modelRoles = [
   { key: "orchestrator", label: "Orchestrator" },
   { key: "code-auditor", label: "Code Auditor" },
@@ -119,10 +125,7 @@ const defaultPayload: LocalDefaults = {
   max_files_per_code_audit_task: 25,
   max_parallel_code_auditors: 1,
   code_auditor_agent_name: "kimi-code-auditor",
-  enable_source_sink_analysis: false,
-  source_sink_finder_agent_name: "kimi-source-sink-finder",
-  max_parallel_source_sink_finders: 1,
-  max_source_sink_findings: 50,
+  whiteboard_swarm: { trace_worker: defaultTraceWorker },
   enable_validators: true,
   enable_judgement: true,
   judger_agent_name: "kimi-judger",
@@ -175,9 +178,9 @@ export function AuditRunConfigModal({ agentRuntimes, loading, open, onCancel, on
           const whiteboardSwarm = {
             trace_worker: {
               enabled: checkedFieldValue(formData, "trace_worker_enabled"),
-              agent_name: fieldValue(formData, "source_sink_finder_agent_name") || defaultPayload.source_sink_finder_agent_name,
-              max_parallel: numberFieldValue(formData, "max_parallel_source_sink_finders"),
-              max_findings: numberFieldValue(formData, "max_source_sink_findings"),
+              agent_name: fieldValue(formData, "trace_worker_agent_name") || defaultTraceWorker.agent_name,
+              max_parallel: numberFieldValue(formData, "trace_worker_max_parallel"),
+              max_findings: numberFieldValue(formData, "trace_worker_max_findings"),
             },
           };
           const enableWhiteboardSwarm = checkedFieldValue(formData, "enable_whiteboard_swarm");
@@ -207,10 +210,7 @@ export function AuditRunConfigModal({ agentRuntimes, loading, open, onCancel, on
             max_files_per_code_audit_task: numberFieldValue(formData, "max_files_per_code_audit_task"),
             max_parallel_code_auditors: numberFieldValue(formData, "max_parallel_code_auditors"),
             code_auditor_agent_name: fieldValue(formData, "code_auditor_agent_name"),
-            enable_source_sink_analysis: false,
-            source_sink_finder_agent_name: fieldValue(formData, "source_sink_finder_agent_name"),
-            max_parallel_source_sink_finders: numberFieldValue(formData, "max_parallel_source_sink_finders"),
-            max_source_sink_findings: numberFieldValue(formData, "max_source_sink_findings"),
+            whiteboard_swarm: whiteboardSwarm,
             enable_validators: checkedFieldValue(formData, "enable_validation_judgement"),
             enable_judgement: false,
             judger_agent_name: fieldValue(formData, "judger_agent_name"),
@@ -259,11 +259,11 @@ export function AuditRunConfigModal({ agentRuntimes, loading, open, onCancel, on
                           type="button"
                           onClick={() => setPreset(key)}
                           className={cn(
-                            "flex min-h-28 items-start gap-3 rounded-lg border p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40",
-                            preset === key ? "border-blue-600 bg-blue-50 ring-2 ring-blue-100" : "border-slate-200 bg-white",
+                            "flex min-h-28 items-start gap-3 rounded-lg border p-4 text-left transition hover:border-cyan-700 hover:bg-cyan-50/40",
+                            preset === key ? "border-cyan-800 bg-cyan-50 ring-2 ring-cyan-800/15" : "border-slate-300 bg-white",
                           )}
                         >
-                          <Icon className="mt-0.5 h-5 w-5 text-blue-700" />
+                          <Icon className="mt-0.5 h-5 w-5 text-cyan-900" />
                           <span className="grid gap-1">
                             <span className="font-semibold text-slate-950">{option.label}</span>
                             <span className="text-sm leading-5 text-slate-600">{option.description}</span>
@@ -345,7 +345,9 @@ export function AuditRunConfigModal({ agentRuntimes, loading, open, onCancel, on
                         <div className="grid gap-3 md:grid-cols-2">
                           <TextField defaults={defaults} name="agent_name" label="Orchestrator 模板" />
                           <TextField defaults={defaults} name="code_auditor_agent_name" label="Code Auditor 模板" />
-                          <TextField defaults={defaults} name="source_sink_finder_agent_name" label="Trace Worker 模板" />
+                          <Field label="Trace Worker 模板">
+                            <Input name="trace_worker_agent_name" defaultValue={defaultTraceWorker.agent_name} />
+                          </Field>
                           <TextField defaults={defaults} name="validation_judgement_agent_name" label="Validation-Judgement 模板" />
                           <TextField defaults={defaults} name="poc_writer_agent_name" label="PoC Writer 模板" />
                           <TextField defaults={defaults} name="poc_verifier_agent_name" label="PoC Verifier 模板" />
@@ -361,9 +363,13 @@ export function AuditRunConfigModal({ agentRuntimes, loading, open, onCancel, on
                             Trace Worker 是 Whiteboard Swarm 按需调度的深度可达性分析能力，不是顶层 pipeline stage。
                           </p>
                           <div className="grid gap-3 md:grid-cols-3">
-                            <SwitchField name="trace_worker_enabled" label="允许 Swarm 调度 Trace Worker" defaultChecked={defaults.enable_source_sink_analysis !== false} />
-                            <NumberField defaults={defaults} name="max_parallel_source_sink_finders" label="Trace Worker 并发" min={1} max={20} />
-                            <NumberField defaults={defaults} name="max_source_sink_findings" label="Trace Candidate 上限" min={1} max={500} />
+                            <SwitchField name="trace_worker_enabled" label="允许 Swarm 调度 Trace Worker" defaultChecked={defaultTraceWorker.enabled} />
+                            <Field label="Trace Worker 并发">
+                              <NumberInput name="trace_worker_max_parallel" min={1} max={20} defaultValue={defaultTraceWorker.max_parallel} />
+                            </Field>
+                            <Field label="Trace Candidate 上限">
+                              <NumberInput name="trace_worker_max_findings" min={1} max={500} defaultValue={defaultTraceWorker.max_findings} />
+                            </Field>
                           </div>
                         </div>
                       ),
@@ -425,7 +431,7 @@ export function AuditRunConfigModal({ agentRuntimes, loading, open, onCancel, on
         />
 
         {!customMode ? (
-          <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          <div className="flex items-start gap-2 rounded-lg border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm text-cyan-950">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
             <span>当前使用 {presets[preset].label} 预设；需要细调时切换到 Advanced 或选择自定义。</span>
           </div>

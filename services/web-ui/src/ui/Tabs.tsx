@@ -16,8 +16,8 @@ export function Tabs({ defaultValue, items }: { defaultValue?: string; items: Ta
             key={item.key}
             value={item.key}
             className={cn(
-              "whitespace-nowrap border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-600 outline-none transition hover:text-slate-950",
-              "data-[state=active]:border-blue-600 data-[state=active]:text-blue-700",
+              "whitespace-nowrap border-b-2 border-transparent px-3 py-2 text-sm font-semibold text-slate-600 outline-none transition hover:text-slate-950",
+              "data-[state=active]:border-cyan-800 data-[state=active]:text-cyan-900",
             )}
           >
             {item.label}

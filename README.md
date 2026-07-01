@@ -250,7 +250,7 @@ Important production settings:
 - `DIEAUDIT_API_KEY` or persisted API keys for authentication.
 - `PUBLIC_METRICS=false` unless metrics are separately protected.
 - `ENABLE_DEMO_TEMPLATES=false`.
-- `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable queue.
+- Keep `workflow-worker` enabled; it is the only durable audit pipeline runner.
 - `DEFAULT_SANDBOX_RUNTIME=runc`.
 - `ALLOW_RUNC_SANDBOX=true`.
 - `ALLOW_SANDBOX_EXTERNAL_NETWORK=false`.
@@ -259,11 +259,11 @@ Important production settings:
 Check readiness:
 
 ```powershell
-Invoke-RestMethod http://localhost:8080/gateway/runtime/readiness | ConvertTo-Json -Depth 10
+Invoke-RestMethod http://localhost:8080/api/bff/runtime/readiness | ConvertTo-Json -Depth 10
 ```
 
 ```bash
-curl -s http://localhost:8080/gateway/runtime/readiness | jq .
+curl -s http://localhost:8080/api/bff/runtime/readiness | jq .
 ```
 
 More details are in [docs/production-readiness.md](docs/production-readiness.md).
@@ -314,17 +314,18 @@ Python:
 ```powershell
 python -m pip install -r services\platform\requirements.txt
 python -m pip install -r services\mcp-tools\requirements.txt
+python -m pip install -r services\web-api\requirements.txt
 python -m pip install pytest pytest-asyncio requests-mock time-machine
 python -m pytest
-python -m compileall services\platform\app services\mcp-tools services\agents\kimi-code-agent
+python -m compileall services\platform\app services\mcp-tools services\agents\kimi-code-agent services\web-api\app services\platform-common\dieaudit_common services\database\alembic\versions
 ```
 
 Frontend:
 
 ```powershell
 cd services\web-ui
-npm ci
-npm run build
+bun install --frozen-lockfile
+bun run build
 ```
 
 Compose validation:

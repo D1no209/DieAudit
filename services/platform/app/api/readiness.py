@@ -392,7 +392,7 @@ def summarize_readiness_checks(checks: list[dict[str, Any]]) -> dict[str, Any]:
 
 def pipeline_backend_readiness_check(settings: Settings, worker_health: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = normalized_pipeline_backend(settings)
-    supported_backends = {"background-tasks", "workflow-worker"}
+    supported_backends = {"workflow-worker"}
     production_backends = {"workflow-worker"}
     if backend not in supported_backends:
         status = "fail"

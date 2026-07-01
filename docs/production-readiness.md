@@ -10,9 +10,8 @@ but cannot install safely by itself.
     keys with scoped permissions.
   - Keep `PUBLIC_METRICS=false` unless `/metrics` is available only on a trusted
     internal network.
-- Use the workflow worker execution backend:
-  - Set `PIPELINE_EXECUTION_BACKEND=workflow-worker` for the stable durable
-    queue.
+- Use the workflow worker execution path:
+  - Keep `workflow-worker` running as the only durable audit queue consumer.
   - Keep `workflow-worker` running in the `core` Compose profile.
   - Verify `/runtime/workers` reports a fresh running worker heartbeat.
   - Keep Whiteboard Swarm enabled only with explicit round/task budgets. The

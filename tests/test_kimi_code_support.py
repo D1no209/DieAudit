@@ -61,7 +61,15 @@ def test_kimi_runtime_server_injects_model_environment() -> None:
     agent_start = orchestrator.index("\n    async def _start_agent(", runner_start)
     runner_source = orchestrator[runner_start:agent_start]
 
-    assert "env.update(self.agent_runtime_packages.runtime_env(template))" in runner_source
+    assert "runtime_home=runtime_target" in runner_source
+    assert "KIMI_CODE_HOME" in read_source("services/platform/app/runtime/agent_runtime_package.py")
+    assert "set_session_model" in read_source("services/agents/kimi-code-agent/kimi_acp_runtime_server.py")
+
+
+def test_agent_model_provider_types_match_admin_surface() -> None:
+    source = read_source("services/web-api/app/application/agent_model_profiles.py")
+    assert 'KIMI_MODEL_PROVIDER_TYPES = ("openai", "openai_responses", "anthropic")' in source
+    assert '"value": "kimi"' not in source
 
 
 def test_acp_command_env_uses_template_stdio_command() -> None:
@@ -129,3 +137,64 @@ profiles:
     assert env["KIMI_MODEL_PROVIDER_TYPE"] == "kimi"
     assert env["KIMI_MODEL_API_KEY"] == "sk-test"
     assert env["KIMI_MODEL_BASE_URL"] == "https://api.moonshot.ai/v1"
+
+
+def test_kimi_config_toml_contains_all_agent_profile_aliases(tmp_path) -> None:
+    config_root = tmp_path / "configs"
+    config_root.mkdir()
+    (config_root / "model-providers.yaml").write_text(
+        """
+providers:
+  openai:
+    type: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    default_model: gpt-4.1
+profiles:
+  auditor-strong:
+    provider: openai
+    model: gpt-4.1
+""",
+        encoding="utf-8",
+    )
+    settings = type("Settings", (), {"config_root": config_root, "artifact_root": tmp_path / "artifacts"})()
+    builder = AgentRuntimePackageBuilder(settings)
+    template = {
+        "name": "kimi-code-auditor",
+        "env": {"AGENT_ROLE": "code-auditor"},
+        "model_profile": "auditor-strong",
+        "protocol": {"runtime": "kimi"},
+    }
+    payload = {
+        "config": {
+            "model_overrides": {
+                "orchestrator": {
+                    "provider": "openai_responses",
+                    "model": "gpt-4.1",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": "sk-orchestrator",
+                    "context_window": 128000,
+                    "max_output_tokens": 8192,
+                },
+                "code-auditor": {
+                    "provider": "anthropic",
+                    "model": "claude-3-5-sonnet",
+                    "base_url": "https://api.anthropic.com",
+                    "api_key": "sk-auditor",
+                    "context_window": 200000,
+                    "max_output_tokens": 8192,
+                },
+            }
+        }
+    }
+
+    toml = builder.kimi_config_toml(template, payload)
+
+    assert 'default_model = "dieaudit/code-auditor"' in toml
+    assert '[providers."dieaudit-orchestrator"]' in toml
+    assert 'type = "openai_responses"' in toml
+    assert '[providers."dieaudit-code-auditor"]' in toml
+    assert 'type = "anthropic"' in toml
+    assert '[models."dieaudit/orchestrator"]' in toml
+    assert '[models."dieaudit/code-auditor"]' in toml
+    assert 'model = "claude-3-5-sonnet"' in toml

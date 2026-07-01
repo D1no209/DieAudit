@@ -36,8 +36,13 @@ export function App() {
         alerts={<AppStatusAlerts error={state.error} />}
         authEnabled={state.authStatus?.enabled}
         authPrincipal={state.authPrincipal}
+        apiHealth={state.apiHealth}
+        dockerHealth={state.dockerHealth}
         navigationGroups={navigationGroups}
         navigationItems={navigationItems}
+        runtimeReadiness={state.runtimeReadiness}
+        selectedAuditRun={state.auditRun}
+        selectedProject={state.selectedProject}
         onLogout={actions.logout}
         onRefresh={actions.refresh}
         onViewChange={setActiveView}

@@ -32,7 +32,7 @@ export function ProjectsPage({
 }: Props) {
   return (
     <>
-      <PageHeader title="Projects" />
+      <PageHeader title="Projects" eyebrow="Prepare" />
 
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(360px,0.9fr)_minmax(420px,1.1fr)]">
         <ProjectImportPanel

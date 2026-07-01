@@ -21,7 +21,7 @@ export function SwarmGraphPage({ agentRuns, auditRun, whiteboard }: Props) {
 
   return (
     <>
-      <PageHeader title="Agent Swarm" />
+      <PageHeader title="Agent Swarm" eyebrow="Flow Graph" />
       {!auditRun ? (
         <Alert className="mb-5" tone="processing" title="No active AuditRun" description="Select or create an audit run before inspecting the swarm graph." />
       ) : null}
@@ -39,8 +39,9 @@ export function SwarmGraphPage({ agentRuns, auditRun, whiteboard }: Props) {
           edges={flow.edges}
           height={680}
           onNodeSelect={setSelectedNode}
+          selectedNodeId={selectedNode?.id}
         />
-        <Panel title="Inspector">
+        <Panel title="Inspector" dense>
           {selectedNode ? (
             <Tabs
               items={[

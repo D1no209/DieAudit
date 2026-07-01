@@ -15,6 +15,7 @@ export function useDashboardController(activeView: AppView) {
   const {
     agentEvents,
     agentMessages,
+    agentModelConfig,
     agentRuns,
     agentRuntimes,
     artifactPreview,
@@ -145,6 +146,7 @@ export function useDashboardController(activeView: AppView) {
     state: {
       agentEvents,
       agentMessages,
+      agentModelConfig,
       agentRuns,
       agentRuntimes,
       artifactPreview,

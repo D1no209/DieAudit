@@ -7,13 +7,26 @@ import { cn } from "./utils";
 type Props<T> = {
   columns: DataColumn<T>[];
   data: T[];
+  density?: "compact" | "normal";
+  emptyDescription?: React.ReactNode;
   getRowKey: (row: T) => string | number;
   onRowClick?: (row: T) => void;
   pagination?: false | TablePagination;
   selectedRowKey?: string | number;
+  stickyHeader?: boolean;
 };
 
-export function DataTable<T>({ columns, data, getRowKey, onRowClick, pagination, selectedRowKey }: Props<T>) {
+export function DataTable<T>({
+  columns,
+  data,
+  density = "compact",
+  emptyDescription,
+  getRowKey,
+  onRowClick,
+  pagination,
+  selectedRowKey,
+  stickyHeader = true,
+}: Props<T>) {
   const pageSize = pagination === false ? data.length || 1 : pagination?.pageSize || 10;
   const [page, setPage] = useState(1);
   const pageCount = Math.max(1, Math.ceil(data.length / pageSize));
@@ -24,13 +37,17 @@ export function DataTable<T>({ columns, data, getRowKey, onRowClick, pagination,
   }, [data, page, pageCount, pageSize, pagination]);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-      <div className="overflow-x-auto">
+    <div className="overflow-hidden rounded-lg border border-slate-300 bg-white">
+      <div className="max-h-[640px] overflow-auto">
         <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+          <thead className={cn("bg-slate-100 text-[11px] font-semibold uppercase text-slate-600", stickyHeader && "sticky top-0 z-10")}>
             <tr>
               {columns.map((column) => (
-                <th key={column.key || String(column.dataIndex) || String(column.title)} style={{ width: column.width }} className={cn("px-3 py-2.5", column.className)}>
+                <th
+                  key={column.key || String(column.dataIndex) || String(column.title)}
+                  style={{ width: column.width }}
+                  className={cn("px-3 py-2", column.className)}
+                >
                   {column.title}
                 </th>
               ))}
@@ -45,14 +62,21 @@ export function DataTable<T>({ columns, data, getRowKey, onRowClick, pagination,
                   onClick={() => onRowClick?.(row)}
                   className={cn(
                     "transition",
-                    onRowClick ? "cursor-pointer hover:bg-blue-50/60" : "hover:bg-slate-50/70",
-                    selectedRowKey === key && "bg-blue-50",
+                    onRowClick ? "cursor-pointer hover:bg-cyan-50/70" : "hover:bg-slate-50",
+                    selectedRowKey === key && "bg-cyan-50",
                   )}
                 >
                   {columns.map((column) => {
                     const value = column.dataIndex ? row[column.dataIndex] : undefined;
                     return (
-                      <td key={column.key || String(column.dataIndex) || String(column.title)} className={cn("max-w-[380px] px-3 py-3 align-top text-slate-700", column.className)}>
+                      <td
+                        key={column.key || String(column.dataIndex) || String(column.title)}
+                        className={cn(
+                          "max-w-[380px] break-words px-3 align-top text-slate-700",
+                          density === "compact" ? "py-2" : "py-3",
+                          column.className,
+                        )}
+                      >
                         {column.render ? column.render(value, row, index) : String(value ?? "-")}
                       </td>
                     );
@@ -63,7 +87,7 @@ export function DataTable<T>({ columns, data, getRowKey, onRowClick, pagination,
           </tbody>
         </table>
       </div>
-      {!data.length ? <div className="p-4"><EmptyState /></div> : null}
+      {!data.length ? <div className="p-4"><EmptyState description={emptyDescription || "No rows yet"} /></div> : null}
       {pagination !== false && data.length > pageSize ? (
         <div className="flex items-center justify-between border-t border-slate-200 px-3 py-2 text-xs text-slate-500">
           <span>

@@ -2,8 +2,8 @@
 @import "@xyflow/react/dist/style.css";
 
 :root {
-  color: #182235;
-  background: #f5f7fb;
+  color: #20252d;
+  background: #f4f5f7;
   font-family:
     ui-sans-serif,
     system-ui,
@@ -14,15 +14,20 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --panel: #ffffff;
-  --panel-soft: #f8fafc;
-  --border: #dde5ef;
-  --muted: #64748b;
-  --accent: #2563eb;
-  --accent-strong: #1d4ed8;
-  --success: #15803d;
-  --warning: #b45309;
-  --danger: #dc2626;
+  --surface: #ffffff;
+  --surface-soft: #f8f9fb;
+  --surface-strong: #eef1f5;
+  --border: #d7dce3;
+  --border-strong: #aeb7c2;
+  --muted: #66717f;
+  --ink: #20252d;
+  --ink-strong: #101419;
+  --accent: #175c7a;
+  --accent-strong: #0f465f;
+  --success: #167052;
+  --warning: #a35c00;
+  --danger: #b42318;
+  --info: #175c7a;
 }
 
 * {
@@ -38,8 +43,7 @@ body,
 body {
   margin: 0;
   min-width: 320px;
-  background:
-    linear-gradient(180deg, #f8fafc 0%, #f3f6fb 48%, #eef3f9 100%);
+  background: #f4f5f7;
 }
 
 button,
@@ -61,7 +65,7 @@ pre {
   margin: 0;
   max-height: 420px;
   overflow: auto;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid #1f2937;
   background: #111827;
   color: #d1fae5;
@@ -75,9 +79,20 @@ pre {
 }
 
 .react-flow__controls-button {
-  border-color: #dde5ef;
+  border-color: #d7dce3;
   background: #ffffff;
-  color: #334155;
+  color: #3d4652;
+}
+
+.react-flow__minimap {
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+::selection {
+  background: rgb(23 92 122 / 0.18);
 }
 
 @media (prefers-reduced-motion: reduce) {

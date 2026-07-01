@@ -33,7 +33,7 @@ export function KnowledgePage({
 }: Props) {
   return (
     <>
-      <PageHeader title="Knowledge" />
+      <PageHeader title="Knowledge" eyebrow="Prepare" />
       <div className="grid gap-4 xl:grid-cols-[minmax(420px,0.9fr)_minmax(480px,1.1fr)]">
         <div className="grid gap-4">
           <KnowledgeStatusPanel documents={knowledgeDocuments} status={knowledgeStatus} />

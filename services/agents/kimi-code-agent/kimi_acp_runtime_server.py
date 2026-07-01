@@ -19,6 +19,8 @@ class RunSessionRequest(BaseModel):
     audit_run_id: str = Field(min_length=1)
     project_id: str = Field(min_length=1)
     runtime_id: str | None = None
+    agent_role: str | None = None
+    model_alias: str | None = None
     input_payload: dict[str, Any] = Field(default_factory=dict)
     mcp_servers: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
@@ -109,6 +111,8 @@ async def run_session(body: RunSessionRequest) -> dict[str, Any]:
             session = await _maybe_await(agent.new_session(cwd="/workspace", mcp_servers=_mcp_servers(body.mcp_servers)))
             session_id = getattr(session, "sessionId", None) or getattr(session, "session_id", None)
             client.set_session_id(session_id)
+            if body.model_alias:
+                await _maybe_await(agent.set_session_model(model_id=body.model_alias, session_id=session.sessionId))
             await client.flush()
             response = await _maybe_await(
                 agent.prompt(

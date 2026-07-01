@@ -205,9 +205,12 @@ def test_findings_page_does_not_embed_dependency_inventory() -> None:
     assert "DependencyInventory" not in findings_page
     assert "DependenciesPage" not in findings_page
     assert "Tabs" not in findings_page
-    assert "filters: severityFilters" in findings_page
-    assert "filters: statusFilters" in findings_page
-    assert "filters: sourceFilters" in findings_page
+    assert "const severityFilters" in findings_page
+    assert "const statusFilters" in findings_page
+    assert "const sourceFilters" in findings_page
+    assert "severity {severityFilters.length}" in findings_page
+    assert "status {statusFilters.length}" in findings_page
+    assert "source {sourceFilters.length}" in findings_page
 
 
 def test_reports_page_supports_preview_and_quality_summary() -> None:

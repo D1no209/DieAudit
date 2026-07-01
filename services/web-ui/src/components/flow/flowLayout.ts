@@ -1,8 +1,8 @@
 import type { FlowEdge, FlowNode } from "./FlowCanvas";
 
 export function layeredLayout(nodes: FlowNode[], edges: FlowEdge[], options?: { columnWidth?: number; rowHeight?: number }) {
-  const columnWidth = options?.columnWidth ?? 340;
-  const rowHeight = options?.rowHeight ?? 160;
+  const columnWidth = options?.columnWidth ?? 360;
+  const rowHeight = options?.rowHeight ?? 148;
   const kindRank = new Map([
     ["pipeline", 0],
     ["agent", 1],
@@ -29,12 +29,22 @@ export function layeredLayout(nodes: FlowNode[], edges: FlowEdge[], options?: { 
 }
 
 export function flowEdge(id: string, source: string, target: string, label?: string): FlowEdge {
+  const tone = edgeTone(label);
   return {
     id,
     source,
     target,
     label,
-    animated: false,
-    style: { stroke: "#94a3b8", strokeWidth: 1.5 },
+    animated: ["schedules", "started", "runs"].includes(label || ""),
+    style: { stroke: tone.stroke, strokeDasharray: tone.dash, strokeWidth: 1.6 },
   };
+}
+
+function edgeTone(label?: string) {
+  if (["next", "started"].includes(label || "")) return { stroke: "#0f766e", dash: undefined };
+  if (["runs", "schedules"].includes(label || "")) return { stroke: "#1d4ed8", dash: "5 4" };
+  if (["writes", "produces", "reports"].includes(label || "")) return { stroke: "#7c3aed", dash: undefined };
+  if (["validates"].includes(label || "")) return { stroke: "#b45309", dash: undefined };
+  if (["container"].includes(label || "")) return { stroke: "#475569", dash: "3 3" };
+  return { stroke: "#94a3b8", dash: undefined };
 }

@@ -208,6 +208,8 @@ export function renderKnowledgeRoute({ actions, columns, state }: DashboardContr
 export function renderAdminRoute({ actions, columns, state }: DashboardController) {
   return (
     <AdminPage
+      agentModelConfig={state.agentModelConfig}
+      agentRuntimes={state.agentRuntimes}
       apiKeyColumns={columns.apiKeyColumns}
       apiKeys={state.apiKeys}
       loading={state.loading}
@@ -218,6 +220,7 @@ export function renderAdminRoute({ actions, columns, state }: DashboardControlle
       onCleanupPlatformAuditEvents={actions.cleanupPlatformAuditEvents}
       onCreateManagedApiKey={actions.createManagedApiKey}
       onPreviewLocalStorageCleanup={actions.previewLocalStorageCleanup}
+      onUpdateAgentModelConfig={actions.updateAgentModelConfig}
     />
   );
 }

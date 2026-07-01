@@ -13,6 +13,7 @@ type DashboardRunner = {
 export function useAdminActions(dashboardState: DashboardStateController, runner: DashboardRunner, activeView: AppView) {
   const {
     clearProtectedState,
+    setAgentModelConfig,
     setApiKeys,
     setApiKey,
     setAuthPrincipal,
@@ -57,6 +58,15 @@ export function useAdminActions(dashboardState: DashboardStateController, runner
     });
   }
 
+  async function updateAgentModelConfig(values: Parameters<typeof dashboardApi.updateAgentModelConfig>[0]) {
+    await runner.runAction(async () => {
+      const result = await dashboardApi.updateAgentModelConfig(values);
+      setAgentModelConfig(result);
+      setLastResponse(result);
+      toast.success("Agent 模型配置已保存");
+    });
+  }
+
   async function login(credentials: { username: string; password: string }) {
     const username = credentials.username.trim();
     if (!username || !credentials.password) {
@@ -89,5 +99,5 @@ export function useAdminActions(dashboardState: DashboardStateController, runner
     runner.refreshCurrentView(activeView);
   }
 
-  return { cleanupPlatformAuditEvents, createManagedApiKey, deactivateManagedApiKey, login, logout };
+  return { cleanupPlatformAuditEvents, createManagedApiKey, deactivateManagedApiKey, login, logout, updateAgentModelConfig };
 }

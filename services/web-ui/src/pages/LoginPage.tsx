@@ -23,9 +23,9 @@ export function LoginPage({ error, loading, onLogin }: Props) {
   return (
     <div className="min-h-dvh bg-slate-100 px-4 py-8 text-slate-950 sm:px-6 lg:px-8">
       <main className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-md items-center">
-        <section className="w-full rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <section className="w-full rounded-lg border border-slate-300 bg-white p-6 shadow-sm shadow-slate-200/70">
           <div className="mb-6 flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-blue-700 text-white shadow-sm">
+            <span className="flex h-11 w-11 items-center justify-center rounded-lg border border-cyan-900 bg-cyan-900 text-white">
               <Bug className="h-5 w-5" />
             </span>
             <div>

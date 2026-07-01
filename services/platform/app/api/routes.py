@@ -1116,23 +1116,16 @@ def register_runtime_routes(settings: Settings, runtime_provider: callable) -> A
         if not audit_run:
             raise HTTPException(status_code=404, detail="audit run not found")
         _require_audit_run_access(getattr(request.state, "auth_principal", None), audit_run)
-        if runtime is None:
-            return await proxy_gateway(f"/audit-runs/{audit_run_id}/run-pipeline", method="POST")
         workspace_path = audit_run.get("config", {}).get("workspace_host_path")
         if not workspace_path:
             raise HTTPException(status_code=400, detail="audit run has no workspace path")
         if is_active_pipeline(audit_run.get("status"), audit_run.get("config")):
             raise HTTPException(status_code=409, detail="audit run pipeline is already active")
         await _clear_pipeline_cancel(audit_run_id)
-        backend = _normalized_pipeline_backend(settings)
-        if backend not in {"workflow-worker", "background-tasks"}:
-            backend = "workflow-worker"
         await _mark_audit_run_status(audit_run_id, "queued")
         await _set_pipeline_state(audit_run_id, stage="queued", status="queued")
-        await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": backend})
-        if backend == "background-tasks":
-            background_tasks.add_task(pipeline_executor(runtime).execute, audit_run_id)
-        return {"audit_run_id": audit_run_id, "status": "accepted", "backend": backend}
+        await _record_audit_run_event(audit_run_id, "pipeline_queued", {"status": "queued", "backend": "workflow-worker"})
+        return {"audit_run_id": audit_run_id, "status": "accepted", "backend": "workflow-worker"}
 
     @router.post("/audit-runs/{audit_run_id}/cancel")
     async def cancel_audit_run(request: Request, audit_run_id: str) -> dict[str, Any]:

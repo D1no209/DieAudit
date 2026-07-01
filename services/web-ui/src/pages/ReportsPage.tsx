@@ -21,15 +21,15 @@ export function ReportsPage({ auditRun, loading, reports, onGenerateReport, onOp
 
   return (
     <>
-      <PageHeader title="Reports" actions={pageActions} />
+      <PageHeader title="Reports" eyebrow="Deliver" actions={pageActions} />
       {!auditRun ? (
         <Alert className="mb-5" tone="processing" title="No active AuditRun" description="Create or select an audit run before generating reports." />
       ) : null}
-      <Panel title="Report Artifacts" actions={<span className="text-sm text-slate-500">{auditRun?.audit_run_id || "No run"}</span>}>
+      <Panel title="Report Artifacts" actions={<Badge>{auditRun?.audit_run_id || "No run"}</Badge>} dense>
         {reports.length ? (
           <div className="grid gap-3">
             {reports.map((item) => (
-              <div key={item.report_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div key={item.report_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-300 bg-slate-50 p-3">
                 <div className="min-w-0">
                   <div className="font-medium text-slate-900">{item.kind}</div>
                   <div className="truncate text-sm text-slate-500">{item.artifact?.relative_path || item.path}</div>

@@ -1,7 +1,10 @@
 import {
   Boxes,
+  Bot,
+  Bug,
   FileText,
   FolderOpen,
+  GitBranch,
   Network,
   PlayCircle,
   ShieldCheck,
@@ -143,26 +146,52 @@ export type NavigationGroup = {
 export const navigationGroups: NavigationGroup[] = [
   {
     key: "workspace",
-    label: "Workspace",
+    label: "Prepare",
     items: [
       { key: "projects", icon: <FolderOpen className="h-4 w-4" />, label: "Projects" },
+      { key: "knowledge", icon: <FileText className="h-4 w-4" />, label: "Knowledge" },
     ],
   },
   {
-    key: "operations",
-    label: "Operations",
+    key: "run",
+    label: "Run",
+    items: [
+      { key: "project-audit-runs", icon: <PlayCircle className="h-4 w-4" />, label: "Audit Runs" },
+      { key: "project-overview", icon: <ShieldCheck className="h-4 w-4" />, label: "Pipeline" },
+    ],
+  },
+  {
+    key: "inspect",
+    label: "Inspect",
+    items: [
+      { key: "project-agents", icon: <Bot className="h-4 w-4" />, label: "Agent Runs" },
+      { key: "runtime-containers", icon: <Boxes className="h-4 w-4" />, label: "Containers" },
+      { key: "project-whiteboard", icon: <GitBranch className="h-4 w-4" />, label: "Whiteboard" },
+      { key: "project-swarm", icon: <Network className="h-4 w-4" />, label: "Flow Graph" },
+    ],
+  },
+  {
+    key: "validate",
+    label: "Validate",
+    items: [
+      { key: "project-findings", icon: <Bug className="h-4 w-4" />, label: "Findings" },
+      { key: "project-finding-review", icon: <ShieldCheck className="h-4 w-4" />, label: "Evidence Review" },
+    ],
+  },
+  {
+    key: "deliver",
+    label: "Deliver",
+    items: [
+      { key: "project-reports", icon: <FileText className="h-4 w-4" />, label: "Reports" },
+    ],
+  },
+  {
+    key: "admin",
+    label: "Runtime/Admin",
     items: [
       { key: "runtime", icon: <Network className="h-4 w-4" />, label: "Runtime" },
       { key: "runtime-readiness", icon: <ShieldCheck className="h-4 w-4" />, label: "Readiness" },
-      { key: "runtime-containers", icon: <Boxes className="h-4 w-4" />, label: "Containers" },
       { key: "runtime-sandbox", icon: <PlayCircle className="h-4 w-4" />, label: "Sandbox" },
-    ],
-  },
-  {
-    key: "platform",
-    label: "Platform",
-    items: [
-      { key: "knowledge", icon: <FileText className="h-4 w-4" />, label: "Knowledge" },
       { key: "admin", icon: <ShieldCheck className="h-4 w-4" />, label: "Admin" },
     ],
   },

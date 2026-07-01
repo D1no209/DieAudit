@@ -71,7 +71,7 @@ export function AuditRunsPage({
 
   return (
     <>
-      <PageHeader title="Audit Runs" actions={pageActions} />
+      <PageHeader title="Audit Runs" eyebrow="Run control" actions={pageActions} />
       {!selectedProject && (
         <Alert
           className="mb-5"
@@ -99,22 +99,28 @@ export function AuditRunsPage({
         />
       )}
 
-      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(300px,0.72fr)_minmax(520px,1.35fr)_minmax(280px,0.58fr)]">
+      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(280px,0.68fr)_minmax(560px,1.45fr)_minmax(300px,0.72fr)]">
         <RunContextPanel auditRun={auditRun} lastResponse={lastResponse} selectedProject={selectedProject} />
         <PipelineStatePanel pipelineStatus={pipelineStatus} />
-        <Panel title="Next Actions">
+        <Panel title="Action Queue" dense>
           <div className="grid gap-3 text-sm">
-            <div className="flex flex-wrap gap-2">
-              <Badge>{auditRun?.status || "no-run"}</Badge>
-              <Badge>{pipelineStatus?.current?.status || "idle"}</Badge>
+            <div className="grid grid-cols-2 gap-2">
+              <StatusTile label="run" value={auditRun?.status || "no-run"} />
+              <StatusTile label="stage" value={pipelineStatus?.current?.status || "idle"} />
+              <StatusTile label="reports" value={String(reportsCount)} />
+              <StatusTile label="agents" value={String(agentRunsCount)} />
             </div>
             {nextActionText({ auditRun, pipelineStatus, selectedProject })}
             {warningEvents(pipelineStatus).slice(0, 3).map((item) => (
-              <div key={item.id} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
-                <div className="font-medium">{item.event_type}</div>
-                <div className="mt-1 text-xs">{eventProblemText(item.payload)}</div>
+              <div key={item.id} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-950">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="truncate font-semibold">{item.event_type}</div>
+                  <Badge tone="warning">warning</Badge>
+                </div>
+                <div className="mt-1 line-clamp-2 text-xs">{eventProblemText(item.payload)}</div>
               </div>
             ))}
+            {!warningEvents(pipelineStatus).length ? <Alert tone="success" title="No current warnings" description="Failures and warning events will collect here while the run executes." /> : null}
           </div>
         </Panel>
       </div>
@@ -127,6 +133,15 @@ export function AuditRunsPage({
         onSubmit={submitAuditConfig}
       />
     </>
+  );
+}
+
+function StatusTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-2">
+      <div className="text-[10px] font-semibold uppercase text-slate-500">{label}</div>
+      <div className="mt-1 truncate text-sm font-semibold text-slate-950">{value}</div>
+    </div>
   );
 }
 

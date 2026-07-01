@@ -40,7 +40,7 @@ export function AuditContextBar({
   if (!projectViews.has(activeView) && activeView !== "projects") return null;
   if (!selectedProject) {
     return (
-      <section className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-200/50" aria-label="Audit context">
+      <section className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2" aria-label="Audit context">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <ContextItem icon={<FolderOpen className="h-4 w-4" />} label="No project selected" />
           <Badge tone="warning">Select or import a project</Badge>
@@ -53,9 +53,9 @@ export function AuditContextBar({
   const auditRunId = auditRun?.audit_run_id;
 
   return (
-    <section className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-200/50" aria-label="Audit context">
+    <section className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2" aria-label="Audit context">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-sm">
           <ContextItem icon={<FolderOpen className="h-4 w-4" />} label={selectedProject.name}>
             <Badge tone={statusTone(selectedProject.status)}>{selectedProject.status || "-"}</Badge>
           </ContextItem>
@@ -67,7 +67,7 @@ export function AuditContextBar({
           <ContextItem icon={<FileText className="h-4 w-4" />} label={`${reportsCount} reports`} />
         </div>
       </div>
-      <nav className="mt-3 flex flex-wrap gap-2" aria-label="Project workspace navigation">
+      <nav className="mt-2 flex gap-1 overflow-x-auto" aria-label="Project workspace navigation">
         <WorkspaceButton active={activeView === "project-overview"} href={projectHash("project-overview", projectId, auditRunId)} icon={<FolderOpen className="h-4 w-4" />} label="Project" onSelect={() => onViewChange("project-overview")} />
         <WorkspaceButton active={activeView === "project-audit-runs"} href={projectHash("project-audit-runs", projectId, auditRunId)} icon={<PlayCircle className="h-4 w-4" />} label="Audit Runs" onSelect={() => onViewChange("project-audit-runs")} />
         <WorkspaceButton active={activeView === "project-agents"} disabled={!auditRunId} href={projectHash("project-agents", projectId, auditRunId)} icon={<Bot className="h-4 w-4" />} label="Agents" onSelect={() => onViewChange("project-agents")} />
@@ -88,7 +88,7 @@ function WorkspaceButton({ active, disabled, href, icon, label, onSelect }: { ac
       size="sm"
       icon={icon}
       disabled={disabled}
-      variant={active ? "primary" : "secondary"}
+      variant={active ? "primary" : "ghost"}
       onClick={() => {
         window.location.hash = href.replace(/^#/, "");
         onSelect();

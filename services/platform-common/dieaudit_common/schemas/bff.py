@@ -24,6 +24,11 @@ class CreateAuditRunPayload(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class CreateApiKeyPayload(BaseModel):
+    name: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+
+
 class StartAuditRunPayload(BaseModel):
     force: bool = False
 

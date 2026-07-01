@@ -46,8 +46,8 @@ class ServiceStage:
 
     def _planned_summary(self) -> dict[str, Any]:
         return {
-            "mode": "adapter-pending",
-            "message": f"{self.name} stage is registered and ready for service adapter execution",
+            "mode": "registry-only",
+            "message": f"{self.name} stage is registered; production execution injects a stage adapter runner",
         }
 
 

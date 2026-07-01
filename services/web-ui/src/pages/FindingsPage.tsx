@@ -1,6 +1,7 @@
 import type { Finding } from "../types";
 import { Badge, Button, DataTable, Panel, type DataColumn } from "../ui";
-import { severityColor, statusTone } from "../utils/format";
+import { severityTone } from "../displayMeta";
+import { statusTone } from "../utils/format";
 import { PageHeader } from "../components/PageHeader";
 
 type Props = {
@@ -14,7 +15,7 @@ export function FindingsPage({ findings, onOpenFinding }: Props) {
   const sourceFilters = Array.from(new Set(findings.map((item) => item.source).filter(Boolean)));
   const findingColumns: DataColumn<Finding>[] = [
     { title: "Title", dataIndex: "title" },
-    { title: "Severity", dataIndex: "severity", width: 110, render: (value) => <Badge tone={severityColor(String(value))}>{String(value || "-")}</Badge> },
+    { title: "Severity", dataIndex: "severity", width: 110, render: (value) => <Badge tone={severityTone(String(value))}>{String(value || "-")}</Badge> },
     { title: "Status", dataIndex: "status", width: 150, render: (value) => <Badge tone={statusTone(String(value))}>{String(value || "-")}</Badge> },
     { title: "Path", dataIndex: "file_path", render: (value) => String(value || "-") },
     { title: "Rule", dataIndex: "rule_id", width: 170, render: (value) => String(value || "-") },
@@ -24,14 +25,14 @@ export function FindingsPage({ findings, onOpenFinding }: Props) {
 
   return (
     <>
-      <PageHeader title="Findings" />
+      <PageHeader title="Findings" eyebrow="Validate" />
       <Panel
         title={`Findings (${findings.length})`}
         actions={
-          <div className="hidden gap-1 text-xs text-slate-500 md:flex">
-            <span>filters: severityFilters {severityFilters.length}</span>
-            <span>filters: statusFilters {statusFilters.length}</span>
-            <span>filters: sourceFilters {sourceFilters.length}</span>
+          <div className="hidden gap-1 md:flex">
+            <Badge>severity {severityFilters.length}</Badge>
+            <Badge>status {statusFilters.length}</Badge>
+            <Badge>source {sourceFilters.length}</Badge>
           </div>
         }
       >

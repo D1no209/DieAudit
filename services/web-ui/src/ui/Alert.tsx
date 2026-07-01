@@ -3,11 +3,11 @@ import { cn } from "./utils";
 import type { StatusTone } from "./types";
 
 const toneClass: Record<StatusTone, string> = {
-  neutral: "border-slate-200 bg-white text-slate-700",
-  processing: "border-blue-200 bg-blue-50 text-blue-800",
-  success: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  warning: "border-amber-200 bg-amber-50 text-amber-900",
-  danger: "border-red-200 bg-red-50 text-red-800",
+  neutral: "border-slate-300 bg-white text-slate-700",
+  processing: "border-cyan-300 bg-cyan-50 text-cyan-900",
+  success: "border-emerald-300 bg-emerald-50 text-emerald-900",
+  warning: "border-amber-300 bg-amber-50 text-amber-950",
+  danger: "border-red-300 bg-red-50 text-red-900",
 };
 
 function Icon({ tone }: { tone: StatusTone }) {
@@ -31,7 +31,7 @@ export function Alert({
   tone?: StatusTone;
 }) {
   return (
-    <div className={cn("flex gap-3 rounded-xl border px-4 py-3 text-sm", toneClass[tone], className)}>
+    <div className={cn("flex gap-3 rounded-lg border px-3.5 py-3 text-sm", toneClass[tone], className)}>
       <span className="mt-0.5 shrink-0">
         <Icon tone={tone} />
       </span>

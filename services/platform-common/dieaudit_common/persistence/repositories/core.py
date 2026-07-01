@@ -96,10 +96,42 @@ class AuditRunRepository:
             row.cancel_requested = True
             row.metadata_json = {**(row.metadata_json or {}), "cancel_reason": reason}
 
+    async def claim_next_queued(self, *, worker_id: str) -> AuditRun | None:
+        row = await self.session.scalar(select(AuditRun).where(AuditRun.status == "queued").order_by(AuditRun.updated_at.asc()).limit(1))
+        if row is None:
+            return None
+        row.status = "running"
+        row.pipeline_status = "running"
+        row.worker_id = worker_id
+        row.config_json = {
+            **(row.config_json or {}),
+            "runtime_control": {
+                **((row.config_json or {}).get("runtime_control") or {}),
+                "worker_id": worker_id,
+            },
+        }
+        return row
+
+    async def set_pipeline_state(self, audit_run_id: str, *, status: str, current_stage: str | None = None, error: str | None = None) -> None:
+        row = await self.get(audit_run_id)
+        if row is None:
+            return
+        row.pipeline_status = status
+        row.current_stage = current_stage
+        if status in {"succeeded", "completed"}:
+            row.status = "completed"
+        elif status in {"failed", "cancelled"}:
+            row.status = status
+        elif status in {"running", "queued"}:
+            row.status = status
+        if error:
+            row.metadata_json = {**(row.metadata_json or {}), "pipeline_error": error}
+
 
 class PipelineRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+        self.audit_runs = AuditRunRepository(session)
 
     async def create_run(self, audit_run_id: str) -> PipelineRun:
         row = PipelineRun(
@@ -177,7 +209,16 @@ class WorkerHeartbeatRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def upsert(self, *, worker_id: str, service_name: str, hostname: str, status: str, current_audit_run_id: str | None) -> WorkerHeartbeat:
+    async def upsert(
+        self,
+        *,
+        worker_id: str,
+        service_name: str,
+        hostname: str,
+        status: str,
+        current_audit_run_id: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WorkerHeartbeat:
         row = await self.session.scalar(select(WorkerHeartbeat).where(WorkerHeartbeat.worker_id == worker_id))
         if row is None:
             row = WorkerHeartbeat(
@@ -187,11 +228,12 @@ class WorkerHeartbeatRepository:
                 status=status,
                 last_seen_at=datetime.now(timezone.utc),
                 current_audit_run_id=current_audit_run_id,
-                metadata_json={"schema_version": 1},
+                metadata_json={"schema_version": 1, **(metadata or {})},
             )
             self.session.add(row)
         else:
             row.status = status
             row.last_seen_at = datetime.now(timezone.utc)
             row.current_audit_run_id = current_audit_run_id
+            row.metadata_json = {**(row.metadata_json or {}), **(metadata or {})}
         return row

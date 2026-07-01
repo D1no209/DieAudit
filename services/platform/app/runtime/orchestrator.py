@@ -324,6 +324,8 @@ class RuntimeOrchestrator:
         payload = dict(input_payload or {})
         async with SessionLocal() as session:
             audit_run = await session.scalar(select(AuditRun).where(AuditRun.audit_run_id == audit_run_id))
+        if audit_run and isinstance(audit_run.config_json, dict):
+            payload.setdefault("config", audit_run.config_json)
         payload.setdefault(
             "structure",
             {
@@ -717,7 +719,16 @@ class RuntimeOrchestrator:
             )
 
         runner = None
+        runtime_package: dict[str, Any] | None = None
         if (self._acp_runtime_name(agent) or "").lower() == "kimi":
+            runtime_package = await self.agent_runtime_packages.build(
+                audit_run_id=audit_run_id,
+                project_id=project_id,
+                agent_run_id=runtime_id,
+                template=agent,
+                mcp_servers={},
+                input_payload=input_payload or {},
+            )
             runner = await self._start_agent_runtime_runner(
                 audit_run_id=audit_run_id,
                 project_id=project_id,
@@ -725,6 +736,9 @@ class RuntimeOrchestrator:
                 network_name=network_name,
                 workspace_host_path=workspace_host_path,
                 template=agent,
+                input_payload=input_payload or {},
+                runtime_host_path=runtime_package["host_path"],
+                runtime_target=agent.get("runtime_mount", {}).get("target", "/dieaudit/runtime"),
             )
 
         runtime_containers = [*mcp_results]
@@ -751,6 +765,8 @@ class RuntimeOrchestrator:
                 "allow_external_network": allow_external_network,
                 "retain_runtime_on_failure": retain_runtime_on_failure,
                 "mode": "run-scoped-runtime-record",
+                "model_role": self.agent_runtime_packages._agent_role(agent),
+                "runtime_package": runtime_package,
             },
         )
         row = await self._active_agent_runtime(audit_run_id)
@@ -784,7 +800,12 @@ class RuntimeOrchestrator:
         await self._record_agent_event(
             agent_run_id,
             "agent_session_starting",
-            {"runtime_id": runtime.get("runtime_id"), "endpoint_url": endpoint_url, "mcp_servers": mcp_servers},
+            {
+                "runtime_id": runtime.get("runtime_id"),
+                "endpoint_url": endpoint_url,
+                "mcp_servers": mcp_servers,
+                "model_alias": self.agent_runtime_packages.model_alias_for_template(agent, input_payload),
+            },
         )
         try:
             async with httpx.AsyncClient(timeout=self.settings.agent_runtime_timeout_seconds, trust_env=False) as client:
@@ -795,6 +816,8 @@ class RuntimeOrchestrator:
                         "audit_run_id": audit_run_id,
                         "project_id": project_id,
                         "runtime_id": runtime.get("runtime_id"),
+                        "agent_role": self.agent_runtime_packages._agent_role(agent),
+                        "model_alias": self.agent_runtime_packages.model_alias_for_template(agent, input_payload),
                         "input_payload": input_payload,
                         "mcp_servers": mcp_servers,
                     },
@@ -1714,6 +1737,9 @@ class RuntimeOrchestrator:
         network_name: str,
         workspace_host_path: str | None,
         template: dict[str, Any],
+        input_payload: dict[str, Any],
+        runtime_host_path: str | None,
+        runtime_target: str,
     ) -> dict[str, Any]:
         image = template["image"]
         name = self._runtime_container_name(
@@ -1738,9 +1764,11 @@ class RuntimeOrchestrator:
             "AGENT_GATEWAY_URL": "http://agent-gateway:8000",
             "PORT": "8080",
         }
-        env.update(self.agent_runtime_packages.runtime_env(template))
+        env.update(self.agent_runtime_packages.runtime_env(template, input_payload, runtime_home=runtime_target))
         self._inject_proxy_env(env)
         mounts = await self._mounts(workspace_host_path, template)
+        if runtime_host_path:
+            mounts.append(self._bind_mount(await self._host_path_for(Path(runtime_host_path)), runtime_target, read_only=False))
         artifact_host_path = self.settings.artifact_root / "agent-runtimes" / audit_run_id / runtime_id
         artifact_host_path.mkdir(parents=True, exist_ok=True)
         artifact_target = template.get("artifact_mount", {}).get("target", "/artifacts")
@@ -1867,7 +1895,7 @@ class RuntimeOrchestrator:
             env["AGENT_RUNTIME_CONFIG"] = runtime_config_path
             env["DIEAUDIT_RUNTIME_DIR"] = str(Path(runtime_config_path).parent)
             env.update(self.acp_runtime_client.command_env(template))
-            env.update(self.agent_runtime_packages.runtime_env(template))
+            env.update(self.agent_runtime_packages.runtime_env(template, input_payload, runtime_home=env["DIEAUDIT_RUNTIME_DIR"]))
         mounts = await self._mounts(workspace_host_path, template)
         artifact_host_path = self._agent_artifact_dir(audit_run_id, agent_run_id)
         artifact_target = template.get("artifact_mount", {}).get("target", "/artifacts")
@@ -1886,7 +1914,7 @@ class RuntimeOrchestrator:
             env["FINDING_MARKDOWN"] = "/finding/finding.md"
         if runtime_host_path:
             target = template.get("runtime_mount", {}).get("target", "/dieaudit/runtime")
-            mounts.append(self._bind_mount(await self._host_path_for(Path(runtime_host_path)), target, read_only=True))
+            mounts.append(self._bind_mount(await self._host_path_for(Path(runtime_host_path)), target, read_only=False))
         payload = self._container_payload(
             image=image,
             command=template.get("command"),

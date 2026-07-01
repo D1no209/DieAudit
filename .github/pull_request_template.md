@@ -9,8 +9,8 @@
 ## Testing
 
 - [ ] `python -m pytest`
-- [ ] `python -m compileall services/platform/app services/mcp-tools services/agents/opencode-agent`
-- [ ] `npm run build` in `services/web-ui`
+- [ ] `python -m compileall services/platform/app services/mcp-tools services/agents/kimi-code-agent services/web-api/app services/platform-common/dieaudit_common services/database/alembic/versions`
+- [ ] `bun run build` in `services/web-ui`
 - [ ] `docker compose --profile core config --services`
 - [ ] `docker compose --profile tools config --services`
 - [ ] `git diff --check`
